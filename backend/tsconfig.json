@@ -1,0 +1,175 @@
+{
+  "compilerOptions": {
+    "module": "commonjs",
+    "declaration": true,
+    "removeComments": true,
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "allowSyntheticDefaultImports": true,
+    "target": "ES2022",
+    "lib": [
+      "ESNext"
+    ],
+    "esModuleInterop": true,
+    "sourceMap": true,
+    "outDir": "./dist",
+    "baseUrl": "./",
+    "incremental": true,
+    "skipLibCheck": true,
+    "strictNullChecks": true,
+    "noImplicitAny": true,
+    "strictBindCallApply": true,
+    "forceConsistentCasingInFileNames": true,
+    "noFallthroughCasesInSwitch": true,
+    "paths": {
+      "@src/*": [
+        "src/*"
+      ],
+      "@config/*": [
+        "src/config/*"
+      ],
+      "@lib": [
+        "src/lib/*"
+      ],
+      "@tests/*": [
+        "tests/*"
+      ],
+      "@app/base-system/*": [
+        "apps/base-system/src/*"
+      ],
+      "@lib/bootstrap": [
+        "libs/bootstrap/src"
+      ],
+      "@lib/bootstrap/*": [
+        "libs/bootstrap/src/*"
+      ],
+      "@lib/utils": [
+        "libs/utils/src"
+      ],
+      "@lib/utils/*": [
+        "libs/utils/src/*"
+      ],
+      "@lib/typings": [
+        "libs/typings/src"
+      ],
+      "@lib/typings/*": [
+        "libs/typings/src/*"
+      ],
+      "@lib/shared": [
+        "libs/shared/src"
+      ],
+      "@lib/shared/*": [
+        "libs/shared/src/*"
+      ],
+      "@lib/global": [
+        "libs/global/src"
+      ],
+      "@lib/global/*": [
+        "libs/global/src/*"
+      ],
+      "@lib/constants": [
+        "libs/constants/src"
+      ],
+      "@lib/constants/*": [
+        "libs/constants/src/*"
+      ],
+      "@lib/config": [
+        "libs/config/src"
+      ],
+      "@lib/config/*": [
+        "libs/config/src/*"
+      ],
+      "@lib/logger": [
+        "libs/logger/src"
+      ],
+      "@lib/logger/*": [
+        "libs/logger/src/*"
+      ],
+      "@lib/shared/redis": [
+        "libs/shared/redis/src"
+      ],
+      "@lib/shared/redis/*": [
+        "libs/shared/redis/src/*"
+      ],
+      "@lib/shared/prisma": [
+        "libs/shared/prisma/src"
+      ],
+      "@lib/shared/prisma/*": [
+        "libs/shared/prisma/src/*"
+      ],
+      "@lib/shared/oss": [
+        "libs/shared/oss/src"
+      ],
+      "@lib/shared/oss/*": [
+        "libs/shared/oss/src/*"
+      ],
+      "@lib/shared/ip2region": [
+        "libs/shared/ip2region/src"
+      ],
+      "@lib/shared/ip2region/*": [
+        "libs/shared/ip2region/src/*"
+      ],
+      "@lib/shared/errors": [
+        "libs/shared/errors/src"
+      ],
+      "@lib/shared/errors/*": [
+        "libs/shared/errors/src/*"
+      ],
+      "@lib/infra/adapter": [
+        "libs/infra/adapter/src"
+      ],
+      "@lib/infra/adapter/*": [
+        "libs/infra/adapter/src/*"
+      ],
+      "@lib/infra/casbin": [
+        "libs/infra/casbin/src"
+      ],
+      "@lib/infra/casbin/*": [
+        "libs/infra/casbin/src/*"
+      ],
+      "@lib/infra/decorators": [
+        "libs/infra/decorators/src"
+      ],
+      "@lib/infra/decorators/*": [
+        "libs/infra/decorators/src/*"
+      ],
+      "@lib/infra/filters": [
+        "libs/infra/filters/src"
+      ],
+      "@lib/infra/filters/*": [
+        "libs/infra/filters/src/*"
+      ],
+      "@lib/infra/guard": [
+        "libs/infra/guard/src"
+      ],
+      "@lib/infra/guard/*": [
+        "libs/infra/guard/src/*"
+      ],
+      "@lib/infra/interceptors": [
+        "libs/infra/interceptors/src"
+      ],
+      "@lib/infra/interceptors/*": [
+        "libs/infra/interceptors/src/*"
+      ],
+      "@lib/infra/rest": [
+        "libs/infra/rest/src"
+      ],
+      "@lib/infra/rest/*": [
+        "libs/infra/rest/src/*"
+      ],
+      "@lib/infra/strategies": [
+        "libs/infra/strategies/src"
+      ],
+      "@lib/infra/strategies/*": [
+        "libs/infra/strategies/src/*"
+      ],
+      "@lib/infra/crypto": [
+        "libs/infra/crypto/src"
+      ],
+      "@lib/infra/crypto/*": [
+        "libs/infra/crypto/src/*"
+      ]
+    },
+    "resolveJsonModule": true
+  }
+}

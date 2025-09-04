@@ -1,0 +1,245 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["multiSchema"]
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_DATABASE_URL")
+}
+
+model SysTokens {
+  id           String   @id @default(cuid())
+  accessToken  String   @unique @map("access_token")
+  refreshToken String   @unique @map("refresh_token")
+  status       String
+  userId       String   @map("user_id")
+  username     String
+  domain       String
+  loginTime    DateTime @default(now()) @map("login_time")
+  ip           String
+  port         Int?
+  address      String
+  userAgent    String   @map("user_agent")
+  requestId    String   @map("request_id")
+  type         String
+  createdAt    DateTime @default(now()) @map("created_at")
+  createdBy    String   @map("created_by")
+
+  @@map("sys_tokens")
+}
+
+// 用户表
+model SysUser {
+  id          String    @id
+  username    String    @unique
+  password    String
+  domain      String
+  built_in    Boolean   @default(false)
+  avatar      String?
+  email       String?   @unique
+  phoneNumber String?   @unique @map("phone_number")
+  nickName    String    @map("nick_name")
+  status      Status
+  createdAt   DateTime  @default(now()) @map("created_at")
+  createdBy   String    @map("created_by")
+  updatedAt   DateTime? @updatedAt @map("updated_at")
+  updatedBy   String?   @map("updated_by")
+
+  @@map("sys_user")
+}
+
+enum Status {
+  ENABLED
+  DISABLED
+  BANNED
+}
+
+// casbin_rule
+model CasbinRule {
+  id    Int     @id @default(autoincrement())
+  ptype String
+  v0    String?
+  v1    String?
+  v2    String?
+  v3    String?
+  v4    String?
+  v5    String?
+
+  @@map("casbin_rule")
+}
+
+// domain 租户/域
+model SysDomain {
+  id          String    @id
+  code        String    @unique
+  name        String
+  description String?
+  status      Status
+  createdAt   DateTime  @default(now()) @map("created_at")
+  createdBy   String    @map("created_by")
+  updatedAt   DateTime? @updatedAt @map("updated_at")
+  updatedBy   String?   @map("updated_by")
+
+  @@map("sys_domain")
+}
+
+// 角色表
+model SysRole {
+  id          String    @id
+  code        String    @unique
+  name        String
+  description String?
+  pid         String    @default("0")
+  status      Status
+  createdAt   DateTime  @default(now()) @map("created_at")
+  createdBy   String    @map("created_by")
+  updatedAt   DateTime? @updatedAt @map("updated_at")
+  updatedBy   String?   @map("updated_by")
+
+  @@map("sys_role")
+}
+
+model SysUserRole {
+  userId String @map("user_id")
+  roleId String @map("role_id")
+
+  @@id([userId, roleId])
+  @@map("sys_user_role")
+}
+
+// 接口资源表
+model SysEndpoint {
+  id         String    @id
+  path       String
+  method     String
+  action     String
+  resource   String
+  controller String
+  summary    String?
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime? @updatedAt @map("updated_at")
+
+  @@map("sys_endpoint")
+}
+
+// 组织机构
+model SysOrganization {
+  id          String    @id
+  code        String    @unique
+  name        String
+  description String?
+  pid         String    @default("0")
+  status      Status
+  createdAt   DateTime  @default(now()) @map("created_at")
+  createdBy   String    @map("created_by")
+  updatedAt   DateTime? @updatedAt @map("updated_at")
+  updatedBy   String?   @map("updated_by")
+
+  @@map("sys_organization")
+}
+
+model SysLoginLog {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  username  String
+  domain    String
+  loginTime DateTime @default(now()) @map("login_time")
+  ip        String
+  port      Int?
+  address   String
+  userAgent String   @map("user_agent")
+  requestId String   @map("request_id")
+  type      String
+  createdAt DateTime @default(now()) @map("created_at")
+  createdBy String   @map("created_by")
+
+  @@map("sys_login_log")
+}
+
+model SysOperationLog {
+  id          String   @id @default(cuid())
+  userId      String   @map("user_id")
+  username    String
+  domain      String
+  moduleName  String   @map("module_name")
+  description String
+  requestId   String   @map("request_id")
+  method      String
+  url         String
+  ip          String
+  userAgent   String?  @map("user_agent")
+  params      Json?    @map("params")
+  body        Json?    @map("body")
+  response    Json?    @map("response")
+  startTime   DateTime @map("start_time")
+  endTime     DateTime @map("end_time")
+  duration    Int
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@map("sys_operation_log")
+}
+
+enum MenuType {
+  directory
+  menu
+}
+
+model SysMenu {
+  id        Int      @id @default(autoincrement())
+  menuType  MenuType @map("menu_type")
+  menuName  String   @map("menu_name") @db.VarChar(64)
+  iconType  Int?     @default(1) @map("icon_type")
+  icon      String?  @map("icon") @db.VarChar(64)
+  routeName String   @unique @map("route_name") @db.VarChar(64)
+  routePath String   @map("route_path") @db.VarChar(128)
+  component String   @map("component") @db.VarChar(64)
+  pathParam String?  @map("path_param") @db.VarChar(64)
+  status    Status
+
+  activeMenu String?  @map("active_menu") @db.VarChar(64)
+  hideInMenu Boolean? @default(false) @map("hide_in_menu")
+  pid        Int      @default(0)
+  order      Int      @map("sequence")
+  i18nKey    String?  @map("i18n_key") @db.VarChar(64)
+  keepAlive  Boolean? @default(false) @map("keep_alive")
+  constant   Boolean  @default(false)
+  href       String?  @map("href") @db.VarChar(64)
+  multiTab   Boolean? @default(false) @map("multi_tab")
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  createdBy String    @map("created_by")
+  updatedAt DateTime? @updatedAt @map("updated_at")
+  updatedBy String?   @map("updated_by")
+
+  @@map("sys_menu")
+}
+
+model SysRoleMenu {
+  roleId String @map("role_id")
+  menuId Int    @map("menu_id")
+  domain String
+
+  @@id([roleId, menuId, domain])
+  @@map("sys_role_menu")
+}
+
+model SysAccessKey {
+  id              String   @id @default(cuid())
+  domain          String
+  AccessKeyID     String   @unique @map("access_key_id")
+  AccessKeySecret String   @unique @map("access_key_secret")
+  status          Status
+  description String?
+  createdAt       DateTime @default(now()) @map("created_at")
+  createdBy       String   @map("created_by")
+
+  @@map("sys_access_key")
+}
