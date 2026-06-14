@@ -177,7 +177,13 @@ const routeMap: RouteMap = {
   "manage_menu": "/manage/menu",
   "manage_role": "/manage/role",
   "manage_user": "/manage/user",
-  "manage_user-detail": "/manage/user-detail/:id"
+  "manage_user-detail": "/manage/user-detail/:id",
+  "paint": "/paint",
+  "paint_category": "/paint/category",
+  "paint_shop": "/paint/shop",
+  "paint_standard-template": "/paint/standard-template",
+  "paint_statistics": "/paint/statistics",
+  "paint_work-order": "/paint/work-order"
 };
 
 /**

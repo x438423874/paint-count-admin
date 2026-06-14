@@ -1,6 +1,6 @@
 const local: App.I18n.Schema = {
   system: {
-    title: 'SoybeanAdmin',
+    title: '车漆管家',
     updateTitle: 'System Version Update Notification',
     updateContent: 'A new version of the system has been detected. Do you want to refresh the page immediately?',
     updateConfirm: 'Refresh immediately',
@@ -171,7 +171,13 @@ const local: App.I18n.Schema = {
     'access-key': 'AccessKey',
     log: 'Log',
     log_login: 'Login Log',
-    log_operation: 'Operation Log'
+    log_operation: 'Operation Log',
+    paint: 'Paint Manage',
+    paint_category: 'Category',
+    paint_shop: 'Shop Manage',
+    'paint_standard-template': 'Standard Template',
+    'paint_work-order': 'Work Order',
+    paint_statistics: 'Statistics'
   },
   page: {
     login: {
@@ -241,11 +247,11 @@ const local: App.I18n.Schema = {
       projectNews: {
         title: 'Project News',
         moreNews: 'More News',
-        desc1: 'Soybean created the open source project soybean-admin on May 28, 2021!',
-        desc2: 'Yanbowe submitted a bug to soybean-admin, the multi-tab bar will not adapt.',
-        desc3: 'Soybean is ready to do sufficient preparation for the release of soybean-admin!',
-        desc4: 'Soybean is busy writing project documentation for soybean-admin!',
-        desc5: 'Soybean just wrote some of the workbench pages casually, and it was enough to see!'
+        desc1: 'The system is online, welcome to Paint Count Admin!',
+        desc2: 'New OCR recognition feature for work orders, auto plate number recognition.',
+        desc3: 'Standard template management optimized, multi-part selection supported.',
+        desc4: 'Work order audit workflow improved, no modification after audit.',
+        desc5: 'Dual image storage launched, HD for OCR, thumbnail for display.'
       },
       creativity: 'Creativity'
     },

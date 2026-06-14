@@ -159,5 +159,61 @@ export const generatedRoutes: GeneratedRoute[] = [
         }
       }
     ]
+  },
+  {
+    name: 'paint',
+    path: '/paint',
+    component: 'layout.base',
+    meta: {
+      title: 'paint',
+      i18nKey: 'route.paint'
+    },
+    children: [
+      {
+        name: 'paint_category',
+        path: '/paint/category',
+        component: 'view.paint_category',
+        meta: {
+          title: 'paint_category',
+          i18nKey: 'route.paint_category'
+        }
+      },
+      {
+        name: 'paint_shop',
+        path: '/paint/shop',
+        component: 'view.paint_shop',
+        meta: {
+          title: 'paint_shop',
+          i18nKey: 'route.paint_shop'
+        }
+      },
+      {
+        name: 'paint_standard-template',
+        path: '/paint/standard-template',
+        component: 'view.paint_standard-template',
+        meta: {
+          title: 'paint_standard-template',
+          i18nKey: 'route.paint_standard-template'
+        }
+      },
+      {
+        name: 'paint_statistics',
+        path: '/paint/statistics',
+        component: 'view.paint_statistics',
+        meta: {
+          title: 'paint_statistics',
+          i18nKey: 'route.paint_statistics'
+        }
+      },
+      {
+        name: 'paint_work-order',
+        path: '/paint/work-order',
+        component: 'view.paint_work-order',
+        meta: {
+          title: 'paint_work-order',
+          i18nKey: 'route.paint_work-order'
+        }
+      }
+    ]
   }
 ];

@@ -5,12 +5,11 @@
 // Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
 
 generator client {
-  provider        = "prisma-client-js"
-  previewFeatures = ["multiSchema"]
+  provider = "prisma-client-js"
 }
 
 datasource db {
-  provider  = "postgresql"
+  provider  = "mysql"
   url       = env("DATABASE_URL")
   directUrl = env("DIRECT_DATABASE_URL")
 }
@@ -242,4 +241,193 @@ model SysAccessKey {
   createdBy       String   @map("created_by")
 
   @@map("sys_access_key")
+}
+
+// ========== 喷漆幅数统计系统 ==========
+
+// 标准模板（独立实体，一个标准可对应多个门店）
+model PaintStandardTemplate {
+  id          String   @id @default(cuid())
+  name        String   @db.VarChar(100)
+  description String?  @db.Text
+  version     String?  @db.VarChar(20)
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime? @updatedAt @map("updated_at")
+
+  shops     PaintShop[]
+  items     PaintStandardTemplateItem[]
+
+  @@map("paint_standard_template")
+}
+
+// 标准模板项目（标准模板下的各项目系数）
+model PaintStandardTemplateItem {
+  id          String   @id @default(cuid())
+  templateId  String   @map("template_id")
+  categoryId  String   @map("category_id")
+  coefficient Decimal  @db.Decimal(4, 2)
+  newPartAddition Decimal @default(0) @map("new_part_addition") @db.Decimal(4, 2)
+  alias       String?  @db.VarChar(50)
+  unit        String   @default("幅") @db.VarChar(10)
+  specialPaintId String? @map("special_paint_id")
+
+  template PaintStandardTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  category PaintItemCategory     @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  specialPaint PaintSpecialPaint? @relation(fields: [specialPaintId], references: [id], onDelete: SetNull)
+
+  @@unique([templateId, categoryId])
+  @@map("paint_standard_template_item")
+}
+
+// 特殊车漆（作为倍数乘数应用到工单明细）
+model PaintSpecialPaint {
+  id          String   @id @default(cuid())
+  name        String   @db.VarChar(100)
+  multiplier  Decimal  @db.Decimal(4, 2)
+  description String?  @db.Text
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime? @updatedAt @map("updated_at")
+
+  orderItems PaintWorkOrderItem[]
+  templateItems PaintStandardTemplateItem[]
+
+  @@map("paint_special_paint")
+}
+
+// 门店/店铺
+model PaintShop {
+  id                String   @id @default(cuid())
+  name              String
+  code              String   @unique
+  brand             String   @db.VarChar(100)
+  address           String?
+  phone             String?
+  status            Status   @default(ENABLED)
+  standardTemplateId String? @map("standard_template_id")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime? @updatedAt @map("updated_at")
+
+  standardTemplate PaintStandardTemplate? @relation(fields: [standardTemplateId], references: [id])
+  standards       PaintStandard[]
+  orders          PaintWorkOrder[]
+  categories      PaintItemCategory[]
+
+  @@map("paint_shop")
+}
+
+// 喷漆项目类别（通用+门店自定义）
+model PaintItemCategory {
+  id        String   @id @default(cuid())
+  name      String   @db.VarChar(50)
+  code      String   @db.VarChar(50)
+  sortOrder Int      @default(0) @map("sort_order")
+  isSpecial Boolean  @default(false) @map("is_special")
+  shopId    String?  @map("shop_id")  // null=全局类别，有值=门店自定义类别
+
+  shop      PaintShop? @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  standards PaintStandard[]
+  templateItems PaintStandardTemplateItem[]
+  items     PaintWorkOrderItem[]
+
+  @@unique([code, shopId])  // 同一门店内code唯一，全局类别shopId为null时code唯一
+  @@map("paint_item_category")
+}
+
+// 幅数标准（每家店每个项目的系数，从模板复制或自定义）
+model PaintStandard {
+  id               String   @id @default(cuid())
+  shopId           String   @map("shop_id")
+  categoryId       String   @map("category_id")
+  coefficient      Decimal  @db.Decimal(4, 2)
+  newPartAddition  Decimal  @default(0) @map("new_part_addition") @db.Decimal(4, 2)
+  alias            String?  @db.VarChar(50)
+  unit             String   @default("幅") @db.VarChar(10)
+
+  shop     PaintShop         @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  category PaintItemCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@unique([shopId, categoryId])
+  @@map("paint_standard")
+}
+
+// 喷漆工单
+model PaintWorkOrder {
+  id            String    @id @default(cuid())
+  orderNo       String    @unique @map("order_no")
+  shopId        String    @map("shop_id")
+  orderDate     DateTime  @map("order_date")
+  settlementMonth String?  @map("settlement_month") @db.VarChar(7)
+  carModel      String?   @default("") @map("car_model") @db.VarChar(100)
+  plateNumber   String?   @default("") @map("plate_number") @db.VarChar(20)
+  vin           String?   @db.VarChar(30)
+  customerName  String?   @default("") @map("customer_name") @db.VarChar(50)
+  phone         String?   @db.VarChar(20)
+  contactPerson String?   @map("contact_person") @db.VarChar(50)
+  description   String?   @db.Text
+  totalPaintCount Decimal @default(0) @map("total_paint_count") @db.Decimal(8, 2)
+  status        PaintOrderStatus @default(PENDING)
+  isAudited     Boolean   @default(false) @map("is_audited")
+  auditedAt     DateTime? @map("audited_at")
+  auditedBy     String?   @map("audited_by") @db.VarChar(100)
+  remark        String?
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime? @updatedAt @map("updated_at")
+
+  shop   PaintShop          @relation(fields: [shopId], references: [id])
+  items  PaintWorkOrderItem[]
+  images PaintWorkOrderImage[]
+
+  @@index([shopId, settlementMonth])
+  @@index([settlementMonth])
+  @@map("paint_work_order")
+}
+
+enum PaintOrderStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+// 工单喷漆明细项
+model PaintWorkOrderItem {
+  id              String   @id @default(cuid())
+  orderId         String   @map("order_id")
+  categoryId      String   @map("category_id")
+  quantity        Int      @default(1)
+  paintCount      Decimal  @default(0) @map("paint_count") @db.Decimal(6, 2)
+  isNewPart       Boolean  @default(false) @map("is_new_part")
+  specialPaintId  String?  @map("special_paint_id")
+  specialPaintMultiplier Decimal? @map("special_paint_multiplier") @db.Decimal(4, 2)
+  remarks         String?
+
+  order       PaintWorkOrder    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  category    PaintItemCategory @relation(fields: [categoryId], references: [id])
+  specialPaint PaintSpecialPaint? @relation(fields: [specialPaintId], references: [id])
+
+  @@map("paint_work_order_item")
+}
+
+// 工单图片
+model PaintWorkOrderImage {
+  id           String   @id @default(cuid())
+  orderId      String   @map("order_id")
+  url          String
+  thumbnailUrl String?  @map("thumbnail_url")
+  imageType    PaintImageType @map("image_type") @default(BEFORE)
+  description  String?
+  fileSize     Int?     @map("file_size")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  order PaintWorkOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@map("paint_work_order_image")
+}
+
+enum PaintImageType {
+  BEFORE
+  DURING
+  AFTER
 }

@@ -1,6 +1,6 @@
 const local: App.I18n.Schema = {
   system: {
-    title: 'Soybean 管理系统',
+    title: '车漆管家',
     updateTitle: '系统版本更新通知',
     updateContent: '检测到系统有新版本发布，是否立即刷新页面？',
     updateConfirm: '立即刷新',
@@ -171,7 +171,13 @@ const local: App.I18n.Schema = {
     'access-key': '访问密钥',
     log: '日志',
     log_login: '登录日志',
-    log_operation: '操作日志'
+    log_operation: '操作日志',
+    paint: '喷漆管理',
+    paint_category: '部位管理',
+    paint_shop: '门店管理',
+    'paint_standard-template': '标准模板',
+    'paint_work-order': '工单管理',
+    paint_statistics: '幅数统计'
   },
   page: {
     login: {
@@ -241,11 +247,11 @@ const local: App.I18n.Schema = {
       projectNews: {
         title: '项目动态',
         moreNews: '更多动态',
-        desc1: 'Soybean 在2021年5月28日创建了开源项目 soybean-admin!',
-        desc2: 'Yanbowe 向 soybean-admin 提交了一个bug，多标签栏不会自适应。',
-        desc3: 'Soybean 准备为 soybean-admin 的发布做充分的准备工作!',
-        desc4: 'Soybean 正在忙于为soybean-admin写项目说明文档！',
-        desc5: 'Soybean 刚才把工作台页面随便写了一些，凑合能看了！'
+        desc1: '系统已上线，欢迎使用油漆幅数统计管理系统！',
+        desc2: '新增工单OCR识别功能，支持车牌号自动识别。',
+        desc3: '标准模板管理功能已优化，支持多部位选择。',
+        desc4: '工单审核流程已完善，审核后不可修改删除。',
+        desc5: '图片双图存储方案已上线，高清版用于OCR，缩略版用于展示。'
       },
       creativity: '创意'
     },

@@ -15,6 +15,7 @@ import { Controllers as EndpointRest } from './endpoint/rest';
 import { Controllers as IamRest } from './iam/rest';
 import { Controllers as LoginLogRest } from './log-audit/login-log/rest';
 import { Controllers as OperationLogRest } from './log-audit/operation-log/rest';
+import { PaintModule } from './paint/paint.module';
 
 @Module({
   imports: [
@@ -27,6 +28,7 @@ import { Controllers as OperationLogRest } from './log-audit/operation-log/rest'
     LoginLogInfraModule,
     TokensInfraModule,
     AccessKeyInfraModule,
+    PaintModule,
   ],
   controllers: [
     ...IamRest,

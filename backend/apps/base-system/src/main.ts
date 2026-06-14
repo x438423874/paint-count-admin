@@ -1,8 +1,11 @@
 import cluster from 'node:cluster';
+import path from 'node:path';
+import fs from 'node:fs';
 // import { constants } from 'zlib';
 
 import fastifyCompress from '@fastify/compress';
 import fastifyCsrf from '@fastify/csrf-protection';
+import fastifyStatic from '@fastify/static';
 import {
   HttpStatus,
   Logger,
@@ -115,6 +118,19 @@ async function bootstrap() {
             connectSrc: ["'self'", 'https:', 'wss:'],
           },
         },
+  });
+
+  // 静态文件服务 - 提供上传图片访问
+  const uploadsDir = path.join(process.cwd(), 'uploads');
+  if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+  }
+  const fastifyInstance = fastifyApp.getInstance();
+  // @ts-ignore
+  fastifyInstance.register(fastifyStatic, {
+    root: uploadsDir,
+    prefix: '/uploads/',
+    decorateReply: false,
   });
 
   await app.listen(port, '0.0.0.0', async () => {

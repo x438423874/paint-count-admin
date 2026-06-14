@@ -5,7 +5,7 @@ import { getEnvBoolean, getEnvNumber, getEnvString } from '@lib/utils/env';
 export const appConfigToken = 'app';
 
 export const AppConfig = registerAs(appConfigToken, () => ({
-  port: getEnvNumber('APP_PORT', 9528),
+  port: getEnvNumber('APP_PORT', 6200),
   docSwaggerEnable: getEnvBoolean('DOC_SWAGGER_ENABLE', true),
   docSwaggerPath: getEnvString('DOC_SWAGGER_PATH', 'api-docs'),
 }));

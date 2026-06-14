@@ -1,7 +1,7 @@
-import { createKeyv } from '@keyv/redis';
 import { CacheModule } from '@nestjs/cache-manager';
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import { Keyv } from 'keyv';
 
 import { ConfigKeyPaths, IRedisConfig, redisRegToken } from '@lib/config';
 
@@ -16,23 +16,35 @@ import { ConfigKeyPaths, IRedisConfig, redisRegToken } from '@lib/config';
           { infer: true },
         );
 
-        let redisUrl = '';
-        if (redisConfig.mode === 'cluster') {
-          const nodes = redisConfig.cluster
-            .map((node) => `${node.host}:${node.port}`)
-            .join(',');
-          const password = encodeURIComponent(redisConfig.cluster[0].password);
-          redisUrl = `redis://:%${password}@${nodes}`;
-        } else {
-          const { host, port, password, db } = redisConfig.standalone;
-          const encodedPassword = encodeURIComponent(password);
-          redisUrl = `redis://:${encodedPassword}@${host}:${port}/${db}`;
+        const useRedis = process.env.REDIS_ENABLED === 'true';
+
+        if (useRedis) {
+          try {
+            const { createKeyv } = await import('@keyv/redis');
+            let redisUrl = '';
+            if (redisConfig.mode === 'cluster') {
+              const nodes = redisConfig.cluster
+                .map((node) => `${node.host}:${node.port}`)
+                .join(',');
+              const password = encodeURIComponent(redisConfig.cluster[0].password);
+              redisUrl = `redis://:%${password}@${nodes}`;
+            } else {
+              const { host, port, password, db } = redisConfig.standalone;
+              const encodedPassword = encodeURIComponent(password);
+              redisUrl = `redis://:${encodedPassword}@${host}:${port}/${db}`;
+            }
+            const keyvCacheStore = createKeyv(redisUrl);
+            return {
+              stores: [keyvCacheStore],
+              ttl: 24 * 60 * 60 * 1000,
+            };
+          } catch {
+            console.warn('Redis connection failed, falling back to memory cache');
+          }
         }
 
-        const keyvCacheStore = createKeyv(redisUrl);
-
         return {
-          stores: [keyvCacheStore],
+          stores: [new Keyv()],
           ttl: 24 * 60 * 60 * 1000,
         };
       },

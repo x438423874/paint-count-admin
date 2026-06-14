@@ -32,6 +32,12 @@ declare module "@elegant-router/types" {
     "manage_role": "/manage/role";
     "manage_user": "/manage/user";
     "manage_user-detail": "/manage/user-detail/:id";
+    "paint": "/paint";
+    "paint_category": "/paint/category";
+    "paint_shop": "/paint/shop";
+    "paint_standard-template": "/paint/standard-template";
+    "paint_statistics": "/paint/statistics";
+    "paint_work-order": "/paint/work-order";
   };
 
   /**
@@ -72,6 +78,7 @@ declare module "@elegant-router/types" {
     | "log"
     | "login"
     | "manage"
+    | "paint"
   >;
 
   /**
@@ -101,6 +108,11 @@ declare module "@elegant-router/types" {
     | "manage_role"
     | "manage_user-detail"
     | "manage_user"
+    | "paint_category"
+    | "paint_shop"
+    | "paint_standard-template"
+    | "paint_statistics"
+    | "paint_work-order"
   >;
 
   /**
