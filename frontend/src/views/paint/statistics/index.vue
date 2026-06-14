@@ -1,7 +1,8 @@
 <script setup lang="tsx">
-import { ref, computed, onMounted } from 'vue';
-import { NCard, NGrid, NGi, NStatistic, NSelect, NSpace, NTag, NDataTable, NH3, NNumberAnimation, NDatePicker, NButton } from 'naive-ui';
+import { ref, computed, onMounted, watch, nextTick } from 'vue';
+import { NCard, NGrid, NGi, NStatistic, NSelect, NSpace, NTag, NDataTable, NH3, NNumberAnimation, NDatePicker, NButton, NEmpty } from 'naive-ui';
 import { fetchMonthlyStatistics, fetchShopComparison, fetchYearOverview, fetchPaintShopList, fetchCategoryBreakdown, exportStatisticsCsv, exportStatisticsExcel } from '@/service/api';
+import { useEcharts } from '@/hooks/common/echarts';
 
 const shops = ref<{ id: string; name: string; code: string }[]>([]);
 const selectedShopId = ref<string | null>(null);
@@ -45,6 +46,13 @@ async function loadAllData() {
     if (!comparisonRes.error) shopComparison.value = comparisonRes.data || [];
     if (!yearRes.error) yearOverview.value = yearRes.data || [];
     if (!categoryRes.error) categoryBreakdown.value = categoryRes.data || [];
+
+    // 更新图表
+    await nextTick();
+    updateDailyChart();
+    updateShopComparisonChart();
+    updateYearTrendChart();
+    updateCategoryChart();
   } finally {
     loading.value = false;
   }
@@ -86,6 +94,140 @@ const yearColumns = [
 function getDailyStats(shopData: any) {
   return shopData?.dailyStats || [];
 }
+
+// ===== ECharts 图表 =====
+
+// 1. 每日幅数趋势折线图
+const { domRef: dailyChartRef, updateOptions: updateDailyChartOptions } = useEcharts(() => ({
+  tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+  legend: { data: [] as string[] },
+  grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+  xAxis: { type: 'category', data: [] as string[] },
+  yAxis: { type: 'value', name: '幅数' },
+  series: [] as any[]
+}));
+
+function updateDailyChart() {
+  if (!monthlyData.value.length) return;
+
+  // 收集所有日期
+  const allDates = new Set<string>();
+  monthlyData.value.forEach(shop => {
+    (shop.dailyStats || []).forEach((d: any) => allDates.add(d.date));
+  });
+  const dates = [...allDates].sort();
+
+  const colors = ['#5470c6', '#91cc75', '#fac858', '#ee6666', '#73c0de', '#3ba272'];
+  const series = monthlyData.value.map((shop, idx) => ({
+    name: shop.shopName,
+    type: 'line' as const,
+    smooth: true,
+    color: colors[idx % colors.length],
+    data: dates.map(date => {
+      const stat = (shop.dailyStats || []).find((d: any) => d.date === date);
+      return stat ? Number(stat.paintCount || 0).toFixed(1) : 0;
+    })
+  }));
+
+  updateDailyChartOptions(opts => {
+    opts.xAxis.data = dates;
+    opts.legend.data = monthlyData.value.map(s => s.shopName);
+    opts.series = series;
+    return opts;
+  });
+}
+
+// 2. 门店对比柱状图
+const { domRef: shopComparisonChartRef, updateOptions: updateShopComparisonChartOptions } = useEcharts(() => ({
+  tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+  legend: { data: ['总幅数', '工单数'] },
+  grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+  xAxis: { type: 'category', data: [] as string[] },
+  yAxis: [
+    { type: 'value', name: '幅数' },
+    { type: 'value', name: '工单数' }
+  ],
+  series: [
+    { name: '总幅数', type: 'bar', data: [] as number[], itemStyle: { color: '#5470c6' } },
+    { name: '工单数', type: 'bar', yAxisIndex: 1, data: [] as number[], itemStyle: { color: '#91cc75' } }
+  ]
+}));
+
+function updateShopComparisonChart() {
+  if (!shopComparison.value.length) return;
+
+  const shopNames = shopComparison.value.map(s => s.shopName);
+  const paintCounts = shopComparison.value.map(s => Number(s.totalPaintCount || 0));
+  const orderCounts = shopComparison.value.map(s => Number(s.totalOrders || 0));
+
+  updateShopComparisonChartOptions(opts => {
+    opts.xAxis.data = shopNames;
+    opts.series[0].data = paintCounts;
+    opts.series[1].data = orderCounts;
+    return opts;
+  });
+}
+
+// 3. 年度趋势折线图
+const { domRef: yearTrendChartRef, updateOptions: updateYearTrendChartOptions } = useEcharts(() => ({
+  tooltip: { trigger: 'axis' },
+  legend: { data: ['总幅数', '工单数'] },
+  grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+  xAxis: { type: 'category', data: [] as string[], name: '月份' },
+  yAxis: [
+    { type: 'value', name: '幅数' },
+    { type: 'value', name: '工单数' }
+  ],
+  series: [
+    { name: '总幅数', type: 'line', smooth: true, data: [] as number[], itemStyle: { color: '#5470c6' }, areaStyle: { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: 'rgba(84,112,198,0.3)' }, { offset: 1, color: 'rgba(84,112,198,0.05)' }] } } },
+    { name: '工单数', type: 'line', smooth: true, yAxisIndex: 1, data: [] as number[], itemStyle: { color: '#91cc75' } }
+  ]
+}));
+
+function updateYearTrendChart() {
+  if (!yearOverview.value.length) return;
+
+  const months = yearOverview.value.map(d => `${d.month}月`);
+  const paintCounts = yearOverview.value.map(d => Number(d.totalPaintCount || 0));
+  const orderCounts = yearOverview.value.map(d => Number(d.totalOrders || 0));
+
+  updateYearTrendChartOptions(opts => {
+    opts.xAxis.data = months;
+    opts.series[0].data = paintCounts;
+    opts.series[1].data = orderCounts;
+    return opts;
+  });
+}
+
+// 4. 项目类别饼图
+const { domRef: categoryChartRef, updateOptions: updateCategoryChartOptions } = useEcharts(() => ({
+  tooltip: { trigger: 'item', formatter: '{b}: {c}幅 ({d}%)' },
+  legend: { orient: 'vertical', left: 'left', type: 'scroll' },
+  series: [{
+    type: 'pie',
+    radius: ['40%', '70%'],
+    avoidLabelOverlap: true,
+    itemStyle: { borderRadius: 6, borderColor: '#fff', borderWidth: 2 },
+    label: { show: true, formatter: '{b}\n{d}%' },
+    data: [] as { name: string; value: number }[]
+  }]
+}));
+
+function updateCategoryChart() {
+  if (!categoryBreakdown.value.length) return;
+
+  const pieData = categoryBreakdown.value.map(d => ({
+    name: d.categoryName,
+    value: Number(d.totalPaintCount || 0)
+  })).filter(d => d.value > 0);
+
+  updateCategoryChartOptions(opts => {
+    opts.series[0].data = pieData;
+    return opts;
+  });
+}
+
+// ===== 导出 =====
 
 const exporting = ref(false);
 
@@ -206,9 +348,38 @@ async function handleExportExcel() {
       </NGi>
     </NGrid>
 
+    <!-- 每日幅数趋势图 + 门店对比图 -->
     <NGrid :cols="2" :x-gap="16">
       <NGi>
-        <NCard title="结算月每日统计" :bordered="false" size="small" class="h-full">
+        <NCard title="每日幅数趋势" :bordered="false" size="small">
+          <div ref="dailyChartRef" class="h-360px overflow-hidden"></div>
+        </NCard>
+      </NGi>
+      <NGi>
+        <NCard title="门店对比" :bordered="false" size="small">
+          <div ref="shopComparisonChartRef" class="h-360px overflow-hidden"></div>
+        </NCard>
+      </NGi>
+    </NGrid>
+
+    <!-- 年度趋势图 + 类别分布饼图 -->
+    <NGrid :cols="2" :x-gap="16">
+      <NGi>
+        <NCard title="年度趋势 (按结算月)" :bordered="false" size="small">
+          <div ref="yearTrendChartRef" class="h-360px overflow-hidden"></div>
+        </NCard>
+      </NGi>
+      <NGi>
+        <NCard title="项目类别分布" :bordered="false" size="small">
+          <div ref="categoryChartRef" class="h-360px overflow-hidden"></div>
+        </NCard>
+      </NGi>
+    </NGrid>
+
+    <!-- 明细表格 -->
+    <NGrid :cols="2" :x-gap="16">
+      <NGi>
+        <NCard title="结算月每日明细" :bordered="false" size="small" class="h-full">
           <template v-for="shop in monthlyData" :key="shop.shopId">
             <NH3 prefix="bar" class="mb-8px mt-16px">{{ shop.shopName }} ({{ shop.shopCode }})</NH3>
             <NDataTable
@@ -225,7 +396,7 @@ async function handleExportExcel() {
       </NGi>
 
       <NGi>
-        <NCard title="门店对比" :bordered="false" size="small" class="h-full">
+        <NCard title="门店对比明细" :bordered="false" size="small" class="h-full">
           <NDataTable
             :columns="comparisonColumns"
             :data="shopComparison"
@@ -241,7 +412,7 @@ async function handleExportExcel() {
 
     <NGrid :cols="2" :x-gap="16">
       <NGi>
-        <NCard title="年度趋势 (按结算月)" :bordered="false" size="small" class="h-full">
+        <NCard title="年度趋势明细" :bordered="false" size="small" class="h-full">
           <NDataTable
             :columns="yearColumns"
             :data="yearOverview"
@@ -255,7 +426,7 @@ async function handleExportExcel() {
       </NGi>
 
       <NGi>
-        <NCard title="项目类别分布" :bordered="false" size="small" class="h-full">
+        <NCard title="项目类别明细" :bordered="false" size="small" class="h-full">
           <NDataTable
             :columns="categoryColumns"
             :data="categoryBreakdown"

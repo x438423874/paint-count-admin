@@ -32,7 +32,7 @@ export class PaintShopService {
     // 如果关联了标准模板，复制模板项目到门店标准
     if (template?.items.length) {
       await this.prisma.paintStandard.createMany({
-        data: template.items.map(item => ({
+        data: template.items.map((item: any) => ({
           shopId: shop.id,
           categoryId: item.categoryId,
           coefficient: item.coefficient,
@@ -72,7 +72,7 @@ export class PaintShopService {
         await this.prisma.paintStandard.deleteMany({ where: { shopId: dto.id } });
         if (template.items.length) {
           await this.prisma.paintStandard.createMany({
-            data: template.items.map(item => ({
+            data: template.items.map((item: any) => ({
               shopId: dto.id,
               categoryId: item.categoryId,
               coefficient: item.coefficient,

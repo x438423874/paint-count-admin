@@ -23,15 +23,15 @@ export class WorkOrderService {
 
   /**
    * 获取图片存储的相对路径和绝对目录
-   * 结构: uploads/paint/{门店名称}/{结算月份或'未结算'}/
+   * 结构: uploads/paint/{门店编码}/{结算月份或'未结算'}/
    */
   private async getImageStoragePath(shopId: string, settlementMonth?: string | null): Promise<{ relativeDir: string; absoluteDir: string }> {
     const path = await import('path');
     const fs = await import('fs/promises');
     const shop = await this.prisma.paintShop.findUnique({ where: { id: shopId } });
-    const shopName = shop?.name || '未知门店';
+    const shopCode = shop?.code || 'unknown';
     const monthDir = settlementMonth || '未结算';
-    const relativeDir = `uploads/paint/${shopName}/${monthDir}`;
+    const relativeDir = `uploads/paint/${shopCode}/${monthDir}`;
     const absoluteDir = path.join(process.cwd(), relativeDir);
     await fs.mkdir(absoluteDir, { recursive: true });
     return { relativeDir, absoluteDir };
@@ -473,7 +473,7 @@ export class WorkOrderService {
     const dateStr = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}`;
     const prefix = shop?.code || 'P';
 
-    // 查找今天该门店已有的最大序号，避免并发竞态
+    // 查找今天该门店已有的最大序号
     const todayStart = new Date(date.getFullYear(), date.getMonth(), date.getDate());
     const todayEnd = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59, 999);
 
@@ -493,6 +493,17 @@ export class WorkOrderService {
       seq = parseInt(lastSeq, 10) + 1;
     }
 
-    return `${prefix}${dateStr}${String(seq).padStart(4, '0')}`;
+    // 利用 orderNo unique 约束 + 重试机制保证并发安全
+    const maxRetries = 5;
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      const orderNo = `${prefix}${dateStr}${String(seq).padStart(4, '0')}`;
+      const existing = await this.prisma.paintWorkOrder.findUnique({ where: { orderNo } });
+      if (!existing) {
+        return orderNo;
+      }
+      // 序号冲突，自增重试
+      seq++;
+    }
+    throw new BadRequestException('工单号生成失败，请稍后重试');
   }
 }

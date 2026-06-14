@@ -3,6 +3,7 @@ import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { PaintStatisticsService } from '../../service/paint-statistics.service';
 import { ApiRes } from '@lib/infra/rest/res.response';
 import { FastifyReply } from 'fastify';
+import ExcelJS from 'exceljs';
 
 @ApiTags('Paint - Statistics')
 @Controller('paint/statistics')
@@ -71,7 +72,7 @@ export class PaintStatisticsController {
   }
 
   @Get('export/excel')
-  @ApiOperation({ summary: '导出月度统计Excel(简单HTML表格格式)' })
+  @ApiOperation({ summary: '导出月度统计Excel(xlsx格式，含工单汇总和项目明细两个Sheet)' })
   async exportExcel(
     @Query('settlementMonth') settlementMonth: string,
     @Query('shopId') shopId: string | undefined,
@@ -79,23 +80,158 @@ export class PaintStatisticsController {
   ) {
     const data = await this.statisticsService.getExportData(settlementMonth, shopId);
 
-    // 使用HTML表格格式生成xls（兼容Excel，无需额外依赖）
-    const htmlEscape = (val: any) => String(val ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    const headers = ['工单号', '门店', '门店编码', '工单日期', '结算月份', '车牌号', '车型', '客户名称', '总幅数', '是否审核', '审核时间', '审核人', '状态', '备注'];
-    let html = '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="utf-8"></head><body><table border="1">';
-    html += '<tr>' + headers.map(h => `<th style="background:#4472C4;color:white;font-weight:bold">${h}</th>`).join('') + '</tr>';
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = '喷漆幅数统计系统';
+    workbook.created = new Date();
 
+    // ===== Sheet1: 工单汇总 =====
+    const summarySheet = workbook.addWorksheet('工单汇总');
+    const summaryHeaders = ['工单号', '门店', '门店编码', '工单日期', '结算月份', '车牌号', '车型', '客户名称', '总幅数', '是否审核', '审核时间', '审核人', '状态', '备注'];
+
+    // 标题行
+    const titleRow = summarySheet.addRow([`喷漆幅数统计 - ${settlementMonth}`]);
+    summarySheet.mergeCells('A1:N1');
+    titleRow.getCell(1).font = { size: 16, bold: true };
+    titleRow.getCell(1).alignment = { horizontal: 'center' };
+    titleRow.height = 30;
+
+    // 表头
+    const headerRow = summarySheet.addRow(summaryHeaders);
+    headerRow.eachCell((cell) => {
+      cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4472C4' } };
+      cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      cell.border = {
+        top: { style: 'thin' }, bottom: { style: 'thin' },
+        left: { style: 'thin' }, right: { style: 'thin' },
+      };
+    });
+    headerRow.height = 22;
+
+    // 数据行
+    let totalPaintCount = 0;
     for (const row of data) {
-      html += '<tr>';
-      html += `<td>${htmlEscape(row.工单号)}</td><td>${htmlEscape(row.门店)}</td><td>${htmlEscape(row.门店编码)}</td><td>${htmlEscape(row.工单日期)}</td><td>${htmlEscape(row.结算月份)}</td>`;
-      html += `<td>${htmlEscape(row.车牌号)}</td><td>${htmlEscape(row.车型)}</td><td>${htmlEscape(row.客户名称)}</td><td>${row.总幅数}</td><td>${htmlEscape(row.是否审核)}</td>`;
-      html += `<td>${htmlEscape(row.审核时间)}</td><td>${htmlEscape(row.审核人)}</td><td>${htmlEscape(row.状态)}</td><td>${htmlEscape(row.备注)}</td>`;
-      html += '</tr>';
+      totalPaintCount += row.总幅数;
+      const dataRow = summarySheet.addRow([
+        row.工单号, row.门店, row.门店编码, row.工单日期, row.结算月份,
+        row.车牌号, row.车型, row.客户名称, row.总幅数, row.是否审核,
+        row.审核时间, row.审核人, row.状态, row.备注,
+      ]);
+      dataRow.eachCell((cell, colNumber) => {
+        cell.border = {
+          top: { style: 'thin' }, bottom: { style: 'thin' },
+          left: { style: 'thin' }, right: { style: 'thin' },
+        };
+        if (colNumber === 9) {
+          cell.numFmt = '0.0';
+        }
+        cell.alignment = { vertical: 'middle' };
+      });
     }
-    html += '</table></body></html>';
 
-    res.header('Content-Type', 'application/vnd.ms-excel; charset=utf-8');
-    res.header('Content-Disposition', `attachment; filename=paint-statistics-${settlementMonth}.xls`);
-    res.send(html);
+    // 合计行
+    const totalRow = summarySheet.addRow([]);
+    totalRow.getCell(8).value = '合计';
+    totalRow.getCell(8).font = { bold: true };
+    totalRow.getCell(8).alignment = { horizontal: 'right' };
+    totalRow.getCell(9).value = totalPaintCount;
+    totalRow.getCell(9).font = { bold: true, color: { argb: 'FFC00000' } };
+    totalRow.getCell(9).numFmt = '0.0';
+    totalRow.eachCell((cell) => {
+      cell.border = {
+        top: { style: 'double' }, bottom: { style: 'double' },
+        left: { style: 'thin' }, right: { style: 'thin' },
+      };
+    });
+
+    // 列宽自适应
+    summarySheet.getColumn(1).width = 20;
+    summarySheet.getColumn(2).width = 16;
+    summarySheet.getColumn(3).width = 12;
+    summarySheet.getColumn(4).width = 12;
+    summarySheet.getColumn(5).width = 12;
+    summarySheet.getColumn(6).width = 12;
+    summarySheet.getColumn(7).width = 12;
+    summarySheet.getColumn(8).width = 12;
+    summarySheet.getColumn(9).width = 10;
+    summarySheet.getColumn(10).width = 10;
+    summarySheet.getColumn(11).width = 12;
+    summarySheet.getColumn(12).width = 10;
+    summarySheet.getColumn(13).width = 10;
+    summarySheet.getColumn(14).width = 20;
+
+    // ===== Sheet2: 项目明细 =====
+    const detailSheet = workbook.addWorksheet('项目明细');
+    const detailHeaders = ['工单号', '门店', '车牌号', '部位', '数量', '幅数', '是否新件', '特殊车漆', '车漆倍数'];
+
+    const detailTitleRow = detailSheet.addRow([`项目明细 - ${settlementMonth}`]);
+    detailSheet.mergeCells('A1:I1');
+    detailTitleRow.getCell(1).font = { size: 16, bold: true };
+    detailTitleRow.getCell(1).alignment = { horizontal: 'center' };
+    detailTitleRow.height = 30;
+
+    const detailHeaderRow = detailSheet.addRow(detailHeaders);
+    detailHeaderRow.eachCell((cell) => {
+      cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF70AD47' } };
+      cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      cell.border = {
+        top: { style: 'thin' }, bottom: { style: 'thin' },
+        left: { style: 'thin' }, right: { style: 'thin' },
+      };
+    });
+    detailHeaderRow.height = 22;
+
+    let detailTotalPaintCount = 0;
+    for (const order of data) {
+      for (const item of order.项目明细) {
+        detailTotalPaintCount += item.幅数;
+        const row = detailSheet.addRow([
+          order.工单号, order.门店, order.车牌号,
+          item.部位, item.数量, item.幅数,
+          item.是否新件, item.特殊车漆, item.车漆倍数,
+        ]);
+        row.eachCell((cell, colNumber) => {
+          cell.border = {
+            top: { style: 'thin' }, bottom: { style: 'thin' },
+            left: { style: 'thin' }, right: { style: 'thin' },
+          };
+          if (colNumber === 6) {
+            cell.numFmt = '0.00';
+          }
+        });
+      }
+    }
+
+    // 明细合计行
+    const detailTotalRow = detailSheet.addRow([]);
+    detailTotalRow.getCell(5).value = '合计';
+    detailTotalRow.getCell(5).font = { bold: true };
+    detailTotalRow.getCell(5).alignment = { horizontal: 'right' };
+    detailTotalRow.getCell(6).value = detailTotalPaintCount;
+    detailTotalRow.getCell(6).font = { bold: true, color: { argb: 'FFC00000' } };
+    detailTotalRow.getCell(6).numFmt = '0.00';
+    detailTotalRow.eachCell((cell) => {
+      cell.border = {
+        top: { style: 'double' }, bottom: { style: 'double' },
+        left: { style: 'thin' }, right: { style: 'thin' },
+      };
+    });
+
+    detailSheet.getColumn(1).width = 20;
+    detailSheet.getColumn(2).width = 16;
+    detailSheet.getColumn(3).width = 12;
+    detailSheet.getColumn(4).width = 14;
+    detailSheet.getColumn(5).width = 8;
+    detailSheet.getColumn(6).width = 10;
+    detailSheet.getColumn(7).width = 10;
+    detailSheet.getColumn(8).width = 14;
+    detailSheet.getColumn(9).width = 10;
+
+    // 生成buffer并返回
+    const buffer = await workbook.xlsx.writeBuffer();
+    res.header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.header('Content-Disposition', `attachment; filename=paint-statistics-${settlementMonth}.xlsx`);
+    res.send(buffer);
   }
 }
