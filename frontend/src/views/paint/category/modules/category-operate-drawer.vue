@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, watch } from 'vue';
-import { request } from '@/service/request';
+import { createPaintCategory, updatePaintCategory } from '@/service/api';
 import { useFormRules, useNaiveForm } from '@/hooks/common/form';
 
 defineOptions({
@@ -76,11 +76,11 @@ async function handleSubmit() {
   };
 
   if (props.operateType === 'add') {
-    const { error } = await request({ url: '/paint/standard-template/categories', method: 'post', data: submitData });
+    const { error } = await createPaintCategory(submitData);
     if (error) return;
     window.$message?.success('创建成功');
   } else {
-    const { error } = await request({ url: `/paint/standard-template/categories/${props.rowData.id}`, method: 'put', data: submitData });
+    const { error } = await updatePaintCategory(props.rowData.id, submitData);
     if (error) return;
     window.$message?.success('更新成功');
   }
@@ -104,7 +104,7 @@ watch(visible, () => {
           <NInput v-model:value="model.name" placeholder="如：前杠、后杠、机盖" />
         </NFormItem>
         <NFormItem label="编码" path="code" :rule="{ required: true, message: '请输入编码' }">
-          <NInput v-model:value="model.code" placeholder="如：front-bumper" />
+          <NInput v-model:value="model.code" placeholder="如：front-bumper" :disabled="operateType === 'edit'" />
         </NFormItem>
         <NFormItem label="排序">
           <NInputNumber v-model:value="model.sortOrder" :min="0" :step="1" style="width: 100%;" />

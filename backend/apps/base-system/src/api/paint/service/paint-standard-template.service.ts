@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '@lib/shared/prisma/prisma.service';
 import { CreateStandardTemplateDto, UpdateStandardTemplateDto } from '../standard/dto/standard-template.dto';
 
@@ -66,7 +66,7 @@ export class PaintStandardTemplateService {
     // 检查是否有门店正在使用
     const shopCount = await this.prisma.paintShop.count({ where: { standardTemplateId: id } });
     if (shopCount > 0) {
-      throw new Error(`该标准模板已被 ${shopCount} 个门店使用，无法删除`);
+      throw new BadRequestException(`该标准模板已被 ${shopCount} 个门店使用，无法删除`);
     }
 
     return this.prisma.paintStandardTemplate.delete({ where: { id } });

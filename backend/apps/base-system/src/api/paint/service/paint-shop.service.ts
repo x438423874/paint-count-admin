@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '@lib/shared/prisma/prisma.service';
 import { CreateShopDto, UpdateShopDto, PageShopDto } from '../shop/dto/shop.dto';
 import { PaginationResult } from '@lib/shared/prisma/pagination';
@@ -99,7 +99,7 @@ export class PaintShopService {
     // 检查是否有关联的工单
     const orderCount = await this.prisma.paintWorkOrder.count({ where: { shopId: id } });
     if (orderCount > 0) {
-      throw new Error(`该门店有 ${orderCount} 个工单，无法删除`);
+      throw new BadRequestException(`该门店有 ${orderCount} 个工单，无法删除`);
     }
 
     return this.prisma.paintShop.delete({ where: { id } });

@@ -177,7 +177,8 @@ const local: App.I18n.Schema = {
     paint_shop: '门店管理',
     'paint_standard-template': '标准模板',
     'paint_work-order': '工单管理',
-    paint_statistics: '幅数统计'
+    paint_statistics: '幅数统计',
+    'paint_scheduled-task': '定时任务'
   },
   page: {
     login: {

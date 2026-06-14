@@ -1,7 +1,7 @@
 <script setup lang="tsx">
 import { NButton, NPopconfirm, NTag, NSpace } from 'naive-ui';
 import { ref } from 'vue';
-import { fetchStandardTemplateList, deleteStandardTemplate } from '@/service/api';
+import { fetchStandardTemplateList, fetchStandardTemplateById, deleteStandardTemplate } from '@/service/api';
 import TemplateOperateDrawer from './modules/template-operate-drawer.vue';
 
 const loading = ref(false);
@@ -30,9 +30,11 @@ function handleAdd() {
   drawerVisible.value = true;
 }
 
-function handleEdit(row: any) {
+async function handleEdit(row: any) {
   operateType.value = 'edit';
-  editingData.value = row;
+  // 列表数据不含 items，需要请求详情
+  const { data: detail, error } = await fetchStandardTemplateById(row.id);
+  editingData.value = error ? row : detail;
   drawerVisible.value = true;
 }
 

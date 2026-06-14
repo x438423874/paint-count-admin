@@ -3,6 +3,7 @@ import { PrismaService } from '@lib/shared/prisma/prisma.service';
 import { CreateWorkOrderDto, UpdateWorkOrderDto, PageWorkOrderDto, WorkOrderItemDto, AuditWorkOrderDto } from '../work-order/dto/work-order.dto';
 import { PaginationResult } from '@lib/shared/prisma/pagination';
 import { PaintImageType, Prisma } from '@prisma/client';
+import { PaintImageService } from './paint-image.service';
 
 interface OrderItemCreateData {
   categoryId: string;
@@ -19,82 +20,10 @@ interface ItemDataWithOrderId extends OrderItemCreateData {
 
 @Injectable()
 export class WorkOrderService {
-  constructor(private readonly prisma: PrismaService) {}
-
-  /**
-   * 获取图片存储的相对路径和绝对目录
-   * 结构: uploads/paint/{门店编码}/{结算月份或'未结算'}/
-   */
-  private async getImageStoragePath(shopId: string, settlementMonth?: string | null): Promise<{ relativeDir: string; absoluteDir: string }> {
-    const path = await import('path');
-    const fs = await import('fs/promises');
-    const shop = await this.prisma.paintShop.findUnique({ where: { id: shopId } });
-    const shopCode = shop?.code || 'unknown';
-    const monthDir = settlementMonth || '未结算';
-    const relativeDir = `uploads/paint/${shopCode}/${monthDir}`;
-    const absoluteDir = path.join(process.cwd(), relativeDir);
-    await fs.mkdir(absoluteDir, { recursive: true });
-    return { relativeDir, absoluteDir };
-  }
-
-  /**
-   * 保存图片文件到指定目录，返回URL
-   */
-  private async saveImageFile(buffer: Buffer, filename: string, shopId: string, settlementMonth?: string | null): Promise<string> {
-    const path = await import('path');
-    const { relativeDir, absoluteDir } = await this.getImageStoragePath(shopId, settlementMonth);
-    const ext = path.extname(filename) || '.jpg';
-    const uniqueName = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`;
-    const filePath = path.join(absoluteDir, uniqueName);
-    const fs = await import('fs/promises');
-    await fs.writeFile(filePath, buffer);
-    return `/${relativeDir}/${uniqueName}`;
-  }
-
-  /**
-   * 迁移图片文件（结算月份变更时）
-   */
-  private async migrateImages(orderId: string, oldMonth: string | null, newMonth: string | null) {
-    const order = await this.prisma.paintWorkOrder.findUnique({
-      where: { id: orderId },
-      include: { images: true },
-    });
-    if (!order || !order.images.length) return;
-
-    const path = await import('path');
-    const fs = await import('fs/promises');
-    const { relativeDir: newRelativeDir, absoluteDir: newAbsoluteDir } = await this.getImageStoragePath(order.shopId, newMonth || undefined);
-
-    for (const image of order.images) {
-      // 迁移高清图和缩略图
-      const urls: { oldUrl: string; field: 'url' | 'thumbnailUrl' }[] = [
-        { oldUrl: image.url, field: 'url' },
-      ];
-      if (image.thumbnailUrl) {
-        urls.push({ oldUrl: image.thumbnailUrl, field: 'thumbnailUrl' });
-      }
-
-      const updateData: Record<string, string> = {};
-      for (const { oldUrl, field } of urls) {
-        const oldAbsolutePath = path.join(process.cwd(), oldUrl.replace(/^\//, ''));
-        const filename = path.basename(oldUrl);
-        const newAbsolutePath = path.join(newAbsoluteDir, filename);
-
-        try {
-          await fs.access(oldAbsolutePath);
-          await fs.rename(oldAbsolutePath, newAbsolutePath);
-        } catch {
-          // 文件不存在则跳过
-        }
-        updateData[field] = `/${newRelativeDir}/${filename}`;
-      }
-
-      await this.prisma.paintWorkOrderImage.update({
-        where: { id: image.id },
-        data: updateData,
-      });
-    }
-  }
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly imageService: PaintImageService,
+  ) {}
 
   /** 计算单个项目的幅数，从门店关联的标准模板获取系数 */
   private async calculateItemPaintCount(
@@ -162,10 +91,10 @@ export class WorkOrderService {
       include: { items: { include: { category: true, specialPaint: true } }, shop: true },
     });
 
-    const url = await this.saveImageFile(buffer, filename, shopId, settlementMonth);
+    const url = await this.imageService.saveImageFile(buffer, filename, shopId, settlementMonth);
     let thumbnailUrl: string | undefined;
     if (thumbnailBuffer) {
-      thumbnailUrl = await this.saveImageFile(thumbnailBuffer, `thumb_${filename}`, shopId, settlementMonth);
+      thumbnailUrl = await this.imageService.saveImageFile(thumbnailBuffer, `thumb_${filename}`, shopId, settlementMonth);
     }
     await this.prisma.paintWorkOrderImage.create({
       data: { orderId: order.id, url, thumbnailUrl, imageType: PaintImageType.BEFORE, fileSize: buffer.length },
@@ -245,7 +174,7 @@ export class WorkOrderService {
       updateData.settlementMonth = newMonth;
       // 结算月份变更时迁移图片文件
       if (oldMonth !== newMonth) {
-        await this.migrateImages(dto.id, oldMonth, newMonth);
+        await this.imageService.migrateImages(dto.id, oldMonth, newMonth);
       }
     }
 
@@ -289,6 +218,9 @@ export class WorkOrderService {
     if (existing.isAudited) {
       throw new BadRequestException('已审核的工单不允许删除');
     }
+
+    // 先清理关联的图片文件
+    await this.imageService.deleteOrderImages(id);
 
     return this.prisma.paintWorkOrder.delete({ where: { id } });
   }
@@ -385,6 +317,24 @@ export class WorkOrderService {
       throw new BadRequestException('已审核的工单不允许修改');
     }
 
+    // 校验重复部位
+    const existingItems = await this.prisma.paintWorkOrderItem.findMany({
+      where: { orderId },
+      select: { categoryId: true },
+    });
+    const existingCategoryIds = new Set(existingItems.map(i => i.categoryId));
+    for (const item of items) {
+      if (existingCategoryIds.has(item.categoryId)) {
+        throw new BadRequestException('不能重复选择同一部位');
+      }
+    }
+    // 新增项之间也不能重复
+    const newCategoryIds = items.map(i => i.categoryId);
+    const duplicates = newCategoryIds.filter((id, idx) => newCategoryIds.indexOf(id) !== idx);
+    if (duplicates.length > 0) {
+      throw new BadRequestException('不能重复选择同一部位');
+    }
+
     let addedPaintCount = 0;
     const itemsData: ItemDataWithOrderId[] = [];
     for (const item of items) {
@@ -436,10 +386,10 @@ export class WorkOrderService {
     const order = await this.prisma.paintWorkOrder.findUnique({ where: { id: orderId } });
     if (!order) throw new NotFoundException('工单不存在');
 
-    const url = await this.saveImageFile(buffer, filename, order.shopId, order.settlementMonth);
+    const url = await this.imageService.saveImageFile(buffer, filename, order.shopId, order.settlementMonth);
     let thumbnailUrl: string | undefined;
     if (thumbnailBuffer) {
-      thumbnailUrl = await this.saveImageFile(thumbnailBuffer, `thumb_${filename}`, order.shopId, order.settlementMonth);
+      thumbnailUrl = await this.imageService.saveImageFile(thumbnailBuffer, `thumb_${filename}`, order.shopId, order.settlementMonth);
     }
     return this.prisma.paintWorkOrderImage.create({
       data: { orderId, url, thumbnailUrl, imageType, description, fileSize: buffer.length },
@@ -450,19 +400,8 @@ export class WorkOrderService {
     const image = await this.prisma.paintWorkOrderImage.findUnique({ where: { id: imageId } });
     if (!image) throw new NotFoundException('图片不存在');
 
-    // 删除物理文件（高清图+缩略图）
-    const path = await import('path');
-    const fs = await import('fs/promises');
-    for (const url of [image.url, image.thumbnailUrl]) {
-      if (!url) continue;
-      const absolutePath = path.join(process.cwd(), url.replace(/^\//, ''));
-      try {
-        await fs.access(absolutePath);
-        await fs.unlink(absolutePath);
-      } catch {
-        // 文件不存在则跳过
-      }
-    }
+    // 删除物理文件
+    await this.imageService.deletePhysicalFiles(image.url, image.thumbnailUrl);
 
     return this.prisma.paintWorkOrderImage.delete({ where: { id: imageId } });
   }

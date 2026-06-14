@@ -205,6 +205,31 @@ export function deletePaintStandard(id: string) {
   });
 }
 
+// ==================== 部位管理 ====================
+
+export function createPaintCategory(data: { name: string; code: string; sortOrder?: number; isSpecial?: boolean }) {
+  return request({
+    url: '/paint/standard-template/categories',
+    method: 'post',
+    data
+  });
+}
+
+export function updatePaintCategory(id: string, data: { name?: string; code?: string; sortOrder?: number; isSpecial?: boolean }) {
+  return request({
+    url: `/paint/standard-template/categories/${id}`,
+    method: 'put',
+    data
+  });
+}
+
+export function deletePaintCategory(id: string) {
+  return request({
+    url: `/paint/standard-template/categories/${id}`,
+    method: 'delete'
+  });
+}
+
 // ==================== 标准模板 ====================
 
 export function fetchStandardTemplateList() {
@@ -319,5 +344,42 @@ export function exportStatisticsExcel(settlementMonth: string, shopId?: string) 
     method: 'get',
     params: { settlementMonth, ...(shopId && { shopId }) },
     responseType: 'blob'
+  });
+}
+
+// ==================== 定时任务管理 ====================
+
+export function fetchScheduledTasks() {
+  return request<any[]>({
+    url: '/scheduled-tasks',
+    method: 'get'
+  });
+}
+
+export function fetchScheduledTaskByName(name: string) {
+  return request<any>({
+    url: `/scheduled-tasks/${name}`,
+    method: 'get'
+  });
+}
+
+export function startScheduledTask(name: string) {
+  return request({
+    url: `/scheduled-tasks/${name}/start`,
+    method: 'post'
+  });
+}
+
+export function stopScheduledTask(name: string) {
+  return request({
+    url: `/scheduled-tasks/${name}/stop`,
+    method: 'post'
+  });
+}
+
+export function toggleScheduledTask(name: string, action: 'start' | 'stop') {
+  return request({
+    url: `/scheduled-tasks/${name}/${action}`,
+    method: 'post'
   });
 }

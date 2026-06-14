@@ -1,8 +1,7 @@
 <script setup lang="tsx">
 import { NButton, NPopconfirm, NTag, NSpace } from 'naive-ui';
 import { ref } from 'vue';
-import { fetchPaintCategoryList } from '@/service/api';
-import { request } from '@/service/request';
+import { fetchPaintCategoryList, deletePaintCategory } from '@/service/api';
 
 const loading = ref(false);
 const data = ref<any[]>([]);
@@ -37,7 +36,7 @@ function handleEdit(row: any) {
 }
 
 async function handleDelete(id: string) {
-  const { error } = await request({ url: `/paint/standard-template/categories/${id}`, method: 'delete' });
+  const { error } = await deletePaintCategory(id);
   if (error) return;
   window.$message?.success('删除成功');
   await getData();

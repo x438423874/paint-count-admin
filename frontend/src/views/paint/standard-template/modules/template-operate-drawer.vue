@@ -162,7 +162,9 @@ function handleInitModel() {
     const groupMap = new Map<string, any[]>();
 
     for (const it of rawItems) {
-      const key = `${Number(it.coefficient)}_${Number(it.newPartAddition || 0)}_${it.alias || ''}`;
+      // 使用 coefficient + newPartAddition + alias 作为分组 key
+      // 为避免边界问题（如 0_0_ 与 0_0_ 混淆），用分隔符明确区分
+      const key = [Number(it.coefficient), Number(it.newPartAddition || 0), it.alias || ''].join('|');
       if (!groupMap.has(key)) groupMap.set(key, []);
       groupMap.get(key)!.push(it);
     }

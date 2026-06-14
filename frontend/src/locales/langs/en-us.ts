@@ -177,7 +177,8 @@ const local: App.I18n.Schema = {
     paint_shop: 'Shop Manage',
     'paint_standard-template': 'Standard Template',
     'paint_work-order': 'Work Order',
-    paint_statistics: 'Statistics'
+    paint_statistics: 'Statistics',
+    'paint_scheduled-task': 'Scheduled Tasks'
   },
   page: {
     login: {

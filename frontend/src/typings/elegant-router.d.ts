@@ -34,6 +34,7 @@ declare module "@elegant-router/types" {
     "manage_user-detail": "/manage/user-detail/:id";
     "paint": "/paint";
     "paint_category": "/paint/category";
+    "paint_scheduled-task": "/paint/scheduled-task";
     "paint_shop": "/paint/shop";
     "paint_standard-template": "/paint/standard-template";
     "paint_statistics": "/paint/statistics";
@@ -109,6 +110,7 @@ declare module "@elegant-router/types" {
     | "manage_user-detail"
     | "manage_user"
     | "paint_category"
+    | "paint_scheduled-task"
     | "paint_shop"
     | "paint_standard-template"
     | "paint_statistics"

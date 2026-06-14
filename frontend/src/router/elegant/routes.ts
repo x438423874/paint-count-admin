@@ -179,6 +179,15 @@ export const generatedRoutes: GeneratedRoute[] = [
         }
       },
       {
+        name: 'paint_scheduled-task',
+        path: '/paint/scheduled-task',
+        component: 'view.paint_scheduled-task',
+        meta: {
+          title: 'paint_scheduled-task',
+          i18nKey: 'route.paint_scheduled-task'
+        }
+      },
+      {
         name: 'paint_shop',
         path: '/paint/shop',
         component: 'view.paint_shop',

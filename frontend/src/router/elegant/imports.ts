@@ -29,6 +29,7 @@ export const views: Record<LastLevelRouteKey, RouteComponent | (() => Promise<Ro
   "manage_user-detail": () => import("@/views/manage/user-detail/[id].vue"),
   manage_user: () => import("@/views/manage/user/index.vue"),
   paint_category: () => import("@/views/paint/category/index.vue"),
+  "paint_scheduled-task": () => import("@/views/paint/scheduled-task/index.vue"),
   paint_shop: () => import("@/views/paint/shop/index.vue"),
   "paint_standard-template": () => import("@/views/paint/standard-template/index.vue"),
   paint_statistics: () => import("@/views/paint/statistics/index.vue"),
