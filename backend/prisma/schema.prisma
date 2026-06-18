@@ -306,6 +306,7 @@ model PaintShop {
   phone             String?
   status            Status   @default(ENABLED)
   standardTemplateId String? @map("standard_template_id")
+  excelTemplateConfig String? @map("excel_template_config") @db.Text  // JSON: 门店专属Excel模板列映射配置
   createdAt         DateTime @default(now()) @map("created_at")
   updatedAt         DateTime? @updatedAt @map("updated_at")
 
@@ -355,7 +356,7 @@ model PaintStandard {
 // 喷漆工单
 model PaintWorkOrder {
   id            String    @id @default(cuid())
-  orderNo       String    @unique @map("order_no")
+  orderNo       String    @map("order_no")
   shopId        String    @map("shop_id")
   orderDate     DateTime  @map("order_date")
   settlementMonth String?  @map("settlement_month") @db.VarChar(7)
@@ -372,15 +373,19 @@ model PaintWorkOrder {
   auditedAt     DateTime? @map("audited_at")
   auditedBy     String?   @map("audited_by") @db.VarChar(100)
   remark        String?
+  mergeGroupId  String?   @map("merge_group_id") @db.VarChar(50)
   createdAt     DateTime  @default(now()) @map("created_at")
   updatedAt     DateTime? @updatedAt @map("updated_at")
 
   shop   PaintShop          @relation(fields: [shopId], references: [id])
   items  PaintWorkOrderItem[]
   images PaintWorkOrderImage[]
+  settlements PaintSettlementRecord[]
 
   @@index([shopId, settlementMonth])
   @@index([settlementMonth])
+  @@index([orderNo])
+  @@index([mergeGroupId])
   @@map("paint_work_order")
 }
 
@@ -398,7 +403,7 @@ model PaintWorkOrderItem {
   categoryId      String   @map("category_id")
   quantity        Int      @default(1)
   paintCount      Decimal  @default(0) @map("paint_count") @db.Decimal(6, 2)
-  isNewPart       Boolean  @default(false) @map("is_new_part")
+  newPartQuantity  Int      @default(0) @map("new_part_quantity")
   specialPaintId  String?  @map("special_paint_id")
   specialPaintMultiplier Decimal? @map("special_paint_multiplier") @db.Decimal(4, 2)
   remarks         String?
@@ -430,4 +435,21 @@ enum PaintImageType {
   BEFORE
   DURING
   AFTER
+}
+
+// 工单结算记录（支持一个工单分多次结算）
+model PaintSettlementRecord {
+  id              String   @id @default(cuid())
+  orderId         String   @map("order_id")
+  settlementMonth String   @map("settlement_month") @db.VarChar(7)
+  paintCount      Decimal  @map("paint_count") @db.Decimal(8, 2)
+  itemCount       Int      @default(0) @map("item_count")
+  remark          String?
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  order PaintWorkOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@index([settlementMonth])
+  @@map("paint_settlement_record")
 }

@@ -1,7 +1,7 @@
 <script setup lang="tsx">
-import { NButton, NPopconfirm, NTag } from 'naive-ui';
+import { NButton, NPopconfirm, NTag, NSpace, NSelect } from 'naive-ui';
 import { ref } from 'vue';
-import { fetchPaintShopPage, deletePaintShop } from '@/service/api';
+import { fetchPaintShopPage, deletePaintShop, fetchStandardTemplateList, applyTemplateToShop } from '@/service/api';
 import { useTable, useTableOperate } from '@/hooks/common/table';
 import ShopOperateDrawer from './modules/shop-operate-drawer.vue';
 
@@ -69,10 +69,32 @@ const {
     {
       key: 'standardTemplate',
       title: '标准模板',
-      width: 140,
-      render: (row: any) => row.standardTemplate?.name
-        ? <NTag type="success" size="small">{row.standardTemplate.name}</NTag>
-        : <NTag size="small">未关联</NTag>
+      width: 200,
+      render: (row: any) => {
+        if (row.standardTemplate?.name) {
+          return <NTag type="success" size="small">{row.standardTemplate.name}</NTag>;
+        }
+        return (
+          <NSpace align="center" size={4}>
+            <NTag size="small" type="warning">未关联</NTag>
+            {showTemplateSelect.value === row.id ? (
+              <NSelect
+                size="small"
+                style="width: 140px"
+                placeholder="选择模板"
+                options={templates.value.map(t => ({ label: t.version ? `${t.name}(v${t.version})` : t.name, value: t.id }))}
+                loading={associating.value === row.id}
+                onUpdateValue={(val: string) => handleAssociateTemplate(row.id, val)}
+                onBlur={() => { showTemplateSelect.value = ''; }}
+              />
+            ) : (
+              <NButton type="primary" text size="tiny" onClick={() => { showTemplateSelect.value = row.id; }}>
+                关联
+              </NButton>
+            )}
+          </NSpace>
+        );
+      }
     },
     {
       key: 'status',
@@ -125,6 +147,31 @@ function edit(id: string) {
   handleEdit(id);
 }
 
+// 一键关联模板
+const templates = ref<{ id: string; name: string; version: string }[]>([]);
+const associating = ref<string>(''); // 正在关联的门店ID
+
+async function loadTemplates() {
+  const { data, error } = await fetchStandardTemplateList();
+  if (!error && data) {
+    templates.value = data.map((t: any) => ({ id: t.id, name: t.name, version: t.version || '' }));
+  }
+}
+loadTemplates();
+
+const showTemplateSelect = ref<string>(''); // 弹出模板选择器的门店ID
+
+async function handleAssociateTemplate(shopId: string, templateId: string) {
+  if (!templateId) return;
+  associating.value = shopId;
+  const { error } = await applyTemplateToShop(templateId, shopId);
+  associating.value = '';
+  if (error) return;
+  window.$message?.success('模板关联成功');
+  showTemplateSelect.value = '';
+  await getDataByPage();
+}
+
 async function handleDelete(id: string) {
   const { error } = await deletePaintShop(id);
   if (error) return;
@@ -147,7 +194,7 @@ async function handleDelete(id: string) {
       </template>
 
       <NAlert type="info" class="mb-12px">
-        门店通过关联标准模板来设定幅数标准，在编辑门店时选择标准模板即可绑定。
+        未关联模板的门店可直接点击"关联"按钮一键选择模板，无需进入编辑页面。
       </NAlert>
 
       <NDataTable

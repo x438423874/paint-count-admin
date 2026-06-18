@@ -110,8 +110,8 @@ export class PaintStatisticsService {
     for (const item of items) {
       const key = item.categoryId;
       const existing = categoryMap.get(key) || {
-        categoryName: item.category.name,
-        categoryCode: item.category.code,
+        categoryName: item.category?.name || '未知部位',
+        categoryCode: item.category?.code || 'unknown',
         totalCount: 0,
         totalPaintCount: 0,
       };

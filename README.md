@@ -19,7 +19,7 @@
 
 - 预览地址：[https://soybean-nest.bytebytebrew.com](https://soybean-nest.bytebytebrew.com)
 
-> **注意**：由于数据库(PostgreSQL)和缓存(Redis)部署在Vercel上，访问可能需要科学上网工具。如果遇到访问缓慢或者无法访问问题，建议使用本地部署方式进行体验。
+> **注意**：由于数据库(MySQL)和缓存(Redis)部署在Vercel上，访问可能需要科学上网工具。如果遇到访问缓慢或者无法访问问题，建议使用本地部署方式进行体验。
 
 <p align="center">
   <a href="#简介">简介</a> •
@@ -105,14 +105,14 @@ soybean-admin-nestjs/
 ### 环境要求
 
 - Node.js: 18.x.x 或更高版本
-- PostgreSQL: 13.x 或更高版本
+- MySQL: 8.x 或更高版本
 - Redis: 6.x 或更高版本
 - pnpm: 8.x.x 或更高版本
 - Docker (推荐): 20.x.x 或更高版本
 
 ### 快速开始（推荐方式）
 
-使用 Docker Compose 一键启动所有服务（包含 PostgreSQL、Redis 等依赖）：
+使用 Docker Compose 一键启动所有服务（包含 MySQL、Redis 等依赖）：
 
 ```bash
 docker-compose -p soybean-admin-nest up -d
@@ -141,7 +141,7 @@ pnpm install
 #### 2. 配置环境
 
 1. 数据库配置：
-   - 确保 PostgreSQL 服务已启动
+   - 确保 MySQL 服务已启动
    - 创建新的数据库
    - 更新 `backend/.env` 中的数据库连接信息
 
@@ -219,7 +219,7 @@ pnpm dev
 
 - NestJS
 - Prisma
-- PostgreSQL
+- MySQL
 - TypeScript
 - Jest
 

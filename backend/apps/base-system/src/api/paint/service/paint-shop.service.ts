@@ -61,6 +61,9 @@ export class PaintShopService {
     if (dto.standardTemplateId !== undefined && dto.standardTemplateId !== existing.standardTemplateId) {
       data.standardTemplateId = dto.standardTemplateId || null;
 
+      // 先删除旧标准
+      await this.prisma.paintStandard.deleteMany({ where: { shopId: dto.id } });
+
       if (dto.standardTemplateId) {
         const template = await this.prisma.paintStandardTemplate.findUnique({
           where: { id: dto.standardTemplateId },
@@ -68,8 +71,7 @@ export class PaintShopService {
         });
         if (!template) throw new NotFoundException('标准模板不存在');
 
-        // 删除旧标准，写入模板标准
-        await this.prisma.paintStandard.deleteMany({ where: { shopId: dto.id } });
+        // 写入模板标准
         if (template.items.length) {
           await this.prisma.paintStandard.createMany({
             data: template.items.map((item: any) => ({

@@ -14,10 +14,11 @@ export class WorkOrderItemDto {
   @IsInt()
   quantity?: number = 1;
 
-  @ApiPropertyOptional({ description: '是否新件', default: false })
+  @ApiPropertyOptional({ description: '新件数量', default: 0 })
   @IsOptional()
-  @IsBoolean()
-  isNewPart?: boolean = false;
+  @Type(() => Number)
+  @IsInt()
+  newPartQuantity?: number = 0;
 
   @ApiPropertyOptional({ description: '特殊车漆ID' })
   @IsOptional()
@@ -51,10 +52,10 @@ export class CreateWorkOrderDto {
   @IsString()
   carModel?: string;
 
-  @ApiProperty({ description: '车牌号' })
+  @ApiPropertyOptional({ description: '车牌号' })
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  plateNumber: string;
+  plateNumber?: string;
 
   @ApiPropertyOptional({ description: '车架号' })
   @IsOptional()
@@ -99,6 +100,11 @@ export class UpdateWorkOrderDto {
   @IsString()
   @IsNotEmpty()
   id: string;
+
+  @ApiPropertyOptional({ description: '工单号' })
+  @IsOptional()
+  @IsString()
+  orderNo?: string;
 
   @ApiPropertyOptional({ description: '车型' })
   @IsOptional()

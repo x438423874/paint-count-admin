@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, reactive, watch, ref, nextTick } from 'vue';
-import { createWorkOrder, updateWorkOrder, fetchPaintShopList, fetchShopCategoriesWithStandard, uploadWorkOrderImage, removeWorkOrderImage, fetchSpecialPaintList } from '@/service/api';
+import { computed, reactive, watch, ref, nextTick, h } from 'vue';
+import { NSelect, NInputNumber, NCheckbox, NButton, NText } from 'naive-ui';
+import { createWorkOrder, updateWorkOrder, fetchPaintShopList, fetchShopCategoriesWithStandard, uploadWorkOrderImage, removeWorkOrderImage, fetchSpecialPaintList, ocrRecognizeImage, getSettlementHistory, addSettlementRecord } from '@/service/api';
 import { useFormRules, useNaiveForm } from '@/hooks/common/form';
 import { $t } from '@/locales';
-import { recognizeWorkOrderImage, recognizeFromCanvas, cropImageRegion } from '@/utils/ocr';
+import { recognizeFromCanvas, cropImageRegion } from '@/utils/ocr';
 import type { CropRegion } from '@/utils/ocr';
 import { compressDualImage } from '@/utils/image-compress';
 
@@ -37,6 +38,9 @@ const specialPaints = ref<{ id: string; name: string; multiplier: number }[]>([]
 const loadingCategories = ref(false);
 const shopHasTemplate = ref(true);
 
+// 结算历史
+const settlementRecords = ref<any[]>([]);
+
 const title = computed(() => {
   const titles: Record<NaiveUI.TableOperateType, string> = {
     add: '新增工单',
@@ -48,7 +52,7 @@ const title = computed(() => {
 interface OrderItem {
   categoryId: string;
   quantity: number;
-  isNewPart: boolean;
+  newPartQuantity: number;
   specialPaintId: string;
 }
 
@@ -146,13 +150,10 @@ async function onShopChange(shopId: string, isInit = false) {
   loadingCategories.value = false;
 }
 
-function addItem() {
-  const hasEmpty = model.items.some(item => !item.categoryId);
-  if (hasEmpty) {
-    window.$message?.warning('请先完成当前项目选择');
-    return;
+function addItem(count = 1) {
+  for (let i = 0; i < count; i++) {
+    model.items.push({ categoryId: '', quantity: 1, newPartQuantity: 0, specialPaintId: '' });
   }
-  model.items.push({ categoryId: '', quantity: 1, isNewPart: false, specialPaintId: '' });
 }
 
 function getAvailableCategories(currentCategoryId?: string) {
@@ -170,17 +171,113 @@ function removeItem(index: number) {
   model.items.splice(index, 1);
 }
 
+const itemColumns = computed(() => [
+  {
+    key: 'categoryId',
+    title: '项目名称',
+    width: 200,
+    render: (_row: any, index: number) => {
+      const item = model.items[index];
+      return h(NSelect, {
+        value: item.categoryId,
+        options: getAvailableCategories(item.categoryId),
+        placeholder: '选择项目',
+        loading: loadingCategories.value,
+        size: 'small',
+        onUpdateValue: (val: string) => { item.categoryId = val; }
+      });
+    }
+  },
+  {
+    key: 'quantity',
+    title: '数量',
+    width: 80,
+    align: 'center' as const,
+    render: (_row: any, index: number) => {
+      const item = model.items[index];
+      return h(NInputNumber, {
+        value: item.quantity,
+        min: 1,
+        max: 99,
+        size: 'small',
+        style: 'width: 100%',
+        onUpdateValue: (val: number | null) => { if (val !== null) item.quantity = val; }
+      });
+    }
+  },
+  {
+    key: 'newPartQuantity',
+    title: '新件数',
+    width: 80,
+    align: 'center' as const,
+    render: (_row: any, index: number) => {
+      const item = model.items[index];
+      return h(NInputNumber, {
+        value: item.newPartQuantity,
+        min: 0,
+        max: item.quantity,
+        size: 'small',
+        style: 'width: 100%',
+        onUpdateValue: (val: number | null) => { if (val !== null) item.newPartQuantity = val; }
+      });
+    }
+  },
+  {
+    key: 'specialPaintId',
+    title: '特殊车漆',
+    width: 160,
+    render: (_row: any, index: number) => {
+      const item = model.items[index];
+      return h(NSelect, {
+        value: item.specialPaintId || null,
+        options: [{ label: '无', value: '' }, ...specialPaints.value.map(sp => ({ label: `${sp.name} x${sp.multiplier}`, value: sp.id }))],
+        placeholder: '无',
+        size: 'small',
+        clearable: true,
+        onUpdateValue: (val: string) => { item.specialPaintId = val || ''; }
+      });
+    }
+  },
+  {
+    key: 'paintCount',
+    title: '幅数',
+    width: 70,
+    align: 'center' as const,
+    render: (_row: any, index: number) => {
+      const item = model.items[index];
+      const count = getCategoryPaintCount(item.categoryId, item.newPartQuantity, item.quantity, item.specialPaintId);
+      return h(NText, { depth: 3 }, () => `${count.toFixed(1)}`);
+    }
+  },
+  {
+    key: 'operate',
+    title: '操作',
+    width: 50,
+    align: 'center' as const,
+    render: (_row: any, index: number) => {
+      return h(NButton, {
+        type: 'error',
+        quaternary: true,
+        size: 'small',
+        onClick: () => removeItem(index)
+      }, { icon: () => h('span', { class: 'i-ic-round-delete' }) });
+    }
+  }
+]);
+
 function getCategoryName(categoryId: string) {
   const cat = categories.value.find(c => c.id === categoryId);
   return cat?.name || '';
 }
 
-function getCategoryPaintCount(categoryId: string, isNewPart?: boolean, specialPaintId?: string) {
+function getCategoryPaintCount(categoryId: string, newPartQuantity: number, totalQuantity: number, specialPaintId?: string) {
   const cat = categories.value.find(c => c.id === categoryId);
   if (!cat) return 0;
   const base = cat.paintCount;
-  const addition = isNewPart ? cat.newPartAddition : 0;
-  let result = (base + addition);
+  const addition = cat.newPartAddition;
+  // 非新件幅数 + 新件幅数
+  const oldCount = totalQuantity - newPartQuantity;
+  let result = base * oldCount + (base + addition) * newPartQuantity;
   // 特殊车漆倍数
   if (specialPaintId) {
     const sp = specialPaints.value.find(s => s.id === specialPaintId);
@@ -191,8 +288,8 @@ function getCategoryPaintCount(categoryId: string, isNewPart?: boolean, specialP
 
 const totalPaintCount = computed(() => {
   return model.items.reduce((sum, item) => {
-    const count = getCategoryPaintCount(item.categoryId, item.isNewPart, item.specialPaintId);
-    return sum + count * item.quantity;
+    const count = getCategoryPaintCount(item.categoryId, item.newPartQuantity, item.quantity, item.specialPaintId);
+    return sum + count;
   }, 0);
 });
 
@@ -327,44 +424,113 @@ function onOcrMouseUp() {
   isDrawing.value = false;
 }
 
-// 全图OCR识别
+// 全图OCR识别（调用后端API）
 async function ocrRecognizeFull() {
   const img = images.value[ocrImageIndex.value];
   if (!img?.file && !img?.url) return;
 
   ocrLoading.value = true;
   try {
-    let result;
+    // 优先使用后端OCR识别
     if (img.file) {
-      result = await recognizeWorkOrderImage(img.file);
+      // 新上传的图片，直接用文件调后端
+      const formData = new FormData();
+      formData.append('file', img.file);
+      const { data, error } = await ocrRecognizeImage(formData);
+      if (!error && data) {
+        const result = data;
+        if (result.plateNumber) {
+          model.plateNumber = result.plateNumber;
+          window.$message?.success(`识别到车牌号：${result.plateNumber}`);
+        }
+        if (result.orderNo && !model.orderNo) {
+          model.orderNo = result.orderNo;
+          window.$message?.success(`识别到工单号：${result.orderNo}`);
+        }
+        if (!result.plateNumber && !result.orderNo) {
+          window.$message?.warning('未识别到车牌号或工单号，请尝试框选标记区域识别');
+        }
+        showOcrModal.value = false;
+      } else {
+        window.$message?.error('后端OCR识别失败，尝试前端识别...');
+        // 降级到前端识别
+        const result = await recognizeFromCanvas(getImageCanvas());
+        if (result.plateNumber) {
+          model.plateNumber = result.plateNumber;
+          window.$message?.success(`识别到车牌号：${result.plateNumber}`);
+        }
+        if (result.orderNo && !model.orderNo) {
+          model.orderNo = result.orderNo;
+          window.$message?.success(`识别到工单号：${result.orderNo}`);
+        }
+        if (!result.plateNumber && !result.orderNo) {
+          window.$message?.warning('未识别到车牌号或工单号');
+        }
+        showOcrModal.value = false;
+      }
     } else {
-      // 从URL加载图片识别
+      // 已有图片（URL），从canvas获取数据调后端
       const imgEl = ocrImgRef.value;
       if (!imgEl) return;
       const canvas = document.createElement('canvas');
       canvas.width = imgEl.naturalWidth;
       canvas.height = imgEl.naturalHeight;
       canvas.getContext('2d')!.drawImage(imgEl, 0, 0);
-      result = await recognizeFromCanvas(canvas);
-    }
 
-    if (result.plateNumber) {
-      model.plateNumber = result.plateNumber;
-      window.$message?.success(`识别到车牌号：${result.plateNumber}`);
+      // 转为Blob发送到后端
+      const blob = await new Promise<Blob>((resolve) => {
+        canvas.toBlob((b) => resolve(b!), 'image/png');
+      });
+      const formData = new FormData();
+      formData.append('file', blob, 'ocr_image.png');
+      const { data, error } = await ocrRecognizeImage(formData);
+      if (!error && data) {
+        const result = data;
+        if (result.plateNumber) {
+          model.plateNumber = result.plateNumber;
+          window.$message?.success(`识别到车牌号：${result.plateNumber}`);
+        }
+        if (result.orderNo && !model.orderNo) {
+          model.orderNo = result.orderNo;
+          window.$message?.success(`识别到工单号：${result.orderNo}`);
+        }
+        if (!result.plateNumber && !result.orderNo) {
+          window.$message?.warning('未识别到车牌号或工单号，请尝试框选标记区域识别');
+        }
+        showOcrModal.value = false;
+      } else {
+        // 降级到前端识别
+        const result = await recognizeFromCanvas(canvas);
+        if (result.plateNumber) {
+          model.plateNumber = result.plateNumber;
+          window.$message?.success(`识别到车牌号：${result.plateNumber}`);
+        }
+        if (result.orderNo && !model.orderNo) {
+          model.orderNo = result.orderNo;
+          window.$message?.success(`识别到工单号：${result.orderNo}`);
+        }
+        if (!result.plateNumber && !result.orderNo) {
+          window.$message?.warning('未识别到车牌号或工单号');
+        }
+        showOcrModal.value = false;
+      }
     }
-    if (result.orderNo && !model.orderNo) {
-      model.orderNo = result.orderNo;
-      window.$message?.success(`识别到工单号：${result.orderNo}`);
-    }
-    if (!result.plateNumber && !result.orderNo) {
-      window.$message?.warning('未识别到车牌号或工单号，请尝试框选标记区域识别');
-    }
-    showOcrModal.value = false;
   } catch {
     window.$message?.error('OCR识别失败');
   } finally {
     ocrLoading.value = false;
   }
+}
+
+function getImageCanvas(): HTMLCanvasElement {
+  const imgEl = ocrImgRef.value;
+  const canvas = document.createElement('canvas');
+  if (imgEl) {
+    canvas.width = imgEl.naturalWidth;
+    canvas.height = imgEl.naturalHeight;
+    canvas.getContext('2d')!.drawImage(imgEl, 0, 0);
+  }
+  return canvas;
 }
 
 // 框选区域OCR识别
@@ -442,7 +608,7 @@ function handleInitModel() {
       items: (props.rowData.items || []).map((it: any) => ({
         categoryId: it.categoryId || it.category?.id || '',
         quantity: it.quantity || 1,
-        isNewPart: it.isNewPart || false,
+        newPartQuantity: it.newPartQuantity || 0,
         specialPaintId: it.specialPaintId || ''
       }))
     });
@@ -516,7 +682,7 @@ async function handleSubmit() {
       contactPerson: model.contactPerson || undefined,
       description: model.description || undefined,
       remark: model.remark || undefined,
-      items: model.items.filter(it => it.categoryId).map(it => ({ categoryId: it.categoryId, quantity: it.quantity, isNewPart: it.isNewPart, specialPaintId: it.specialPaintId || undefined }))
+      items: model.items.filter(it => it.categoryId).map(it => ({ categoryId: it.categoryId, quantity: it.quantity, newPartQuantity: it.newPartQuantity, specialPaintId: it.specialPaintId || undefined }))
     });
     if (error) return;
 
@@ -525,9 +691,11 @@ async function handleSubmit() {
     if (orderId && images.value.length > 0) {
       for (const img of images.value) {
         if (img.file) {
+          const { hd, thumbnail } = await compressDualImage(img.file);
           const formData = new FormData();
           formData.append('imageType', img.imageType || 'BEFORE');
-          formData.append('file', img.file);
+          formData.append('file', hd);
+          formData.append('thumbnail', thumbnail);
           await uploadWorkOrderImage(orderId, formData);
         }
       }
@@ -537,6 +705,7 @@ async function handleSubmit() {
   } else {
     const { error } = await updateWorkOrder({
       id: props.rowData.id,
+      orderNo: model.orderNo || undefined,
       carModel: model.carModel,
       plateNumber: model.plateNumber,
       customerName: model.customerName,
@@ -544,7 +713,7 @@ async function handleSubmit() {
       status: model.status,
       settlementMonth: model.settlementMonth || undefined,
       remark: model.remark || undefined,
-      items: model.items.filter(it => it.categoryId).map(it => ({ categoryId: it.categoryId, quantity: it.quantity, isNewPart: it.isNewPart, specialPaintId: it.specialPaintId || undefined }))
+      items: model.items.filter(it => it.categoryId).map(it => ({ categoryId: it.categoryId, quantity: it.quantity, newPartQuantity: it.newPartQuantity, specialPaintId: it.specialPaintId || undefined }))
     });
     if (error) return;
     window.$message?.success($t('common.updateSuccess'));
@@ -557,42 +726,97 @@ watch(visible, () => {
   if (visible.value) {
     handleInitModel();
     restoreValidation();
+    // 编辑时加载结算历史
+    if (props.operateType === 'edit' && props.rowData?.id) {
+      loadSettlementHistory(props.rowData.id);
+    } else {
+      settlementRecords.value = [];
+    }
   }
 });
+
+async function loadSettlementHistory(orderId: string) {
+  const { data, error } = await getSettlementHistory(orderId);
+  if (!error && data) {
+    settlementRecords.value = data;
+  }
+}
 </script>
 
 <template>
-  <NDrawer v-model:show="visible" display-directive="show" :width="640">
-    <NDrawerContent :title="title" :native-scrollbar="false" closable>
-      <NForm ref="formRef" :model="model" :rules="rules" label-placement="left" :label-width="80">
+  <NModal v-model:show="visible" preset="card" :title="title" style="width: 800px; max-height: 85vh;" :mask-closable="false">
+    <NScrollbar style="max-height: calc(85vh - 120px);">
+      <NForm ref="formRef" :model="model" :rules="rules" label-placement="left" :label-width="80" class="px-4px">
+        <NAlert v-if="operateType === 'edit' && images.length > 0 && !model.plateNumber" type="info" :bordered="false" class="mb-12px">
+          此工单通过快速录入创建，请点击图片上的OCR识别按钮确认车牌号和工单号。
+        </NAlert>
+
         <NDivider title-placement="left">基本信息</NDivider>
 
-        <NFormItem label="工单号">
-          <NInput v-model:value="model.orderNo" placeholder="不填则自动生成" :disabled="operateType === 'edit'" />
-        </NFormItem>
-
-        <NFormItem label="门店" path="shopId">
-          <NSelect
-            v-model:value="model.shopId"
-            :options="shops.map(s => ({ label: `${s.name} (${s.brand})`, value: s.id }))"
-            placeholder="请选择门店"
-            :disabled="operateType === 'edit'"
-            @update:value="onShopChange"
-          />
-        </NFormItem>
-
-        <NFormItem label="工单日期" path="orderDate">
-          <NDatePicker
-            :formatted-value="model.orderDate || undefined"
-            @update:formatted-value="(val: string | undefined) => model.orderDate = val || ''"
-            type="date"
-            value-format="yyyy-MM-dd"
-            style="width: 100%"
-            :disabled="operateType === 'edit'"
-          />
-        </NFormItem>
-
         <NGrid :cols="2" :x-gap="16">
+          <NGridItem>
+            <NFormItem label="工单号">
+              <NInput v-model:value="model.orderNo" placeholder="不填则自动生成" />
+            </NFormItem>
+          </NGridItem>
+          <NGridItem>
+            <NFormItem label="门店" path="shopId">
+              <NSelect
+                v-model:value="model.shopId"
+                :options="shops.map(s => ({ label: `${s.name} (${s.brand})${s.standardTemplateId ? '' : ' [未关联模板]'}`, value: s.id }))"
+                placeholder="请选择门店"
+                :disabled="operateType === 'edit'"
+                @update:value="onShopChange"
+              />
+            </NFormItem>
+          </NGridItem>
+        </NGrid>
+
+        <NAlert v-if="!shopHasTemplate && model.shopId" type="warning" :bordered="false" class="mb-8px">
+          该门店尚未关联标准模板，工单幅数将默认为0。请先到门店管理关联模板。
+        </NAlert>
+
+        <NGrid :cols="3" :x-gap="16">
+          <NGridItem>
+            <NFormItem label="工单日期" path="orderDate">
+              <NDatePicker
+                :formatted-value="model.orderDate || undefined"
+                @update:formatted-value="(val: string | undefined) => model.orderDate = val || ''"
+                type="date"
+                value-format="yyyy-MM-dd"
+                style="width: 100%"
+                :disabled="operateType === 'edit'"
+              />
+            </NFormItem>
+          </NGridItem>
+          <NGridItem>
+            <NFormItem label="结算月份">
+              <NDatePicker
+                :formatted-value="model.settlementMonth || undefined"
+                @update:formatted-value="(val: string | undefined) => model.settlementMonth = val || ''"
+                type="month"
+                value-format="yyyy-MM"
+                style="width: 100%"
+                clearable
+              />
+            </NFormItem>
+          </NGridItem>
+          <NGridItem>
+            <NFormItem v-if="operateType === 'edit'" label="状态">
+              <NSelect
+                v-model:value="model.status"
+                :options="[
+                  { label: '待处理', value: 'PENDING' },
+                  { label: '进行中', value: 'IN_PROGRESS' },
+                  { label: '已完成', value: 'COMPLETED' },
+                  { label: '已取消', value: 'CANCELLED' }
+                ]"
+              />
+            </NFormItem>
+          </NGridItem>
+        </NGrid>
+
+        <NGrid :cols="3" :x-gap="16">
           <NGridItem>
             <NFormItem label="车牌号" path="plateNumber">
               <NInput v-model:value="model.plateNumber" placeholder="请输入车牌号" />
@@ -601,6 +825,11 @@ watch(visible, () => {
           <NGridItem>
             <NFormItem label="车型">
               <NInput v-model:value="model.carModel" placeholder="请输入车型" />
+            </NFormItem>
+          </NGridItem>
+          <NGridItem>
+            <NFormItem label="车架号">
+              <NInput v-model:value="model.vin" placeholder="请输入VIN" />
             </NFormItem>
           </NGridItem>
         </NGrid>
@@ -618,32 +847,16 @@ watch(visible, () => {
           </NGridItem>
         </NGrid>
 
-        <NFormItem label="车架号">
-          <NInput v-model:value="model.vin" placeholder="请输入车架号(VIN)" />
-        </NFormItem>
-
-        <NFormItem v-if="operateType === 'edit'" label="状态">
-          <NSelect
-            v-model:value="model.status"
-            :options="[
-              { label: '待处理', value: 'PENDING' },
-              { label: '进行中', value: 'IN_PROGRESS' },
-              { label: '已完成', value: 'COMPLETED' },
-              { label: '已取消', value: 'CANCELLED' }
-            ]"
-          />
-        </NFormItem>
-
-        <NFormItem label="结算月份">
-          <NDatePicker
-            :formatted-value="model.settlementMonth || undefined"
-            @update:formatted-value="(val: string | undefined) => model.settlementMonth = val || ''"
-            type="month"
-            value-format="yyyy-MM"
-            style="width: 100%"
-            clearable
-          />
-        </NFormItem>
+        <NAlert v-if="settlementRecords.length > 0" type="info" :bordered="false" class="mb-8px">
+          <template #header>此工单已有 {{ settlementRecords.length }} 次结算记录</template>
+          <NSpace vertical :size="4">
+            <NText v-for="record in settlementRecords" :key="record.id" depth="3">
+              {{ record.settlementMonth }} - 幅数: {{ Number(record.paintCount).toFixed(1) }}，项目数: {{ record.itemCount }}
+              <span v-if="record.remark">（{{ record.remark }}）</span>
+            </NText>
+            <NText depth="3" style="font-size: 12px;">如需分次结算，修改结算月份后保存即可自动新增结算记录</NText>
+          </NSpace>
+        </NAlert>
 
         <NFormItem label="备注">
           <NInput v-model:value="model.remark" type="textarea" placeholder="请输入备注" :rows="2" />
@@ -654,61 +867,33 @@ watch(visible, () => {
           <NTag type="info" size="small" round style="margin-left: 8px;">总幅数: {{ totalPaintCount.toFixed(1) }}</NTag>
         </NDivider>
 
-        <div class="mb-12px">
-          <NButton type="primary" dashed block :disabled="!canAddItem" @click="addItem">
-            <template #icon><icon-ic-round-plus /></template>
-            添加喷漆项目
-          </NButton>
+        <div class="mb-8px">
+          <NSpace :size="8">
+            <NButton type="primary" dashed size="small" :disabled="!model.shopId" @click="addItem(1)">
+              <template #icon><icon-ic-round-plus /></template>
+              添加1行
+            </NButton>
+            <NButton type="primary" dashed size="small" :disabled="!model.shopId" @click="addItem(5)">
+              添加5行
+            </NButton>
+            <NButton type="primary" dashed size="small" :disabled="!model.shopId" @click="addItem(10)">
+              添加10行
+            </NButton>
+          </NSpace>
           <NText v-if="!model.shopId" depth="3" class="ml-8px">请先选择门店</NText>
           <NText v-else-if="!shopHasTemplate" type="error" class="ml-8px">该门店未关联幅数标准模板，请先在门店管理中绑定标准模板</NText>
-          <NText v-else-if="!canAddItem && model.items.length > 0" depth="3" class="ml-8px">请先完成当前项目选择</NText>
         </div>
 
-        <NCard
-          v-for="(item, index) in model.items"
-          :key="index"
+        <NDataTable
+          v-if="model.items.length > 0"
+          :columns="itemColumns"
+          :data="model.items"
           size="small"
           :bordered="true"
-          class="mb-8px"
-        >
-          <NGrid :cols="24" :x-gap="8" align="center">
-            <NGridItem :span="8">
-              <NSelect
-                v-model:value="item.categoryId"
-                :options="getAvailableCategories(item.categoryId)"
-                placeholder="选择项目"
-                :loading="loadingCategories"
-              />
-            </NGridItem>
-            <NGridItem :span="3">
-              <NInputNumber v-model:value="item.quantity" :min="1" :max="99" size="small" style="width: 100%;" />
-            </NGridItem>
-            <NGridItem :span="3">
-              <NCheckbox v-model:checked="item.isNewPart" :disabled="!item.categoryId || getCategoryPaintCount(item.categoryId, false) === getCategoryPaintCount(item.categoryId, true)">
-                新件
-              </NCheckbox>
-            </NGridItem>
-            <NGridItem :span="5">
-              <NSelect
-                v-model:value="item.specialPaintId"
-                :options="[{ label: '无', value: '' }, ...specialPaints.map(sp => ({ label: `${sp.name} x${sp.multiplier}`, value: sp.id }))]"
-                placeholder="特殊车漆"
-                size="small"
-                clearable
-              />
-            </NGridItem>
-            <NGridItem :span="3">
-              <NText depth="3">{{ (getCategoryPaintCount(item.categoryId, item.isNewPart, item.specialPaintId) * item.quantity).toFixed(1) }}幅</NText>
-            </NGridItem>
-            <NGridItem :span="2">
-              <NButton type="error" quaternary size="small" @click="removeItem(index)">
-                <template #icon><icon-ic-round-delete /></template>
-              </NButton>
-            </NGridItem>
-          </NGrid>
-        </NCard>
-
-        <NEmpty v-if="model.items.length === 0 && model.shopId" description="暂未添加喷漆项目" />
+          :pagination="false"
+          :row-key="(row: any, index: number) => String(index)"
+        />
+        <NEmpty v-else-if="model.shopId" description="暂未添加喷漆项目" />
 
         <NDivider title-placement="left">工单图片</NDivider>
 
@@ -757,15 +942,15 @@ watch(visible, () => {
           点击图片左上角搜索按钮可进行OCR识别，支持框选标记区域精准识别
         </NText>
       </NForm>
+    </NScrollbar>
 
-      <template #footer>
-        <NSpace :size="16">
-          <NButton @click="closeDrawer">{{ $t('common.cancel') }}</NButton>
-          <NButton type="primary" @click="handleSubmit">{{ $t('common.confirm') }}</NButton>
-        </NSpace>
-      </template>
-    </NDrawerContent>
-  </NDrawer>
+    <template #footer>
+      <NSpace justify="end" :size="16">
+        <NButton @click="closeDrawer">{{ $t('common.cancel') }}</NButton>
+        <NButton type="primary" @click="handleSubmit">{{ $t('common.confirm') }}</NButton>
+      </NSpace>
+    </template>
+  </NModal>
 
   <!-- OCR 识别弹窗 -->
   <NModal v-model:show="showOcrModal" preset="card" title="OCR识别" style="width: 640px" :mask-closable="false">

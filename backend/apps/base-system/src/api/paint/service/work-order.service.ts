@@ -1,15 +1,22 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '@lib/shared/prisma/prisma.service';
-import { CreateWorkOrderDto, UpdateWorkOrderDto, PageWorkOrderDto, WorkOrderItemDto, AuditWorkOrderDto } from '../work-order/dto/work-order.dto';
 import { PaginationResult } from '@lib/shared/prisma/pagination';
 import { PaintImageType, Prisma } from '@prisma/client';
 import { PaintImageService } from './paint-image.service';
+import {
+  calculatePaintCount,
+  findDuplicateCategoryIds,
+  formatOrderNo,
+  parseOrderNoSeq,
+  shouldMigrateSettlementMonth,
+} from './paint-calculation';
+import { CreateWorkOrderDto, UpdateWorkOrderDto, PageWorkOrderDto, WorkOrderItemDto } from '../work-order/dto/work-order.dto';
 
 interface OrderItemCreateData {
   categoryId: string;
   quantity: number;
   paintCount: number;
-  isNewPart: boolean;
+  newPartQuantity: number;
   specialPaintId?: string | null;
   specialPaintMultiplier?: number | null;
 }
@@ -42,8 +49,7 @@ export class WorkOrderService {
 
     const templateItem = shop?.standardTemplate?.items?.[0];
     const coefficient = templateItem ? Number(templateItem.coefficient) : 0;
-    const newPartAddition = (item.isNewPart && templateItem) ? Number(templateItem.newPartAddition) : 0;
-    const quantity = item.quantity || 1;
+    const newPartAddition = templateItem ? Number(templateItem.newPartAddition) : 0;
 
     // 特殊车漆倍数
     let specialPaintMultiplier: number | null = null;
@@ -58,60 +64,69 @@ export class WorkOrderService {
       }
     }
 
-    // 幅数 = (系数 + 新件加幅) * 数量 * 特殊车漆倍数
-    const basePaintCount = (coefficient + newPartAddition) * quantity;
-    const paintCount = specialPaintMultiplier ? basePaintCount * specialPaintMultiplier : basePaintCount;
+    const result = calculatePaintCount({
+      coefficient,
+      newPartAddition,
+      quantity: item.quantity || 1,
+      newPartQuantity: item.newPartQuantity || 0,
+      specialPaintMultiplier,
+    });
 
     return {
       categoryId: item.categoryId,
-      quantity,
-      paintCount,
-      isNewPart: item.isNewPart || false,
+      quantity: result.quantity,
+      paintCount: result.paintCount,
+      newPartQuantity: result.newPartQuantity,
       specialPaintId,
-      specialPaintMultiplier,
+      specialPaintMultiplier: result.specialPaintMultiplier,
     };
   }
 
   async quickCreate(shopId: string, buffer: Buffer, filename: string, mimetype: string, settlementMonth?: string, plateNumber?: string, ocrOrderNo?: string, thumbnailBuffer?: Buffer | null) {
-    const orderNo = ocrOrderNo || await this.generateOrderNo(shopId);
     const orderDate = new Date();
 
-    const order = await this.prisma.paintWorkOrder.create({
-      data: {
-        orderNo,
-        shopId,
-        orderDate,
-        plateNumber: plateNumber || '',
-        carModel: '',
-        customerName: '',
-        totalPaintCount: 0,
-        status: 'PENDING',
-        settlementMonth: settlementMonth || null,
-      },
-      include: { items: { include: { category: true, specialPaint: true } }, shop: true },
-    });
-
+    // 先保存图片文件（事务外操作，不涉及数据库一致性）
     const url = await this.imageService.saveImageFile(buffer, filename, shopId, settlementMonth);
     let thumbnailUrl: string | undefined;
     if (thumbnailBuffer) {
       thumbnailUrl = await this.imageService.saveImageFile(thumbnailBuffer, `thumb_${filename}`, shopId, settlementMonth);
     }
-    await this.prisma.paintWorkOrderImage.create({
-      data: { orderId: order.id, url, thumbnailUrl, imageType: PaintImageType.BEFORE, fileSize: buffer.length },
+
+    // 在事务内生成工单号并创建工单，避免并发冲突
+    const order = await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      const orderNo = ocrOrderNo || await this.generateOrderNo(shopId, tx);
+      const created = await tx.paintWorkOrder.create({
+        data: {
+          orderNo,
+          shopId,
+          orderDate,
+          plateNumber: plateNumber || '',
+          carModel: '',
+          customerName: '',
+          totalPaintCount: 0,
+          status: 'PENDING',
+          settlementMonth: settlementMonth || null,
+        },
+        include: { items: { include: { category: true, specialPaint: true } }, shop: true },
+      });
+
+      await tx.paintWorkOrderImage.create({
+        data: { orderId: created.id, url, thumbnailUrl, imageType: PaintImageType.BEFORE, fileSize: buffer.length },
+      });
+
+      return created;
     });
 
     return this.findById(order.id);
   }
 
   async create(dto: CreateWorkOrderDto) {
-    const orderNo = dto.orderNo || await this.generateOrderNo(dto.shopId);
-
     let totalPaintCount = 0;
     const itemsData: OrderItemCreateData[] = [];
 
     if (dto.items?.length) {
       const categoryIds = dto.items.map(i => i.categoryId);
-      const duplicates = categoryIds.filter((id, idx) => categoryIds.indexOf(id) !== idx);
+      const duplicates = findDuplicateCategoryIds(categoryIds);
       if (duplicates.length > 0) {
         throw new BadRequestException('不能重复选择同一部位');
       }
@@ -124,6 +139,7 @@ export class WorkOrderService {
     }
 
     return this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      const orderNo = dto.orderNo || await this.generateOrderNo(dto.shopId, tx);
       const order = await tx.paintWorkOrder.create({
         data: {
           orderNo,
@@ -168,19 +184,50 @@ export class WorkOrderService {
       remark: dto.remark,
     };
 
+    // 支持编辑工单号（OCR识别可能有误）
+    if (dto.orderNo !== undefined) {
+      updateData.orderNo = dto.orderNo;
+    }
+
     if (dto.settlementMonth !== undefined) {
       const oldMonth = existing.settlementMonth;
       const newMonth = dto.settlementMonth || null;
       updateData.settlementMonth = newMonth;
       // 结算月份变更时迁移图片文件
-      if (oldMonth !== newMonth) {
-        await this.imageService.migrateImages(dto.id, oldMonth, newMonth);
+      if (shouldMigrateSettlementMonth(oldMonth, newMonth)) {
+        const targetMonth = newMonth as string;
+        await this.imageService.migrateImages(dto.id, oldMonth, targetMonth);
+        // 如果新月份与之前不同，自动添加结算记录（分次结算支持）
+        const existingRecord = await this.prisma.paintSettlementRecord.findFirst({
+          where: { orderId: dto.id, settlementMonth: targetMonth },
+        });
+        if (!existingRecord) {
+          // 计算当前幅数
+          let currentPaintCount = Number(existing.totalPaintCount);
+          if (dto.items !== undefined) {
+            currentPaintCount = 0;
+            for (const item of dto.items) {
+              const itemData = await this.calculateItemPaintCount(existing.shopId, item);
+              currentPaintCount += itemData.paintCount;
+            }
+          }
+          const itemCount = dto.items?.length || existing.items.length;
+          await this.prisma.paintSettlementRecord.create({
+            data: {
+              orderId: dto.id,
+              settlementMonth: targetMonth,
+              paintCount: currentPaintCount,
+              itemCount,
+              remark: '修改结算月份自动记录',
+            },
+          });
+        }
       }
     }
 
     if (dto.items !== undefined) {
       const categoryIds = dto.items.map(i => i.categoryId);
-      const duplicates = categoryIds.filter((id, idx) => categoryIds.indexOf(id) !== idx);
+      const duplicates = findDuplicateCategoryIds(categoryIds);
       if (duplicates.length > 0) {
         throw new BadRequestException('不能重复选择同一部位');
       }
@@ -219,51 +266,16 @@ export class WorkOrderService {
       throw new BadRequestException('已审核的工单不允许删除');
     }
 
-    // 先清理关联的图片文件
+    // 先清理关联的图片文件和数据库记录
     await this.imageService.deleteOrderImages(id);
 
-    return this.prisma.paintWorkOrder.delete({ where: { id } });
-  }
-
-  /** 审核工单 */
-  async audit(dto: AuditWorkOrderDto) {
-    const existing = await this.prisma.paintWorkOrder.findUnique({ where: { id: dto.id } });
-    if (!existing) throw new NotFoundException('工单不存在');
-
-    if (existing.isAudited) {
-      throw new BadRequestException('工单已审核，不能重复审核');
-    }
-
-    return this.prisma.paintWorkOrder.update({
-      where: { id: dto.id },
-      data: {
-        isAudited: true,
-        auditedAt: new Date(),
-        auditedBy: dto.auditedBy || null,
-        status: 'COMPLETED',
-      },
-      include: { items: { include: { category: true, specialPaint: true } }, shop: true },
-    });
-  }
-
-  /** 取消审核 */
-  async unaudit(id: string) {
-    const existing = await this.prisma.paintWorkOrder.findUnique({ where: { id } });
-    if (!existing) throw new NotFoundException('工单不存在');
-
-    if (!existing.isAudited) {
-      throw new BadRequestException('工单未审核，无需取消');
-    }
-
-    return this.prisma.paintWorkOrder.update({
-      where: { id },
-      data: {
-        isAudited: false,
-        auditedAt: null,
-        auditedBy: null,
-        status: 'PENDING',
-      },
-      include: { items: { include: { category: true, specialPaint: true } }, shop: true },
+    return this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      // 删除数据库中的图片记录
+      await tx.paintWorkOrderImage.deleteMany({ where: { orderId: id } });
+      // 删除工单项
+      await tx.paintWorkOrderItem.deleteMany({ where: { orderId: id } });
+      // 删除工单
+      return tx.paintWorkOrder.delete({ where: { id } });
     });
   }
 
@@ -296,16 +308,40 @@ export class WorkOrderService {
         where,
         skip: (current - 1) * size,
         take: size,
-        orderBy: { orderDate: 'desc' },
+        orderBy: [
+          // 有重复的工单排在前面（按orderNo分组，同组连续）
+          { orderNo: 'asc' },
+          { createdAt: 'asc' },
+        ],
         include: {
           items: { include: { category: true, specialPaint: true } },
           images: { orderBy: { createdAt: 'desc' } },
           shop: { select: { id: true, name: true, code: true } },
+          settlements: { orderBy: { createdAt: 'desc' } },
         },
       }),
       this.prisma.paintWorkOrder.count({ where }),
     ]);
-    return { current, size, total, records };
+
+    // 标记重复工单
+    const orderNos = records.map(r => r.orderNo);
+    const duplicateCounts = await this.prisma.paintWorkOrder.groupBy({
+      by: ['orderNo'],
+      where: {
+        orderNo: { in: orderNos },
+        status: { not: 'CANCELLED' },
+      },
+      _count: { id: true },
+    });
+    const duplicateMap = new Map(duplicateCounts.map(d => [d.orderNo, d._count.id]));
+
+    const enrichedRecords = records.map(record => ({
+      ...record,
+      _duplicateCount: duplicateMap.get(record.orderNo) || 1,
+      _isDuplicate: (duplicateMap.get(record.orderNo) || 1) > 1,
+    }));
+
+    return { current, size, total, records: enrichedRecords };
   }
 
   async addItems(orderId: string, items: WorkOrderItemDto[]) {
@@ -330,7 +366,7 @@ export class WorkOrderService {
     }
     // 新增项之间也不能重复
     const newCategoryIds = items.map(i => i.categoryId);
-    const duplicates = newCategoryIds.filter((id, idx) => newCategoryIds.indexOf(id) !== idx);
+    const duplicates = findDuplicateCategoryIds(newCategoryIds);
     if (duplicates.length > 0) {
       throw new BadRequestException('不能重复选择同一部位');
     }
@@ -406,17 +442,29 @@ export class WorkOrderService {
     return this.prisma.paintWorkOrderImage.delete({ where: { id: imageId } });
   }
 
-  private async generateOrderNo(shopId: string): Promise<string> {
-    const shop = await this.prisma.paintShop.findUnique({ where: { id: shopId } });
+  /** 获取门店信息（供 controller 拼接文件名使用） */
+  async getShopName(shopId: string): Promise<string> {
+    const shop = await this.prisma.paintShop.findUnique({ where: { id: shopId }, select: { name: true } });
+    return shop?.name || '喷漆';
+  }
+
+  /** 获取门店的 Excel 模板配置 */
+  async getShopExcelTemplateConfig(shopId: string): Promise<any | null> {
+    const shop = await this.prisma.paintShop.findUnique({ where: { id: shopId }, select: { excelTemplateConfig: true } });
+    if (!shop) throw new NotFoundException('门店不存在');
+    return shop.excelTemplateConfig ? JSON.parse(shop.excelTemplateConfig) : null;
+  }
+
+  private async generateOrderNo(shopId: string, tx?: Prisma.TransactionClient): Promise<string> {
+    const client = tx || this.prisma;
+    const shop = await client.paintShop.findUnique({ where: { id: shopId } });
     const date = new Date();
-    const dateStr = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}`;
-    const prefix = shop?.code || 'P';
 
     // 查找今天该门店已有的最大序号
     const todayStart = new Date(date.getFullYear(), date.getMonth(), date.getDate());
     const todayEnd = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59, 999);
 
-    const todayOrders = await this.prisma.paintWorkOrder.findMany({
+    const todayOrders = await client.paintWorkOrder.findMany({
       where: {
         shopId,
         orderDate: { gte: todayStart, lte: todayEnd },
@@ -428,21 +476,9 @@ export class WorkOrderService {
 
     let seq = 1;
     if (todayOrders.length > 0 && todayOrders[0].orderNo) {
-      const lastSeq = todayOrders[0].orderNo.slice(-4);
-      seq = parseInt(lastSeq, 10) + 1;
+      seq = parseOrderNoSeq(todayOrders[0].orderNo) + 1;
     }
 
-    // 利用 orderNo unique 约束 + 重试机制保证并发安全
-    const maxRetries = 5;
-    for (let attempt = 0; attempt < maxRetries; attempt++) {
-      const orderNo = `${prefix}${dateStr}${String(seq).padStart(4, '0')}`;
-      const existing = await this.prisma.paintWorkOrder.findUnique({ where: { orderNo } });
-      if (!existing) {
-        return orderNo;
-      }
-      // 序号冲突，自增重试
-      seq++;
-    }
-    throw new BadRequestException('工单号生成失败，请稍后重试');
+    return formatOrderNo(shop?.code || '', date, seq);
   }
 }
