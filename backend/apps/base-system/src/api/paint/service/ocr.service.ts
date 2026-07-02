@@ -29,11 +29,11 @@ export type FieldLabelsConfig = Record<string, string[]>;
 
 /** 默认字段别名配置（所有门店的回退值） */
 export const DEFAULT_FIELD_LABELS: FieldLabelsConfig = {
-  orderNo: ['工单号', '单号', '工单编号', '编号', '订单号', '维修单号', '派工单'],
+  orderNo: ['工单号', '作业单号', '单号', '工单编号', '编号', '订单号', '维修单号', '派工单'],
   plateNumber: ['车牌号', '车牌', '号牌', '车牌号码'],
-  customerName: ['客户名称', '客户姓名', '客户', '姓名', '车主', '送修人'],
-  phone: ['联系电话', '电话', '手机', '联系方式', '联系手机', '联系人'],
-  carModel: ['车型', '车辆型号', '车型型号', '车辆类型', '厂牌车名'],
+  customerName: ['客户名称', '客户姓名', '车主姓名', '客户', '姓名', '车主', '送修人'],
+  phone: ['手机号', '送修人手机', '联系电话', '电话', '手机', '联系方式', '联系手机', '联系人'],
+  carModel: ['车型', '车名车型', '车辆型号', '车型型号', '车辆类型', '厂牌车名', '车系'],
   // 日期标签按优先级排序：接车 > 开单 > 进厂 > 打印
   date: ['接车日期', '接车时间', '开单日期', '开单时间', '进厂日期', '进厂时间', '打印日期', '打印时间'],
 };
@@ -45,6 +45,17 @@ export const DATE_LABEL_PRIORITY = [
   { labels: ['进厂日期', '进厂时间'], name: '进厂日期' },
   { labels: ['打印日期', '打印时间'], name: '打印日期' },
 ];
+
+/** 工单类型 */
+type WorkOrderType = 'repair' | 'entrust' | 'unknown';
+
+/** 根据图片标题/关键字检测工单类型 */
+function detectWorkOrderType(texts: string[]): WorkOrderType {
+  const fullText = texts.join('');
+  if (/客户委托修理单|委托修理|修理单/.test(fullText)) return 'entrust';
+  if (/维修工单|接车单|施工单/.test(fullText)) return 'repair';
+  return 'unknown';
+}
 
 export interface OcrResult {
   plateNumber: string;
@@ -625,6 +636,18 @@ export class OcrService {
   }
 
   /**
+   * 将指定元素移到数组最前面（用于调整字段别名优先级）
+   */
+  private moveToFront<T>(arr: T[], value: T): T[] {
+    const idx = arr.indexOf(value);
+    if (idx <= 0) return [...arr];
+    const copy = [...arr];
+    copy.splice(idx, 1);
+    copy.unshift(value);
+    return copy;
+  }
+
+  /**
    * 评估识别结果得分（有几个字段非空）
    */
   private scoreResult(result: OcrResult): number {
@@ -680,31 +703,64 @@ export class OcrService {
     // 字段标签配置：优先使用传入的门店配置，否则使用默认配置
     const config = fieldLabelsConfig || DEFAULT_FIELD_LABELS;
 
+    // 先全图识别检测工单类型，并获取所有文本块（后续复用，避免重复调用）
+    const fullImageBlocks = await this.paddleOcr.recognizeFullImage(buffer);
+    const fullImageTexts = fullImageBlocks.map(t => t.text);
+    const orderType = detectWorkOrderType(fullImageTexts);
+    result.rawText = fullImageTexts.join('\n');
+
+    this.logger.log(`检测到工单类型: ${orderType}`);
+
+    // 根据工单类型调整字段别名优先级
+    const priorityConfig: FieldLabelsConfig = {
+      orderNo: [...(config.orderNo || DEFAULT_FIELD_LABELS.orderNo)],
+      plateNumber: [...(config.plateNumber || DEFAULT_FIELD_LABELS.plateNumber)],
+      customerName: [...(config.customerName || DEFAULT_FIELD_LABELS.customerName)],
+      phone: [...(config.phone || DEFAULT_FIELD_LABELS.phone)],
+      carModel: [...(config.carModel || DEFAULT_FIELD_LABELS.carModel)],
+      date: [...(config.date || DEFAULT_FIELD_LABELS.date)],
+    };
+
+    if (orderType === 'entrust') {
+      // 客户委托修理单：优先"作业单号"、"车名车型"、"客户名称"、"接车时间"
+      priorityConfig.orderNo = this.moveToFront(priorityConfig.orderNo, '作业单号');
+      priorityConfig.carModel = this.moveToFront(priorityConfig.carModel, '车名车型');
+      priorityConfig.customerName = this.moveToFront(priorityConfig.customerName, '客户名称');
+      priorityConfig.date = this.moveToFront(priorityConfig.date, '接车时间');
+    } else if (orderType === 'repair') {
+      // 维修工单：优先"工单号"、"车型"、"车主姓名"、"手机号"、"开单日期"
+      priorityConfig.orderNo = this.moveToFront(priorityConfig.orderNo, '工单号');
+      priorityConfig.carModel = this.moveToFront(priorityConfig.carModel, '车型');
+      priorityConfig.customerName = this.moveToFront(priorityConfig.customerName, '车主姓名');
+      priorityConfig.phone = this.moveToFront(priorityConfig.phone, '手机号');
+      priorityConfig.date = this.moveToFront(priorityConfig.date, '开单日期');
+    }
+
     // 定义各字段的标签和位置关系
     const fieldLabels: Array<import('./paddle-ocr.service').FieldLabelConfig> = [
       {
         field: 'orderNo',
-        labels: config.orderNo || DEFAULT_FIELD_LABELS.orderNo,
+        labels: priorityConfig.orderNo,
         position: 'rightOrBelow',
       },
       {
         field: 'plateNumber',
-        labels: config.plateNumber || DEFAULT_FIELD_LABELS.plateNumber,
+        labels: priorityConfig.plateNumber,
         position: 'rightOrBelow',
       },
       {
         field: 'customerName',
-        labels: config.customerName || DEFAULT_FIELD_LABELS.customerName,
+        labels: priorityConfig.customerName,
         position: 'rightOrBelow',
       },
       {
         field: 'phone',
-        labels: config.phone || DEFAULT_FIELD_LABELS.phone,
+        labels: priorityConfig.phone,
         position: 'rightOrBelow',
       },
       {
         field: 'carModel',
-        labels: config.carModel || DEFAULT_FIELD_LABELS.carModel,
+        labels: priorityConfig.carModel,
         position: 'rightOrBelow',
       },
     ];
@@ -712,10 +768,7 @@ export class OcrService {
     // 调用 PaddleOCR 关键字提取
     const keywordResults = await this.paddleOcr.extractByKeywords(buffer, fieldLabels);
 
-    // 复用 extractByKeywords 内部已识别的文本块，避免重复调用 recognizeFullImage
-    if (keywordResults.length > 0 && keywordResults[0].blocks) {
-      result.rawText = keywordResults[0].blocks.map(t => t.text).join('\n');
-    }
+    // rawText 已在前面的全图识别中填充，此处不再覆盖
 
     // 将关键字提取结果映射到 OcrResult
     for (const kr of keywordResults) {
@@ -725,6 +778,17 @@ export class OcrService {
         // 不应回退到原始值，否则会把"名称"等标签词当作客户名称返回
         const corrected = this.extractFieldByType(kr.field, kr.value, true);
         (result as any)[kr.field] = corrected;
+      }
+    }
+
+    // 针对"车名车型"列做增强：合并同一行右侧的多个值块（如"秦L" + "110"）
+    if (orderType === 'entrust' && (!result.carModel || result.carModel.length <= 4)) {
+      const carModelBlocks = this.findCarModelBlocks(fullImageBlocks, priorityConfig.carModel);
+      if (carModelBlocks) {
+        const mergedModel = this.extractFieldByType('carModel', carModelBlocks, true);
+        if (mergedModel && mergedModel.length > (result.carModel || '').length) {
+          result.carModel = mergedModel;
+        }
       }
     }
 
@@ -746,6 +810,72 @@ export class OcrService {
     );
 
     return result;
+  }
+
+  /**
+   * 从全图文本块中查找车型字段，并合并同一行右侧的多个值块
+   * 主要用于"客户委托修理单"中的"车名车型"列（如"秦L" + "110"）
+   */
+  private findCarModelBlocks(
+    blocks: Array<{ text: string; confidence: number; box: number[][] }>,
+    carModelLabels: string[],
+  ): string {
+    if (!blocks || blocks.length === 0) return '';
+
+    const parsedBlocks = blocks.map(block => {
+      const box = block.box;
+      let x = 0, y = 0, width = 0, height = 0;
+      if (Array.isArray(box) && box.length === 4 && Array.isArray(box[0])) {
+        const xs = box.map((p: number[]) => p[0]);
+        const ys = box.map((p: number[]) => p[1]);
+        x = Math.min(...xs);
+        y = Math.min(...ys);
+        width = Math.max(...xs) - x;
+        height = Math.max(...ys) - y;
+      }
+      return { text: block.text, confidence: block.confidence, x, y, width, height, cx: x + width / 2, cy: y + height / 2 };
+    });
+
+    // 找到"车名车型"或"车型"标签块
+    let labelBlock: typeof parsedBlocks[0] | null = null;
+    for (const block of parsedBlocks) {
+      const cleanText = block.text.replace(/[：:]/g, '').trim();
+      for (const label of carModelLabels) {
+        if (cleanText.includes(label)) {
+          labelBlock = block;
+          break;
+        }
+      }
+      if (labelBlock) break;
+    }
+
+    if (!labelBlock) return '';
+
+    // 收集标签右侧同一行的所有文本块
+    const candidates = parsedBlocks.filter(block => {
+      if (block === labelBlock) return false;
+      const isRight = block.cx > labelBlock.cx + labelBlock.width * 0.2;
+      const sameRow = Math.abs(block.cy - labelBlock.cy) < Math.max(block.height, labelBlock.height) * 1.2;
+      return isRight && sameRow;
+    });
+
+    // 按 x 坐标排序
+    candidates.sort((a, b) => a.x - b.x);
+
+    // 过滤掉明显不是车型的值（如纯数字、标签词）
+    const validTexts = candidates
+      .map(b => b.text.trim())
+      .filter(text => {
+        if (!text) return false;
+        if (/^[\d,\.]+$/.test(text)) return false; // 纯数字（如"110"、"9,488"）
+        if (['车名车型', '车型', '车辆型号', '车辆类型'].includes(text.replace(/[：:]/g, '').trim())) return false;
+        return true;
+      });
+
+    if (validTexts.length === 0) return '';
+
+    // 合并文本，保留空格分隔
+    return validTexts.join(' ');
   }
 
   /**

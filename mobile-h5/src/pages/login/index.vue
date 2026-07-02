@@ -15,8 +15,16 @@ async function handleLogin() {
     showNotify({ type: 'warning', message: '请输入用户名' })
     return
   }
+  if (form.identifier.trim().length < 6) {
+    showNotify({ type: 'warning', message: '用户名不能少于6位' })
+    return
+  }
   if (!form.password.trim()) {
     showNotify({ type: 'warning', message: '请输入密码' })
+    return
+  }
+  if (form.password.trim().length < 6) {
+    showNotify({ type: 'warning', message: '密码不能少于6位' })
     return
   }
 
@@ -31,8 +39,9 @@ async function handleLogin() {
       router.push({ name: 'Home' })
     }
   }
-  catch {
-    showNotify({ type: 'danger', message: '登录失败' })
+  catch (error: any) {
+    const message = error?.message || error?.response?.data?.message || error?.response?.data?.error?.message || '登录失败'
+    showNotify({ type: 'danger', message })
   }
   finally {
     loading.value = false

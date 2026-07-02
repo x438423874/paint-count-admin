@@ -277,6 +277,11 @@ async function batchQuickCreate(files: File[]) {
           await new Promise(r => setTimeout(r, RETRY_DELAY))
           continue
         }
+        // 401 未登录不重试，直接提示
+        if (status === 401) {
+          showNotify({ type: 'danger', message: '登录已过期，请重新登录' })
+          setTimeout(() => router.push({ name: 'Login' }), 1500)
+        }
         // 其他错误（如 400 参数错误）不重试
         break
       }
@@ -289,9 +294,12 @@ async function batchQuickCreate(files: File[]) {
     else {
       batchProgress.value.failed++
       const status = lastErr?.response?.status || lastErr?.statusCode
-      let msg = lastErr?.message || '创建失败'
+      const responseMsg = lastErr?.response?.data?.message || lastErr?.response?.data?.error?.message || lastErr?.response?.data?.msg
+      let msg = responseMsg || lastErr?.message || '创建失败'
       if (status === 429)
         msg = '请求过于频繁，已重试仍失败'
+      else if (status === 401)
+        msg = '登录已过期，请重新登录'
       else if (status >= 500)
         msg = `服务器错误(${status})`
       batchResults.value.push({ fileName: file.name, success: false, message: msg })
