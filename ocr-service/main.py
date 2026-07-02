@@ -256,44 +256,167 @@ def preprocess_resize_enhance(img_array: np.ndarray, scale: int = 2) -> np.ndarr
     return sharpened
 
 
+def preprocess_remove_shadow(img_array: np.ndarray) -> np.ndarray:
+    """
+    去除纸张阴影
+    原理：用形态学闭运算估计背景亮度，然后用原图除以背景
+    """
+    if len(img_array.shape) == 3:
+        gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+    else:
+        gray = img_array.copy()
+
+    # 背景估计：大核闭运算
+    kernel_size = 25
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+    background = cv2.morphologyEx(gray, cv2.MORPH_DILATE, kernel)
+    background = cv2.medianBlur(background, 21)
+
+    # 背景归一化到 0-255，避免除零
+    background = background.astype(np.float32) + 1.0
+
+    # 去阴影：原图 / 背景 * 255
+    normalized = (gray.astype(np.float32) / background) * 255
+    normalized = np.clip(normalized, 0, 255).astype(np.uint8)
+
+    # 增强对比度
+    result = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(normalized)
+
+    logger.info(f"去阴影完成")
+    return result
+
+
+def preprocess_perspective_correction(img_array: np.ndarray) -> Optional[np.ndarray]:
+    """
+    文档透视校正
+    尝试检测最大四边形轮廓（纸张）并进行透视变换
+    如果检测失败返回 None
+    """
+    try:
+        if len(img_array.shape) == 3:
+            gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+        else:
+            gray = img_array.copy()
+
+        h, w = gray.shape
+
+        # 边缘检测
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        edges = cv2.Canny(blurred, 50, 150)
+
+        # 膨胀连接断裂边缘
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+        edges = cv2.dilate(edges, kernel, iterations=2)
+
+        # 查找轮廓
+        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return None
+
+        # 按面积排序
+        contours = sorted(contours, key=cv2.contourArea, reverse=True)
+
+        target_quad = None
+        for contour in contours[:5]:
+            peri = cv2.arcLength(contour, True)
+            approx = cv2.approxPolyDP(contour, 0.02 * peri, True)
+            if len(approx) == 4 and cv2.contourArea(approx) > (h * w * 0.2):
+                target_quad = approx
+                break
+
+        if target_quad is None:
+            return None
+
+        # 对四个角点排序：左上、右上、右下、左下
+        pts = target_quad.reshape(4, 2).astype(np.float32)
+        rect = np.zeros((4, 2), dtype=np.float32)
+
+        s = pts.sum(axis=1)
+        rect[0] = pts[np.argmin(s)]  # 左上
+        rect[2] = pts[np.argmax(s)]  # 右下
+
+        diff = np.diff(pts, axis=1)
+        rect[1] = pts[np.argmin(diff)]  # 右上
+        rect[3] = pts[np.argmax(diff)]  # 左下
+
+        # 计算目标尺寸
+        width_a = np.linalg.norm(rect[1] - rect[0])
+        width_b = np.linalg.norm(rect[2] - rect[3])
+        max_width = int(max(width_a, width_b))
+
+        height_a = np.linalg.norm(rect[3] - rect[0])
+        height_b = np.linalg.norm(rect[2] - rect[1])
+        max_height = int(max(height_a, height_b))
+
+        if max_width < 200 or max_height < 200:
+            return None
+
+        dst = np.array([
+            [0, 0],
+            [max_width - 1, 0],
+            [max_width - 1, max_height - 1],
+            [0, max_height - 1]
+        ], dtype=np.float32)
+
+        M = cv2.getPerspectiveTransform(rect, dst)
+        warped = cv2.warpPerspective(img_array, M, (max_width, max_height))
+
+        logger.info(f"透视校正完成: {w}x{h} -> {max_width}x{max_height}")
+        return warped
+    except Exception as e:
+        logger.warning(f"透视校正失败: {e}")
+        return None
+
+
 def smart_preprocess(img_array: np.ndarray) -> List[Tuple[str, np.ndarray]]:
     """
     智能预处理：根据图片类型生成预处理结果
     返回 [(策略名, 处理后图像), ...]
-    
-    优化：只生成2-3种最有效的策略，避免过多OCR调用导致超时
+
+    优化：只生成2-4种最有效的策略，避免过多OCR调用导致超时
     """
     image_type = detect_image_type(img_array)
     strategies = []
 
-    # 策略1：原图（始终包含，作为基准）
-    strategies.append(('original', img_array))
+    # 前置：文档透视校正（对拍摄倾斜的纸张有效）
+    corrected = preprocess_perspective_correction(img_array)
+    base_img = corrected if corrected is not None else img_array
+    if corrected is not None:
+        # 透视校正成功，用校正图替代原图作为基准
+        strategies.append(('perspective_corrected', corrected))
+    else:
+        # 透视校正失败，保留原图作为基准
+        strategies.append(('original', img_array))
 
-    # 根据图片类型选择1-2种最有效的预处理策略
+    # 策略2：去阴影 + CLAHE（对纸张拍摄阴影有效）
+    shadow_free = preprocess_remove_shadow(base_img)
+    strategies.append(('shadow_removed', shadow_free))
+
+    # 根据图片类型选择额外策略
     if image_type == 'blue_on_purple':
-        # 蓝字紫底：专用颜色通道分离（最有效）
-        preprocessed = preprocess_for_blue_on_purple(img_array)
+        # 蓝字紫底：专用颜色通道分离
+        preprocessed = preprocess_for_blue_on_purple(base_img)
         strategies.append(('blue_on_purple', preprocessed))
 
     elif image_type == 'red_bg':
-        # 红底：去红处理（最有效）
-        preprocessed = preprocess_for_red_bg(img_array)
+        # 红底：去红处理
+        preprocessed = preprocess_for_red_bg(base_img)
         strategies.append(('red_bg_removed', preprocessed))
 
     elif image_type == 'low_contrast':
         # 低对比度：CLAHE 增强
-        enhanced = preprocess_enhance_contrast(img_array)
+        enhanced = preprocess_enhance_contrast(base_img)
         strategies.append(('clahe_enhanced', enhanced))
 
     else:
-        # 普通图片：去噪+锐化
-        denoised = preprocess_denoise(img_array)
+        # 普通黑白/灰度文档：去噪+锐化
+        denoised = preprocess_denoise(base_img)
         strategies.append(('denoised', denoised))
 
     # 小图放大增强（仅当图片较小时）
-    h, w = img_array.shape[:2]
+    h, w = base_img.shape[:2]
     if w < 1500 or h < 1000:
-        enlarged = preprocess_resize_enhance(img_array, 2)
+        enlarged = preprocess_resize_enhance(base_img, 2)
         strategies.append(('resize_enhanced', enlarged))
 
     logger.info(f"生成了 {len(strategies)} 种预处理策略 (类型={image_type})")

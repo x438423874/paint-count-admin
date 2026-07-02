@@ -447,16 +447,14 @@ export class OcrService {
    */
   private async correctWithAnnotations(shopId: string, result: OcrResult): Promise<OcrResult> {
     try {
-      const annotations = await this.annotationService.getAnnotations(shopId, 1, 50);
+      const annotations = await this.annotationService.getAnnotations(shopId, 1, 200);
       if (!annotations || annotations.list.length === 0) {
         return result;
       }
 
+      const corrected = { ...result };
+
       // 收集 ground truth 值，按字段分组
-      // 可纠错字段：车牌号、工单号（格式固定，每单不同但格式严格）
-      // 车型：同门店车型种类有限，可学习常见车型写法纠正OCR错误
-      // 客户名称、电话：每单不同且无固定格式，不参与纠错
-      const correctableFields = ['plateNumber', 'orderNo', 'carModel'];
       const truthByField: Record<string, string[]> = {
         plateNumber: [],
         orderNo: [],
@@ -465,7 +463,7 @@ export class OcrService {
 
       for (const ann of annotations.list) {
         if (ann.groundTruth) {
-          for (const field of correctableFields) {
+          for (const field of Object.keys(truthByField)) {
             const value = (ann.groundTruth as any)[field];
             if (value && typeof value === 'string' && value.trim()) {
               truthByField[field].push(value.trim());
@@ -474,36 +472,33 @@ export class OcrService {
         }
       }
 
-      // 对可纠错字段进行纠错
-      const corrected = { ...result };
-
-      for (const field of correctableFields) {
-        const ocrValue = (corrected as any)[field] as string;
-        if (!ocrValue) continue;
-
-        const truthValues = truthByField[field];
-        if (truthValues.length === 0) continue;
-
-        // 查找最相似的 ground truth 值
-        const bestMatch = this.findClosestMatch(ocrValue, truthValues);
-        if (bestMatch) {
-          // 如果编辑距离 <= 2（只有1-2个字符错误），使用 ground truth 纠正
-          const distance = this.levenshteinDistance(ocrValue.toLowerCase(), bestMatch.toLowerCase());
-          // 车型字段允许更高的容错（车型名称较长，OCR常出现1-3个字符错误）
-          const errorRate = field === 'carModel' ? 0.3 : 0.2;
-          const threshold = Math.max(2, Math.floor(bestMatch.length * errorRate));
-
-          if (distance <= threshold && distance > 0) {
-            this.logger.log(`智能纠错 ${field}: OCR="${ocrValue}" → 纠正="${bestMatch}" (编辑距离=${distance})`);
-            (corrected as any)[field] = bestMatch;
-          }
-        }
+      // 1. 车牌号：规则纠错 + 格式校验
+      if (corrected.plateNumber) {
+        corrected.plateNumber = this.correctPlateNumber(
+          corrected.plateNumber,
+          truthByField.plateNumber,
+        );
       }
 
-      // 日期格式标准化：基于历史标注学习正确的日期格式
-      const dateValue = corrected.date;
-      if (dateValue) {
-        corrected.date = this.normalizeDateFormat(dateValue);
+      // 2. 工单号：格式校验 + 前缀/长度学习
+      if (corrected.orderNo) {
+        corrected.orderNo = this.correctOrderNo(
+          corrected.orderNo,
+          truthByField.orderNo,
+        );
+      }
+
+      // 3. 车型：基于常见车型库做模糊匹配
+      if (corrected.carModel) {
+        corrected.carModel = this.correctCarModel(
+          corrected.carModel,
+          truthByField.carModel,
+        );
+      }
+
+      // 4. 日期格式标准化
+      if (corrected.date) {
+        corrected.date = this.normalizeDateFormat(corrected.date);
       }
 
       return corrected;
@@ -511,6 +506,170 @@ export class OcrService {
       this.logger.warn(`标注数据纠错失败: ${e instanceof Error ? e.message : e}`);
       return result;
     }
+  }
+
+  /**
+   * 车牌号纠错
+   * 1. 省份简称常见 OCR 错误替换（如"奥"->"粤"）
+   * 2. 字符规范化：大写、去除空格/分隔符
+   * 3. 格式校验：汉字 + 大写字母 + 数字/字母
+   * 4. 基于历史标注的车牌前缀学习
+   */
+  private correctPlateNumber(ocrValue: string, truthValues: string[]): string {
+    if (!ocrValue) return '';
+
+    // 省份简称常见 OCR 误识别映射
+    const provinceMap: Record<string, string> = {
+      '奥': '粤', '每': '粤', '鱼': '鲁', '曾': '京', '输': '渝',
+      '渐': '浙', '护': '沪', '津': '津', '冀': '冀', '晋': '晋',
+      '辽': '辽', '吉': '吉', '黑': '黑', '苏': '苏', '皖': '皖',
+      '闽': '闽', '赣': '赣', '豫': '豫', '鄂': '鄂', '湘': '湘',
+      '桂': '桂', '琼': '琼', '川': '川', '贵': '贵', '云': '云',
+      '陕': '陕', '甘': '甘', '青': '青', '宁': '宁', '藏': '藏',
+    };
+
+    let plate = ocrValue.trim().toUpperCase().replace(/[\s\-_·]/g, '');
+
+    // 替换省份误识别字
+    if (plate.length >= 1) {
+      const firstChar = plate[0];
+      if (provinceMap[firstChar]) {
+        plate = provinceMap[firstChar] + plate.slice(1);
+      }
+    }
+
+    // 如果省份位不是有效汉字，尝试从历史车牌中学习省份前缀
+    if (!/[\u4e00-\u9fa5]/.test(plate[0]) && truthValues.length > 0) {
+      const commonPrefix = this.extractCommonPrefix(truthValues);
+      if (commonPrefix) {
+        plate = commonPrefix + plate.replace(/^[A-Z0-9]+/, '');
+      }
+    }
+
+    // 字符规范化：O->0（第二位及以后的车牌号部分），I->1
+    // 中国车牌规则：第2位是省份代码字母，第3位起是数字/字母
+    if (plate.length >= 2) {
+      // 保留第2位字母不变，其余 O->0, I->1（常见混淆）
+      const prefix = plate.slice(0, 2);
+      const rest = plate.slice(2).replace(/O/g, '0').replace(/I/g, '1');
+      plate = prefix + rest;
+    }
+
+    // 格式校验：汉字 + 字母 + 5-6 位字母数字
+    if (!/^[\u4e00-\u9fa5][A-Z][A-HJ-NP-Z0-9]{4,6}$/.test(plate)) {
+      // 格式不符，但已经做了字符纠错，仍返回
+      this.logger.debug(`车牌号格式校验不通过: "${plate}"，保留纠错结果`);
+    }
+
+    return plate;
+  }
+
+  /**
+   * 工单号纠错
+   * 1. 去除非法字符
+   * 2. 基于历史工单号学习长度和前缀
+   * 3. 常见 OCR 错误替换：O->0, I->1, S->5, B->8, Z->2
+   */
+  private correctOrderNo(ocrValue: string, truthValues: string[]): string {
+    if (!ocrValue) return '';
+
+    let orderNo = ocrValue.trim().toUpperCase().replace(/\s/g, '');
+
+    // 常见字母/数字混淆替换
+    orderNo = orderNo
+      .replace(/O/g, '0')
+      .replace(/I/g, '1')
+      .replace(/S/g, '5')
+      .replace(/B/g, '8')
+      .replace(/Z/g, '2')
+      .replace(/G/g, '6');
+
+    // 从历史工单号中学习长度
+    if (truthValues.length > 0) {
+      const lengths = truthValues.map(v => v.length);
+      const commonLength = this.mode(lengths);
+      if (commonLength && orderNo.length !== commonLength && Math.abs(orderNo.length - commonLength) <= 2) {
+        // 长度接近但不一致，尝试用相似度匹配找最接近的历史值
+        const bestMatch = this.findClosestMatch(orderNo, truthValues);
+        if (bestMatch) {
+          const distance = this.levenshteinDistance(orderNo, bestMatch);
+          if (distance <= Math.max(2, Math.floor(commonLength * 0.15))) {
+            this.logger.log(`工单号纠错: OCR="${ocrValue}" → "${bestMatch}" (编辑距离=${distance})`);
+            return bestMatch;
+          }
+        }
+      }
+    }
+
+    return orderNo;
+  }
+
+  /**
+   * 车型纠错
+   * 基于历史标注中的常见车型库做模糊匹配
+   */
+  private correctCarModel(ocrValue: string, truthValues: string[]): string {
+    if (!ocrValue) return '';
+
+    const model = ocrValue.trim();
+    if (truthValues.length === 0) return model;
+
+    // 去重得到车型库
+    const library = [...new Set(truthValues)];
+    const bestMatch = this.findClosestMatch(model, library);
+    if (!bestMatch) return model;
+
+    const distance = this.levenshteinDistance(
+      model.toLowerCase().replace(/[\s\-_]/g, ''),
+      bestMatch.toLowerCase().replace(/[\s\-_]/g, ''),
+    );
+
+    // 车型名称通常较长，允许 20% 的容错
+    const threshold = Math.max(2, Math.floor(bestMatch.length * 0.2));
+    if (distance <= threshold && distance > 0) {
+      this.logger.log(`车型纠错: OCR="${model}" → "${bestMatch}" (编辑距离=${distance})`);
+      return bestMatch;
+    }
+
+    return model;
+  }
+
+  /**
+   * 提取字符串列表的众数长度
+   */
+  private mode(values: number[]): number | null {
+    if (values.length === 0) return null;
+    const counts = new Map<number, number>();
+    for (const v of values) {
+      counts.set(v, (counts.get(v) || 0) + 1);
+    }
+    let maxCount = 0;
+    let result: number | null = null;
+    for (const [value, count] of counts.entries()) {
+      if (count > maxCount) {
+        maxCount = count;
+        result = value;
+      }
+    }
+    return result;
+  }
+
+  /**
+   * 提取字符串列表的最长公共前缀（至少2个字符）
+   */
+  private extractCommonPrefix(values: string[]): string {
+    if (values.length === 0) return '';
+    let prefix = '';
+    const first = values[0];
+    for (let i = 0; i < first.length; i++) {
+      const char = first[i];
+      if (values.every(v => v[i] === char)) {
+        prefix += char;
+      } else {
+        break;
+      }
+    }
+    return prefix.length >= 2 ? prefix : '';
   }
 
   /**

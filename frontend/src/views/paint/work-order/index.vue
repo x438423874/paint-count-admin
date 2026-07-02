@@ -31,6 +31,7 @@ import { useTable, useTableOperate } from '@/hooks/common/table';
 import { $t } from '@/locales';
 import { compressDualImage } from '@/utils/image-compress';
 import WorkOrderOperateDrawer from './modules/work-order-operate-drawer.vue';
+import OcrCorrectModal from './modules/ocr-correct-modal.vue';
 import { canAudit, canDelete, canBatchOcr, canBatchAnnotate, canMerge, canSettle, canEdit } from '@/utils/permission';
 
 // 权限控制（一次性求值，角色在登录态确定后不变）
@@ -234,6 +235,19 @@ const showBatchAnnotation = ref(false);
 const batchAnnotationLoading = ref(false);
 const batchAnnotationResult = ref<{ success: number; failed: number } | null>(null);
 const annotatedOrderIds = ref<Set<string>>(new Set()); // 已标注的工单ID集合
+
+// OCR 单条修正相关
+const ocrCorrectVisible = ref(false);
+const ocrCorrectOrder = ref<any>(null);
+
+function openOcrCorrect(row: any) {
+  ocrCorrectOrder.value = row;
+  ocrCorrectVisible.value = true;
+}
+
+async function onOcrCorrectSaved() {
+  await getDataByPage();
+}
 
 // 加载已标注工单ID列表
 async function loadAnnotatedOrderIds() {
@@ -703,6 +717,11 @@ const {
           <NButton type="info" text size="small" onClick={() => viewDetail(row.id)}>
             查看
           </NButton>
+          {row.images?.length > 0 && allowBatchAnnotate && (
+            <NButton type="warning" text size="small" onClick={() => openOcrCorrect(row)}>
+              修正OCR
+            </NButton>
+          )}
           {row._isDuplicate && !row.isAudited && allowMerge && (
             <NButton type="warning" text size="small" onClick={() => openMergeModal(row.orderNo, row.id)}>
               合并
@@ -1068,6 +1087,12 @@ async function handleBatchQuickUpload({ file }: { file: File }) {
         :operate-type="operateType"
         :row-data="editingData"
         @submitted="getDataByPage"
+      />
+
+      <OcrCorrectModal
+        v-model:visible="ocrCorrectVisible"
+        :order="ocrCorrectOrder"
+        @saved="onOcrCorrectSaved"
       />
     </NCard>
 
