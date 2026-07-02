@@ -3,7 +3,7 @@ import { ExecutionContext, Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { TerminusModule } from '@nestjs/terminus';
-import { ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 
 import { BootstrapModule } from '@lib/bootstrap/bootstrap.module';
 import config, {
@@ -109,6 +109,8 @@ const strategies = [JwtStrategy];
 
     { provide: APP_FILTER, useClass: AllExceptionsFilter },
 
+    // 限流守卫先于JWT执行，可在认证前拦截恶意请求
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
     { provide: APP_GUARD, useClass: JwtAuthGuard },
   ],
 })

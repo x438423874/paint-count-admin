@@ -5,12 +5,15 @@ import { Global, Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { ScheduleModule } from '@nestjs/schedule';
+import { APP_INTERCEPTOR } from '@nestjs/core';
 import * as yaml from 'js-yaml';
 
 import { CacheManagerModule } from '@lib/global/cache-manager.module';
 import { Ip2regionModule } from '@lib/shared/ip2region/ip2region.module';
 import { OssModule } from '@lib/shared/oss/oss.module';
 import { PrismaModule } from '@lib/shared/prisma/prisma.module';
+import { MetricsService } from '@lib/shared/metrics/metrics.service';
+import { MetricsInterceptor } from '@lib/shared/metrics/metrics.interceptor';
 import { getConfigPath } from '@lib/utils/env';
 
 @Global()
@@ -48,6 +51,10 @@ import { getConfigPath } from '@lib/utils/env';
     PrismaModule,
     CacheManagerModule,
   ],
-  exports: [HttpModule, PrismaModule, CacheManagerModule],
+  providers: [
+    MetricsService,
+    { provide: APP_INTERCEPTOR, useClass: MetricsInterceptor },
+  ],
+  exports: [HttpModule, PrismaModule, CacheManagerModule, MetricsService],
 })
 export class SharedModule {}

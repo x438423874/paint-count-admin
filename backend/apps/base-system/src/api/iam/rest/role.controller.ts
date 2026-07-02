@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import { CommandBus, QueryBus } from '@nestjs/cqrs';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
 
 import { RoleCreateCommand } from '@app/base-system/lib/bounded-contexts/iam/role/commands/role-create.command';
 import { RoleDeleteCommand } from '@app/base-system/lib/bounded-contexts/iam/role/commands/role-delete.command';
@@ -67,7 +68,7 @@ export class RoleController {
   @ApiResponse({ status: 403, description: 'Forbidden.' })
   async createRole(
     @Body() dto: RoleCreateDto,
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ): Promise<ApiRes<null>> {
     await this.commandBus.execute(
       new RoleCreateCommand(
@@ -91,7 +92,7 @@ export class RoleController {
   @ApiResponse({ status: 403, description: 'Forbidden.' })
   async updateRole(
     @Body() dto: RoleUpdateDto,
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ): Promise<ApiRes<null>> {
     await this.commandBus.execute(
       new RoleUpdateCommand(

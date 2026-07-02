@@ -26,5 +26,5 @@ export default defineConfig<Theme>({
     'card-wrapper': 'rd-8px shadow-sm'
   },
   transformers: [transformerDirectives(), transformerVariantGroup()],
-  presets: [presetWind3({ dark: 'class' }), presetSoybeanAdmin()]
+  presets: [presetWind3({ dark: 'class' }), presetSoybeanAdmin() as any]
 });

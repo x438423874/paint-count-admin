@@ -52,6 +52,8 @@ model SysUser {
   updatedAt   DateTime? @updatedAt @map("updated_at")
   updatedBy   String?   @map("updated_by")
 
+  userShops   SysUserShop[]
+
   @@map("sys_user")
 }
 
@@ -112,6 +114,19 @@ model SysUserRole {
 
   @@id([userId, roleId])
   @@map("sys_user_role")
+}
+
+// 用户-门店绑定关系（数据权限：用户只能访问绑定的门店数据）
+model SysUserShop {
+  userId String @map("user_id")
+  shopId String @map("shop_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user SysUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+  shop PaintShop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@id([userId, shopId])
+  @@map("sys_user_shop")
 }
 
 // 接口资源表
@@ -257,6 +272,7 @@ model PaintStandardTemplate {
 
   shops     PaintShop[]
   items     PaintStandardTemplateItem[]
+  specialPaints PaintSpecialPaint[]
 
   @@map("paint_standard_template")
 }
@@ -280,9 +296,10 @@ model PaintStandardTemplateItem {
   @@map("paint_standard_template_item")
 }
 
-// 特殊车漆（作为倍数乘数应用到工单明细）
+// 特殊车漆（作为倍数乘数应用到工单明细，归属于特定标准模板）
 model PaintSpecialPaint {
   id          String   @id @default(cuid())
+  templateId  String   @map("template_id")
   name        String   @db.VarChar(100)
   multiplier  Decimal  @db.Decimal(4, 2)
   description String?  @db.Text
@@ -290,7 +307,8 @@ model PaintSpecialPaint {
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime? @updatedAt @map("updated_at")
 
-  orderItems PaintWorkOrderItem[]
+  template      PaintStandardTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  orderItems    PaintWorkOrderItem[]
   templateItems PaintStandardTemplateItem[]
 
   @@map("paint_special_paint")
@@ -307,6 +325,8 @@ model PaintShop {
   status            Status   @default(ENABLED)
   standardTemplateId String? @map("standard_template_id")
   excelTemplateConfig String? @map("excel_template_config") @db.Text  // JSON: 门店专属Excel模板列映射配置
+  ocrTemplateConfig   String? @map("ocr_template_config") @db.Text    // JSON: 门店OCR模板区域配置（各字段在工单图片中的坐标区域）
+  ocrFieldLabels      String? @map("ocr_field_labels") @db.Text       // JSON: 门店OCR字段别名配置（各字段的标签词列表）
   createdAt         DateTime @default(now()) @map("created_at")
   updatedAt         DateTime? @updatedAt @map("updated_at")
 
@@ -314,6 +334,7 @@ model PaintShop {
   standards       PaintStandard[]
   orders          PaintWorkOrder[]
   categories      PaintItemCategory[]
+  userShops       SysUserShop[]
 
   @@map("paint_shop")
 }
@@ -372,6 +393,8 @@ model PaintWorkOrder {
   isAudited     Boolean   @default(false) @map("is_audited")
   auditedAt     DateTime? @map("audited_at")
   auditedBy     String?   @map("audited_by") @db.VarChar(100)
+  isAbnormal    Boolean   @default(false) @map("is_abnormal")
+  abnormalRemark String?  @map("abnormal_remark") @db.VarChar(500)
   remark        String?
   mergeGroupId  String?   @map("merge_group_id") @db.VarChar(50)
   createdAt     DateTime  @default(now()) @map("created_at")
@@ -450,6 +473,24 @@ model PaintSettlementRecord {
   order PaintWorkOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
 
   @@index([orderId])
-  @@index([settlementMonth])
   @@map("paint_settlement_record")
+}
+
+// OCR 标注数据：用于训练学习，标注越多识别越准确
+model OcrAnnotation {
+  id          String   @id @default(cuid())
+  shopId      String   @map("shop_id")
+  orderId     String?  @map("order_id")       // 关联的工单ID
+  imageUrl    String   @map("image_url")       // 标注的图片URL
+  imageWidth  Int      @map("image_width")     // 图片原始宽度
+  imageHeight Int      @map("image_height")    // 图片原始高度
+  regions     Json                         // JSON: 各字段区域坐标 { orderNo: {x,y,w,h}, ... }
+  groundTruth Json?                        // JSON: 实际值（用于验证）{ orderNo: "xxx", plateNumber: "xxx", ... }
+  isVerified  Boolean  @default(false) @map("is_verified")  // 是否已验证正确
+  annotatedBy String?  @map("annotated_by")  // 标注人
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([shopId])
+  @@index([shopId, isVerified])
+  @@map("ocr_annotation")
 }

@@ -1,51 +1,85 @@
-import { Controller, Get, Query, Res } from '@nestjs/common';
+import { Controller, Get, Query, Res, Request } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { SkipThrottle, Throttle } from '@nestjs/throttler';
 import { PaintStatisticsService } from '../../service/paint-statistics.service';
+import { PaintPdfExportService } from '../../service/paint-pdf-export.service';
+import { UserShopService } from '../../service/user-shop.service';
 import { ApiRes } from '@lib/infra/rest/res.response';
+import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
 import { FastifyReply } from 'fastify';
 import ExcelJS from 'exceljs';
 
 @ApiTags('Paint - Statistics')
 @Controller('paint/statistics')
+@SkipThrottle() // 统计查询为只读操作，默认不限流；导出接口单独配置
 export class PaintStatisticsController {
-  constructor(private readonly statisticsService: PaintStatisticsService) {}
+  constructor(
+    private readonly statisticsService: PaintStatisticsService,
+    private readonly userShopService: UserShopService,
+    private readonly pdfExportService: PaintPdfExportService,
+  ) {}
 
   @Get('monthly')
   @ApiOperation({ summary: '结算月幅数统计(按天汇总)' })
-  async monthly(@Query('settlementMonth') settlementMonth?: string, @Query('shopId') shopId?: string) {
-    const data = await this.statisticsService.getMonthlyStatistics(settlementMonth, shopId);
+  async monthly(
+    @Request() req: AuthenticatedRequest,
+    @Query('settlementMonth') settlementMonth?: string,
+    @Query('shopId') shopId?: string,
+  ) {
+    const accessibleShopIds = await this.userShopService.getAccessibleShopIds(req.user.uid);
+    const data = await this.statisticsService.getMonthlyStatistics(settlementMonth, shopId, accessibleShopIds);
     return ApiRes.success(data);
   }
 
   @Get('category')
   @ApiOperation({ summary: '项目类别幅数分布' })
-  async categoryBreakdown(@Query('settlementMonth') settlementMonth?: string, @Query('shopId') shopId?: string) {
-    const data = await this.statisticsService.getCategoryBreakdown(settlementMonth, shopId);
+  async categoryBreakdown(
+    @Request() req: AuthenticatedRequest,
+    @Query('settlementMonth') settlementMonth?: string,
+    @Query('shopId') shopId?: string,
+  ) {
+    const accessibleShopIds = await this.userShopService.getAccessibleShopIds(req.user.uid);
+    const data = await this.statisticsService.getCategoryBreakdown(settlementMonth, shopId, accessibleShopIds);
     return ApiRes.success(data);
   }
 
   @Get('comparison')
   @ApiOperation({ summary: '门店对比统计' })
-  async shopComparison(@Query('settlementMonth') settlementMonth?: string) {
-    const data = await this.statisticsService.getShopComparison(settlementMonth);
+  async shopComparison(@Request() req: AuthenticatedRequest, @Query('settlementMonth') settlementMonth?: string) {
+    // 门店对比：非超管/财务仅返回自己绑定的门店数据
+    const accessibleShopIds = await this.userShopService.getAccessibleShopIds(req.user.uid);
+    const data = await this.statisticsService.getShopComparison(settlementMonth, accessibleShopIds);
     return ApiRes.success(data);
   }
 
   @Get('year-overview')
   @ApiOperation({ summary: '年度概览(按结算月)' })
-  async yearOverview(@Query('year') year?: number, @Query('shopId') shopId?: string) {
-    const data = await this.statisticsService.getYearOverview(year, shopId);
+  async yearOverview(
+    @Request() req: AuthenticatedRequest,
+    @Query('year') year?: number,
+    @Query('shopId') shopId?: string,
+  ) {
+    const accessibleShopIds = await this.userShopService.getAccessibleShopIds(req.user.uid);
+    const data = await this.statisticsService.getYearOverview(year, shopId, accessibleShopIds);
     return ApiRes.success(data);
   }
 
   @Get('export/csv')
+  @Throttle({ default: { limit: 5, ttl: 60000 } }) // 每分钟5次：导出文件较大
   @ApiOperation({ summary: '导出月度统计CSV' })
   async exportCsv(
     @Query('settlementMonth') settlementMonth: string,
     @Query('shopId') shopId: string | undefined,
     @Res() res: FastifyReply,
+    @Request() req: AuthenticatedRequest,
   ) {
-    const data = await this.statisticsService.getExportData(settlementMonth, shopId);
+    // 数据权限校验
+    const accessibleShopIds = await this.userShopService.getAccessibleShopIds(req.user.uid);
+    if (shopId && accessibleShopIds && !accessibleShopIds.includes(shopId)) {
+      res.status(403).send({ code: 403, message: '无权导出该门店数据' });
+      return;
+    }
+    const data = await this.statisticsService.getExportData(settlementMonth, shopId, accessibleShopIds);
 
     // 生成CSV，对包含逗号或引号的字段做转义
     const csvEscape = (val: any) => {
@@ -72,13 +106,21 @@ export class PaintStatisticsController {
   }
 
   @Get('export/excel')
+  @Throttle({ default: { limit: 5, ttl: 60000 } }) // 每分钟5次：导出文件较大
   @ApiOperation({ summary: '导出月度统计Excel(xlsx格式，含工单汇总和项目明细两个Sheet)' })
   async exportExcel(
     @Query('settlementMonth') settlementMonth: string,
     @Query('shopId') shopId: string | undefined,
     @Res() res: FastifyReply,
+    @Request() req: AuthenticatedRequest,
   ) {
-    const data = await this.statisticsService.getExportData(settlementMonth, shopId);
+    // 数据权限校验
+    const accessibleShopIds = await this.userShopService.getAccessibleShopIds(req.user.uid);
+    if (shopId && accessibleShopIds && !accessibleShopIds.includes(shopId)) {
+      res.status(403).send({ code: 403, message: '无权导出该门店数据' });
+      return;
+    }
+    const data = await this.statisticsService.getExportData(settlementMonth, shopId, accessibleShopIds);
 
     const workbook = new ExcelJS.Workbook();
     workbook.creator = '喷漆幅数统计系统';
@@ -232,6 +274,33 @@ export class PaintStatisticsController {
     const buffer = await workbook.xlsx.writeBuffer();
     res.header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.header('Content-Disposition', `attachment; filename=paint-statistics-${settlementMonth}.xlsx`);
+    res.send(buffer);
+  }
+
+  @Get('export/pdf')
+  @Throttle({ default: { limit: 5, ttl: 60000 } }) // 每分钟5次：PDF生成较重
+  @ApiOperation({ summary: '导出月度统计PDF（A4横版，含汇总和明细表格）' })
+  async exportPdf(
+    @Query('settlementMonth') settlementMonth: string,
+    @Query('shopId') shopId: string | undefined,
+    @Res() res: FastifyReply,
+    @Request() req: AuthenticatedRequest,
+  ) {
+    // 数据权限校验
+    const accessibleShopIds = await this.userShopService.getAccessibleShopIds(req.user.uid);
+    if (shopId && accessibleShopIds && !accessibleShopIds.includes(shopId)) {
+      res.status(403).send({ code: 403, message: '无权导出该门店数据' });
+      return;
+    }
+
+    const buffer = await this.pdfExportService.exportMonthlyPdf(
+      settlementMonth,
+      shopId,
+      accessibleShopIds,
+    );
+
+    res.header('Content-Type', 'application/pdf');
+    res.header('Content-Disposition', `attachment; filename="paint-statistics-${settlementMonth}.pdf"`);
     res.send(buffer);
   }
 }

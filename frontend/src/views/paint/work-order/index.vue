@@ -1,5 +1,5 @@
 <script setup lang="tsx">
-import { NButton, NPopconfirm, NTag, NSpace, NImage, NCard, NStatistic, NProgress, NAlert, NDivider, NModal, NEmpty, NInputGroup, NGridItem, NText } from 'naive-ui';
+import { NButton, NPopconfirm, NTag, NSpace, NImage, NCard, NStatistic, NProgress, NAlert, NDivider, NModal, NEmpty, NInputGroup, NGridItem, NText, NRadioGroup, NRadio, NDescriptions, NDescriptionsItem } from 'naive-ui';
 import { ref, computed } from 'vue';
 import {
   fetchWorkOrderPage,
@@ -12,17 +12,35 @@ import {
   findDuplicateOrders,
   mergeWorkOrders,
   getSettlementHistory,
+  addSettlementRecord,
+  removeSettlementRecord,
+  setAbnormal,
   importWorkOrderExcel,
   exportWorkOrderExcel,
   downloadWorkOrderTemplate,
   detectExcelTemplate,
   saveExcelTemplate,
-  getExcelTemplateConfig
+  getExcelTemplateConfig,
+  saveOcrAnnotation,
+  getAnnotatedOrderIds,
+  getOcrTemplate,
+  ocrRecognizeImage,
+  updateWorkOrder
 } from '@/service/api';
 import { useTable, useTableOperate } from '@/hooks/common/table';
 import { $t } from '@/locales';
 import { compressDualImage } from '@/utils/image-compress';
 import WorkOrderOperateDrawer from './modules/work-order-operate-drawer.vue';
+import { canAudit, canDelete, canBatchOcr, canBatchAnnotate, canMerge, canSettle, canEdit } from '@/utils/permission';
+
+// 权限控制（一次性求值，角色在登录态确定后不变）
+const allowAudit = canAudit();
+const allowDelete = canDelete();
+const allowBatchOcr = canBatchOcr();
+const allowBatchAnnotate = canBatchAnnotate();
+const allowMerge = canMerge();
+const allowSettle = canSettle();
+const allowEdit = canEdit();
 
 const shops = ref<{ id: string; name: string; code: string; brand?: string; standardTemplateId?: string; standardTemplate?: { id: string; name: string } }[]>([]);
 const showDetail = ref(false);
@@ -211,10 +229,280 @@ async function handleSaveTemplateConfig() {
   showTemplateConfigModal.value = false;
 }
 
+// 批量标注相关
+const showBatchAnnotation = ref(false);
+const batchAnnotationLoading = ref(false);
+const batchAnnotationResult = ref<{ success: number; failed: number } | null>(null);
+const annotatedOrderIds = ref<Set<string>>(new Set()); // 已标注的工单ID集合
+
+// 加载已标注工单ID列表
+async function loadAnnotatedOrderIds() {
+  if (!selectedShopId.value) return;
+  try {
+    const { data, error } = await getAnnotatedOrderIds(selectedShopId.value);
+    if (!error && data) {
+      annotatedOrderIds.value = new Set(data);
+    }
+  } catch {
+    // 静默失败
+  }
+}
+
+async function handleBatchAnnotation() {
+  if (!selectedShopId.value || checkedRowKeys.value.length === 0) return;
+
+  // 获取选中的工单数据
+  const selectedOrders = data.value.filter((order: any) => checkedRowKeys.value.includes(order.id));
+  const ordersWithImages = selectedOrders.filter((order: any) => order.images && order.images.length > 0);
+
+  if (ordersWithImages.length === 0) {
+    window.$message?.warning('选中的工单中没有带图片的工单');
+    return;
+  }
+
+  // 过滤掉已标注的工单，防止重复标注
+  const unannotatedOrders = ordersWithImages.filter((order: any) => !annotatedOrderIds.value.has(order.id));
+  const alreadyAnnotatedCount = ordersWithImages.length - unannotatedOrders.length;
+
+  if (unannotatedOrders.length === 0) {
+    window.$message?.warning('选中的工单已全部标注过，无需重复标注');
+    return;
+  }
+
+  // 先加载当前门店的OCR模板区域配置，作为批量标注的默认区域
+  let templateRegions: Record<string, any> = {};
+  try {
+    const { data: templateData, error: templateError } = await getOcrTemplate(selectedShopId.value);
+    if (!templateError && templateData?.regions) {
+      templateRegions = templateData.regions;
+    }
+  } catch {
+    // 静默失败，使用空区域
+  }
+
+  batchAnnotationLoading.value = true;
+  batchAnnotationResult.value = null;
+
+  let successCount = 0;
+  let failedCount = 0;
+
+  for (const order of unannotatedOrders) {
+    const image = order.images?.[0];
+    if (!image) {
+      failedCount++;
+      continue;
+    }
+
+    try {
+      // 从 orderDate 提取年月日作为日期基准
+      let dateStr = '';
+      if (order.orderDate) {
+        const d = new Date(order.orderDate);
+        if (!isNaN(d.getTime())) {
+          dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        }
+      }
+
+      // 调用保存标注接口，将工单图片和已填写的数据作为标注
+      // 批量标注只是导入数据，不自动设为已验证
+      // 已验证状态应在 OCR 模板标注编辑器中识别校准准确率 100% 后才设置
+      const { error } = await saveOcrAnnotation({
+        shopId: selectedShopId.value,
+        orderId: order.id,
+        imageUrl: image.url,
+        imageWidth: image.width || 0,
+        imageHeight: image.height || 0,
+        regions: templateRegions, // 使用模板区域配置作为默认区域（可能为空）
+        groundTruth: {
+          orderNo: order.orderNo || '',
+          plateNumber: order.plateNumber || '',
+          customerName: order.customerName || '',
+          phone: order.phone || '',
+          carModel: order.carModel || '',
+          date: dateStr,
+        },
+        isVerified: false, // 始终为待验证，需在 OCR 模板标注编辑器中校准后手动验证
+      });
+      if (!error) {
+        successCount++;
+        // 标记为已标注
+        annotatedOrderIds.value.add(order.id);
+      } else {
+        failedCount++;
+      }
+    } catch {
+      failedCount++;
+    }
+  }
+
+  batchAnnotationLoading.value = false;
+  batchAnnotationResult.value = { success: successCount, failed: failedCount };
+
+  if (failedCount === 0) {
+    window.$message?.success(`成功保存 ${successCount} 条标注数据`);
+  } else {
+    window.$message?.warning(`完成：成功 ${successCount} 条，失败 ${failedCount} 条`);
+  }
+}
+
 // 快速录入
 const showQuickCreate = ref(false);
 const quickShopId = ref<string>('');
 const quickSettlementMonth = ref<string>(getCurrentMonth());
+
+// 批量 OCR 填充相关
+const showBatchOcrFill = ref(false);
+const batchOcrLoading = ref(false);
+const batchOcrMode = ref<'selected' | 'all'>('selected');
+const batchOcrProgress = ref({ current: 0, total: 0, success: 0, failed: 0, skipped: 0 });
+const batchOcrResult = ref<{ success: number; failed: number; skipped: number; details: string[] } | null>(null);
+const batchOcrCancelled = ref(false);
+
+// 检查工单是否有空白字段（车牌号、工单号、客户名称、电话、车型）
+function hasEmptyFields(order: any): boolean {
+  return !order.plateNumber || !order.orderNo || !order.customerName || !order.phone || !order.carModel;
+}
+
+// 获取待 OCR 处理的工单列表
+function getOcrPendingOrders(): any[] {
+  const source = batchOcrMode.value === 'selected'
+    ? data.value.filter((o: any) => checkedRowKeys.value.includes(o.id))
+    : data.value;
+  return source.filter((o: any) => !o.isAudited && o.images?.length > 0 && hasEmptyFields(o));
+}
+
+// 批量 OCR 填充
+async function handleBatchOcrFill() {
+  const pendingOrders = getOcrPendingOrders();
+  if (pendingOrders.length === 0) {
+    window.$message?.warning('没有符合条件的工单（需要未审核、有图片、有空白字段）');
+    return;
+  }
+  if (!selectedShopId.value) {
+    window.$message?.warning('请先选择门店');
+    return;
+  }
+
+  batchOcrLoading.value = true;
+  batchOcrCancelled.value = false;
+  batchOcrResult.value = null;
+  batchOcrProgress.value = { current: 0, total: pendingOrders.length, success: 0, failed: 0, skipped: 0 };
+  const details: string[] = [];
+
+  for (const order of pendingOrders) {
+    if (batchOcrCancelled.value) {
+      details.push(`已取消，剩余 ${pendingOrders.length - batchOcrProgress.value.current} 条未处理`);
+      break;
+    }
+    batchOcrProgress.value.current++;
+
+    try {
+      // fetch 图片
+      const imageUrl = getImageUrl(order.images[0].url);
+      const resp = await fetch(imageUrl);
+      if (!resp.ok) {
+        throw new Error('获取图片失败');
+      }
+      const blob = await resp.blob();
+
+      // 构建 FormData
+      const formData = new FormData();
+      formData.append('file', blob, 'image.jpg');
+      formData.append('shopId', order.shopId);
+
+      // OCR 识别
+      const { data: ocrResult, error: ocrError } = await ocrRecognizeImage(formData);
+      if (ocrError || !ocrResult) {
+        throw new Error('OCR识别失败');
+      }
+
+      // 只填充空白字段
+      const updateData: any = { id: order.id };
+      let filledFields: string[] = [];
+      if (!order.plateNumber && ocrResult.plateNumber) {
+        updateData.plateNumber = ocrResult.plateNumber;
+        filledFields.push('车牌号');
+      }
+      if (!order.orderNo && ocrResult.orderNo) {
+        updateData.orderNo = ocrResult.orderNo;
+        filledFields.push('工单号');
+      }
+      if (!order.customerName && ocrResult.customerName) {
+        updateData.customerName = ocrResult.customerName;
+        filledFields.push('客户名');
+      }
+      if (!order.phone && ocrResult.phone) {
+        updateData.phone = ocrResult.phone;
+        filledFields.push('电话');
+      }
+      if (!order.carModel && ocrResult.carModel) {
+        updateData.carModel = ocrResult.carModel;
+        filledFields.push('车型');
+      }
+
+      if (filledFields.length === 0) {
+        batchOcrProgress.value.skipped++;
+        details.push(`${order.orderNo || order.id}: 识别结果无有效数据，跳过`);
+        continue;
+      }
+
+      // 更新工单
+      const { error: updateError } = await updateWorkOrder(updateData);
+      if (updateError) {
+        throw new Error('更新工单失败');
+      }
+
+      batchOcrProgress.value.success++;
+      details.push(`${order.orderNo || order.id}: 填充 ${filledFields.join('、')}`);
+    } catch (e: any) {
+      batchOcrProgress.value.failed++;
+      details.push(`${order.orderNo || order.id}: 失败 - ${e.message || '未知错误'}`);
+    }
+  }
+
+  batchOcrLoading.value = false;
+  batchOcrResult.value = {
+    success: batchOcrProgress.value.success,
+    failed: batchOcrProgress.value.failed,
+    skipped: batchOcrProgress.value.skipped,
+    details
+  };
+
+  if (batchOcrProgress.value.failed === 0) {
+    window.$message?.success(`OCR填充完成：成功 ${batchOcrProgress.value.success} 条，跳过 ${batchOcrProgress.value.skipped} 条`);
+  } else {
+    window.$message?.warning(`OCR填充完成：成功 ${batchOcrProgress.value.success} 条，失败 ${batchOcrProgress.value.failed} 条，跳过 ${batchOcrProgress.value.skipped} 条`);
+  }
+
+  // 刷新列表
+  await getDataByPage();
+}
+
+function cancelBatchOcr() {
+  batchOcrCancelled.value = true;
+}
+
+// 打开批量OCR填充弹窗，重置状态
+function openBatchOcrFill() {
+  batchOcrLoading.value = false;
+  batchOcrCancelled.value = false;
+  batchOcrResult.value = null;
+  batchOcrProgress.value = { current: 0, total: 0, success: 0, failed: 0, skipped: 0 };
+  showBatchOcrFill.value = true;
+}
+
+// 计算选中工单中可 OCR 处理的数量
+const ocrPendingSelectedCount = computed(() => {
+  return data.value.filter((o: any) =>
+    checkedRowKeys.value.includes(o.id) && !o.isAudited && o.images?.length > 0 && hasEmptyFields(o)
+  ).length;
+});
+
+const ocrPendingAllCount = computed(() => {
+  return data.value.filter((o: any) =>
+    !o.isAudited && o.images?.length > 0 && hasEmptyFields(o)
+  ).length;
+});
 
 // 快速录入门店模板状态
 const quickShopHasTemplate = computed(() => {
@@ -239,9 +527,14 @@ async function loadShops() {
   const { data, error } = await fetchPaintShopList();
   if (!error && data) {
     shops.value = data;
+    // 数据权限：若用户仅绑定 1 个门店，自动选中并锁定
+    if (data.length === 1 && !selectedShopId.value) {
+      selectedShopId.value = data[0].id;
+    }
   }
 }
 loadShops();
+loadAnnotatedOrderIds(); // 初始加载已标注工单ID
 
 const {
   columns,
@@ -285,8 +578,16 @@ const {
       render: (row: any) => (
         <NSpace align="center" size={4}>
           <span>{row.orderNo}</span>
+          {row.images && row.images.length > 0 && (
+            <NTag type="primary" size="small" round>
+              📷 {row.images.length}
+            </NTag>
+          )}
           {row._isDuplicate && (
             <NTag type="warning" size="small" round>{row._duplicateCount}条重复</NTag>
+          )}
+          {annotatedOrderIds.value.has(row.id) && (
+            <NTag type="success" size="small" round>已标注</NTag>
           )}
         </NSpace>
       )
@@ -379,13 +680,22 @@ const {
         : <NTag size="small">未审</NTag>
     },
     {
+      key: 'isAbnormal',
+      title: '异常',
+      align: 'center',
+      width: 60,
+      render: (row: any) => row.isAbnormal
+        ? <NTag type="error" size="small">异常</NTag>
+        : <NTag type="default" size="small">正常</NTag>
+    },
+    {
       key: 'operate',
       title: '操作',
       align: 'center',
       width: 220,
       render: (row: any) => (
         <div class="flex-center gap-4px flex-wrap">
-          {!row.isAudited && (
+          {!row.isAudited && allowEdit && (
             <NButton type="primary" text size="small" onClick={() => edit(row.id)}>
               编辑
             </NButton>
@@ -393,35 +703,64 @@ const {
           <NButton type="info" text size="small" onClick={() => viewDetail(row.id)}>
             查看
           </NButton>
-          {row._isDuplicate && !row.isAudited && (
+          {row._isDuplicate && !row.isAudited && allowMerge && (
             <NButton type="warning" text size="small" onClick={() => openMergeModal(row.orderNo, row.id)}>
               合并
             </NButton>
           )}
-          {row.isAudited ? (
-            <NPopconfirm onPositiveClick={() => handleUnaudit(row.id)}>
+          {allowAudit && (
+            row.isAudited ? (
+              <NPopconfirm onPositiveClick={() => handleUnaudit(row.id)}>
+                {{
+                  default: () => '确认取消审核？',
+                  trigger: () => (
+                    <NButton type="warning" text size="small">
+                      取审
+                    </NButton>
+                  )
+                }}
+              </NPopconfirm>
+            ) : (
+              <NPopconfirm onPositiveClick={() => handleAudit(row.id)}>
+                {{
+                  default: () => '确认审核？',
+                  trigger: () => (
+                    <NButton type="success" text size="small">
+                      审核
+                    </NButton>
+                  )
+                }}
+              </NPopconfirm>
+            )
+          )}
+          {allowSettle && row.isAudited && !row.settlements?.length && (
+            <NButton type="info" text size="small" onClick={() => handleSettle(row.id)}>
+              结算
+            </NButton>
+          )}
+          {allowSettle && row.isAudited && !row.isAbnormal && !row.settlements?.length && (
+            <NButton type="warning" text size="small" onClick={() => handleAbnormal(row.id, false)}>
+              标记异常
+            </NButton>
+          )}
+          {allowSettle && row.isAudited && row.isAbnormal && (
+            <NButton type="success" text size="small" onClick={() => handleAbnormal(row.id, true, row.abnormalRemark)}>
+              取消异常
+            </NButton>
+          )}
+          {allowSettle && row.settlements?.length > 0 && (
+            <NPopconfirm onPositiveClick={() => handleUnsettle(row.id, row.settlements[0].id)}>
               {{
-                default: () => '确认取消审核？',
+                default: () => '确认取消最近一次结算？',
                 trigger: () => (
                   <NButton type="warning" text size="small">
-                    取审
-                  </NButton>
-                )
-              }}
-            </NPopconfirm>
-          ) : (
-            <NPopconfirm onPositiveClick={() => handleAudit(row.id)}>
-              {{
-                default: () => '确认审核？',
-                trigger: () => (
-                  <NButton type="success" text size="small">
-                    审核
+                    取消结算
                   </NButton>
                 )
               }}
             </NPopconfirm>
           )}
-          {!row.isAudited && (
+          {allowDelete && !row.isAudited && (
             <NPopconfirm onPositiveClick={() => handleDelete(row.id)}>
               {{
                 default: () => '确认删除此工单？',
@@ -448,7 +787,7 @@ const {
   checkedRowKeys,
   onBatchDeleted,
   onDeleted
-} = useTableOperate(data, getData);
+} = useTableOperate(data as any, getData);
 
 function edit(id: string) {
   handleEdit(id);
@@ -472,6 +811,70 @@ async function handleUnaudit(id: string) {
   const { error } = await unauditWorkOrder(id);
   if (error) return;
   window.$message?.success('已取消审核');
+  await getDataByPage();
+}
+
+// 结算相关
+const showSettleModal = ref(false);
+const settleOrderId = ref('');
+const settleMonth = ref(getCurrentMonth());
+const settleRemark = ref('');
+
+// 异常标注相关
+const showAbnormalModal = ref(false);
+const abnormalOrderId = ref('');
+const abnormalFlag = ref(true);
+const abnormalRemark = ref('');
+
+function handleAbnormal(id: string, currentIsAbnormal: boolean, currentRemark?: string) {
+  abnormalOrderId.value = id;
+  abnormalFlag.value = !currentIsAbnormal;
+  abnormalRemark.value = currentRemark || '';
+  showAbnormalModal.value = true;
+}
+
+async function confirmAbnormal() {
+  const { error } = await setAbnormal(abnormalOrderId.value, abnormalFlag.value, abnormalRemark.value || undefined);
+  if (error) return;
+  window.$message?.success(abnormalFlag.value ? '已标记异常' : '已取消异常');
+  showAbnormalModal.value = false;
+  await getDataByPage();
+}
+
+function handleSettle(id: string) {
+  settleOrderId.value = id;
+  const row = data.value.find((r: any) => r.id === id);
+  settleMonth.value = row?.settlementMonth || getCurrentMonth();
+  settleRemark.value = '';
+  showSettleModal.value = true;
+}
+
+async function confirmSettle() {
+  if (!settleMonth.value) {
+    window.$message?.warning('请选择结算月份');
+    return;
+  }
+  const { error } = await addSettlementRecord(settleOrderId.value, settleMonth.value, settleRemark.value || undefined);
+  if (error) return;
+  window.$message?.success('结算成功');
+  showSettleModal.value = false;
+  await getDataByPage();
+}
+
+async function handleUnsettle(orderId: string, recordId: string) {
+  const { error } = await removeSettlementRecord(orderId, recordId);
+  if (error) return;
+  window.$message?.success('已取消结算');
+  await getDataByPage();
+}
+
+async function handleDeleteSettlement(recordId: string) {
+  const { error } = await removeSettlementRecord(settlementOrderId.value, recordId);
+  if (error) return;
+  window.$message?.success('已删除结算记录');
+  // 刷新结算历史
+  const { data } = await getSettlementHistory(settlementOrderId.value);
+  if (data) settlementHistory.value = data;
   await getDataByPage();
 }
 
@@ -567,7 +970,7 @@ async function handleBatchQuickUpload({ file }: { file: File }) {
             :options="shops.map(s => ({ label: s.name, value: s.id }))"
             clearable
             style="width: 180px"
-            @update:value="(val: string | null) => { searchParams.shopId = val ?? undefined; getDataByPage(); }"
+            @update:value="(val: string | null) => { searchParams.shopId = val ?? undefined; getDataByPage(); loadAnnotatedOrderIds(); }"
           />
         </NSpace>
         <NSpace align="center" :size="6">
@@ -607,11 +1010,17 @@ async function handleBatchQuickUpload({ file }: { file: File }) {
         <NButton type="primary" @click="getDataByPage()">搜索</NButton>
         <NButton @click="resetSearchParams(); selectedShopId = null; getDataByPage();">重置</NButton>
         <NDivider vertical />
-        <NButton type="warning" @click="showQuickCreate = true">快速录入</NButton>
+        <NButton v-if="allowEdit" type="warning" @click="showQuickCreate = true">快速录入</NButton>
         <NButton type="info" @click="handleDownloadTemplate" :disabled="!selectedShopId">下载模板</NButton>
-        <NButton type="success" @click="triggerImport" :disabled="!selectedShopId">导入</NButton>
+        <NButton v-if="allowEdit" type="success" @click="triggerImport" :disabled="!selectedShopId">导入</NButton>
         <NButton @click="handleExport" :disabled="!selectedShopId">导出</NButton>
-        <NButton type="default" @click="openTemplateConfig" :disabled="!selectedShopId">模板配置</NButton>
+        <NButton v-if="allowEdit" type="default" @click="openTemplateConfig" :disabled="!selectedShopId">模板配置</NButton>
+        <NButton v-if="allowBatchAnnotate" type="primary" @click="showBatchAnnotation = true" :disabled="!selectedShopId || checkedRowKeys.length === 0">
+          批量标注 ({{ checkedRowKeys.length }})
+        </NButton>
+        <NButton v-if="allowBatchOcr" type="info" @click="openBatchOcrFill" :disabled="!selectedShopId">
+          一键OCR填充
+        </NButton>
         <input ref="fileInputRef" type="file" accept=".xlsx,.xls" style="display:none" @change="handleImportFile" />
       </NSpace>
     </NCard>
@@ -826,6 +1235,43 @@ async function handleBatchQuickUpload({ file }: { file: File }) {
       </template>
     </NModal>
 
+    <!-- 结算弹窗 -->
+    <!-- 异常标注弹窗 -->
+    <NModal v-model:show="showAbnormalModal" preset="card" :title="abnormalFlag ? '标记异常' : '取消异常'" style="width: 400px">
+      <NSpace vertical :size="16">
+        <NAlert v-if="abnormalFlag" type="warning" title="标记异常后该工单将无法结算" />
+        <NInput v-model:value="abnormalRemark" type="textarea" :placeholder="abnormalFlag ? '请输入异常原因' : '备注（选填）'" :rows="3" />
+      </NSpace>
+      <template #footer>
+        <NSpace justify="end">
+          <NButton @click="showAbnormalModal = false">取消</NButton>
+          <NButton :type="abnormalFlag ? 'warning' : 'success'" @click="confirmAbnormal">{{ abnormalFlag ? '确认标记' : '确认取消异常' }}</NButton>
+        </NSpace>
+      </template>
+    </NModal>
+
+    <NModal v-model:show="showSettleModal" preset="card" title="结算工单" style="width: 400px">
+      <NSpace vertical :size="16">
+        <NSpace align="center" :size="8">
+          <NText>结算月份</NText>
+          <NDatePicker
+            v-model:formatted-value="settleMonth"
+            type="month"
+            value-format="yyyy-MM"
+            style="width: 180px"
+            placeholder="选择结算月份"
+          />
+        </NSpace>
+        <NInput v-model:value="settleRemark" type="textarea" placeholder="备注（选填）" :rows="2" />
+      </NSpace>
+      <template #footer>
+        <NSpace justify="end">
+          <NButton @click="showSettleModal = false">取消</NButton>
+          <NButton type="primary" @click="confirmSettle">确认结算</NButton>
+        </NSpace>
+      </template>
+    </NModal>
+
     <!-- 结算历史弹窗 -->
     <NModal v-model:show="showSettlementModal" preset="card" :title="`结算历史 - ${settlementOrderNo}`" style="width: 500px">
       <NEmpty v-if="settlementHistory.length === 0" description="暂无结算记录" />
@@ -841,6 +1287,12 @@ async function handleBatchQuickUpload({ file }: { file: File }) {
               <NText v-if="record.remark" depth="3">备注: {{ record.remark }}</NText>
               <NText depth="3">{{ new Date(record.createdAt).toLocaleString() }}</NText>
             </NSpace>
+            <NPopconfirm @positive-click="() => handleDeleteSettlement(record.id)">
+              <template #default>确认删除此结算记录？</template>
+              <template #trigger>
+                <NButton type="error" text size="small">删除</NButton>
+              </template>
+            </NPopconfirm>
           </NSpace>
         </NCard>
       </NSpace>
@@ -911,6 +1363,152 @@ async function handleBatchQuickUpload({ file }: { file: File }) {
       </template>
       <template #footer>
         <NButton type="primary" @click="showImportResult = false">知道了</NButton>
+      </template>
+    </NModal>
+
+    <!-- 批量标注弹窗 -->
+    <NModal v-model:show="showBatchAnnotation" preset="card" title="批量标注工单图片（智能校准）" style="width: 550px" :mask-closable="false">
+      <NSpace vertical :size="16">
+        <NAlert type="success" :bordered="false">
+          <template #header>智能标注学习</template>
+          将选中的已审核工单图片和<strong>已录入的字段数据</strong>保存为训练数据。<br />
+          系统会自动对比OCR识别结果与正确数据，持续优化识别准确率。<br />
+          <strong>标注越多，识别越准确！</strong> 建议每家门店至少标注 5-10 张工单。
+        </NAlert>
+        <NDescriptions label-placement="left" bordered size="small" :column="1">
+          <NDescriptionsItem label="选中工单数">
+            <NTag type="info">{{ checkedRowKeys.length }}</NTag>
+          </NDescriptionsItem>
+          <NDescriptionsItem label="当前门店">
+            {{ shops.find(s => s.id === selectedShopId)?.name || '-' }}
+          </NDescriptionsItem>
+          <NDescriptionsItem label="带图工单数">
+            <NTag type="success">{{ data.filter((order: any) => checkedRowKeys.includes(order.id) && order.images?.length > 0).length }}</NTag>
+          </NDescriptionsItem>
+          <NDescriptionsItem label="已标注">
+            <NTag type="warning">{{ data.filter((order: any) => checkedRowKeys.includes(order.id) && annotatedOrderIds.has(order.id)).length }}</NTag>
+            <NText depth="3" style="font-size:12px; margin-left:4px">（已标注的将自动跳过）</NText>
+          </NDescriptionsItem>
+          <NDescriptionsItem label="待标注">
+            <NTag type="info">{{ data.filter((order: any) => checkedRowKeys.includes(order.id) && !annotatedOrderIds.has(order.id) && order.images?.length > 0).length }}</NTag>
+          </NDescriptionsItem>
+        </NDescriptions>
+
+        <!-- 显示选中工单中已有的字段数据预览 -->
+        <NCard size="small" :bordered="true" title="将包含以下已录入数据作为校准基准">
+          <NSpace :size="4" wrap>
+            <template v-for="(order, idx) in data.filter((o: any) => checkedRowKeys.includes(o.id) && !annotatedOrderIds.has(o.id)).slice(0, 3)" :key="idx">
+              <NTag size="small" :type="annotatedOrderIds.has(order.id) ? 'success' : 'default'">
+                {{ order.orderNo || order.id }}
+                {{ annotatedOrderIds.has(order.id) ? '(已标注)' : '' }}
+              </NTag>
+              <span v-if="order.plateNumber" style="font-size:12px">车牌:{{ order.plateNumber }}</span>
+              <span v-if="order.customerName" style="font-size:12px">客户:{{ order.customerName }}</span>
+            </template>
+            <NText v-if="checkedRowKeys.length > 3" depth="3" style="font-size:12px">...等 {{ checkedRowKeys.length }} 条</NText>
+          </NSpace>
+        </NCard>
+
+        <template v-if="batchAnnotationResult">
+          <NAlert :type="batchAnnotationResult.failed > 0 ? 'warning' : 'success'" :bordered="false">
+            标注完成：成功 {{ batchAnnotationResult.success }} 条，失败 {{ batchAnnotationResult.failed }} 条
+            <br />
+            <span style="font-size:12px">系统已记录每条工单的正确数据，用于后续智能优化模板</span>
+          </NAlert>
+        </template>
+      </NSpace>
+      <template #footer>
+        <NSpace justify="end">
+          <NButton @click="showBatchAnnotation = false">取消</NButton>
+          <NButton type="primary" :loading="batchAnnotationLoading" @click="handleBatchAnnotation">
+            开始智能标注
+          </NButton>
+        </NSpace>
+      </template>
+    </NModal>
+
+    <!-- 一键OCR填充弹窗 -->
+    <NModal v-model:show="showBatchOcrFill" preset="card" title="一键OCR识别填充" style="width: 600px" :mask-closable="false">
+      <NSpace vertical :size="16">
+        <NAlert type="info" :bordered="false">
+          <template #header>批量OCR识别填充空白字段</template>
+          对未审核、有图片、有空白字段的工单进行OCR识别，<strong>只填充空白字段</strong>（已有值的不覆盖）。<br />
+          支持字段：车牌号、工单号、客户名、电话、车型。
+        </NAlert>
+
+        <NRadioGroup v-model:value="batchOcrMode" :disabled="batchOcrLoading">
+          <NSpace>
+            <NRadio value="selected" :disabled="checkedRowKeys.length === 0">
+              选中的工单（可处理 {{ ocrPendingSelectedCount }} 条）
+            </NRadio>
+            <NRadio value="all">
+              当前页全部待审核工单（可处理 {{ ocrPendingAllCount }} 条）
+            </NRadio>
+          </NSpace>
+        </NRadioGroup>
+
+        <NDescriptions label-placement="left" bordered size="small" :column="1">
+          <NDescriptionsItem label="当前门店">
+            {{ shops.find(s => s.id === selectedShopId)?.name || '-' }}
+          </NDescriptionsItem>
+          <NDescriptionsItem label="处理范围">
+            {{ batchOcrMode === 'selected' ? `选中的 ${checkedRowKeys.length} 条工单` : `当前页 ${data.length} 条工单` }}
+          </NDescriptionsItem>
+          <NDescriptionsItem label="符合条件">
+            <NTag type="success">{{ batchOcrMode === 'selected' ? ocrPendingSelectedCount : ocrPendingAllCount }} 条</NTag>
+            <NText depth="3" style="font-size:12px; margin-left:8px">（未审核 + 有图片 + 有空白字段）</NText>
+          </NDescriptionsItem>
+        </NDescriptions>
+
+        <!-- 进度显示 -->
+        <template v-if="batchOcrLoading">
+          <NCard size="small" :bordered="true">
+            <NSpace vertical :size="8">
+              <NSpace justify="space-between">
+                <span>正在处理...</span>
+                <span>{{ batchOcrProgress.current }} / {{ batchOcrProgress.total }}</span>
+              </NSpace>
+              <NProgress
+                type="line"
+                :percentage="batchOcrProgress.total > 0 ? Math.round(batchOcrProgress.current / batchOcrProgress.total * 100) : 0"
+                :show-indicator="false"
+              />
+              <NSpace :size="16">
+                <NTag type="success" size="small">成功 {{ batchOcrProgress.success }}</NTag>
+                <NTag type="error" size="small">失败 {{ batchOcrProgress.failed }}</NTag>
+                <NTag type="warning" size="small">跳过 {{ batchOcrProgress.skipped }}</NTag>
+              </NSpace>
+            </NSpace>
+          </NCard>
+        </template>
+
+        <!-- 结果显示 -->
+        <template v-if="batchOcrResult">
+          <NAlert :type="batchOcrResult.failed > 0 ? 'warning' : 'success'" :bordered="false">
+            OCR填充完成：成功 {{ batchOcrResult.success }} 条，失败 {{ batchOcrResult.failed }} 条，跳过 {{ batchOcrResult.skipped }} 条
+          </NAlert>
+          <NCard size="small" :bordered="true" title="处理详情" style="max-height: 200px; overflow-y: auto">
+            <NSpace vertical :size="4">
+              <div v-for="(detail, idx) in batchOcrResult.details" :key="idx" style="font-size: 12px; line-height: 1.6">
+                {{ detail }}
+              </div>
+            </NSpace>
+          </NCard>
+        </template>
+      </NSpace>
+      <template #footer>
+        <NSpace justify="end">
+          <NButton v-if="batchOcrLoading" type="error" @click="cancelBatchOcr">取消处理</NButton>
+          <NButton v-else @click="showBatchOcrFill = false">关闭</NButton>
+          <NButton
+            v-if="!batchOcrLoading && !batchOcrResult"
+            type="primary"
+            :loading="batchOcrLoading"
+            @click="handleBatchOcrFill"
+          >
+            开始OCR填充
+          </NButton>
+        </NSpace>
       </template>
     </NModal>
   </div>

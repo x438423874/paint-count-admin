@@ -84,13 +84,21 @@ export class WorkOrderMergeService {
   }
 
   /** 查询工单的重复工单列表（同orderNo） */
-  async findDuplicateOrders(orderNo: string, excludeId?: string) {
+  async findDuplicateOrders(
+    orderNo: string,
+    excludeId?: string,
+    accessibleShopIds?: string[] | null,
+  ) {
     const where: Prisma.PaintWorkOrderWhereInput = {
       orderNo,
       status: { not: 'CANCELLED' },
     };
     if (excludeId) {
       where.id = { not: excludeId };
+    }
+    // 数据权限：accessibleShopIds 为 null 表示不限制，数组表示限制到这些门店
+    if (accessibleShopIds) {
+      where.shopId = { in: accessibleShopIds };
     }
     return this.prisma.paintWorkOrder.findMany({
       where,

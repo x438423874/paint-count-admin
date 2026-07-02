@@ -47,13 +47,14 @@ export class AllExceptionsFilter implements ExceptionFilter {
         message: exception.message,
       };
     } else if (typeof exception === 'object' && exception !== null) {
-      const message = (exception as any).message
+      const isDev = process.env.NODE_ENV === 'development';
+      const message = isDev && (exception as any).message
         ? (exception as any).message
-        : 'Unknown error';
+        : ErrorMessages[ErrorCode.INTERNAL_SERVER_ERROR];
 
       errorDetails = {
         code: ErrorCode.INTERNAL_SERVER_ERROR,
-        message: message,
+        message,
       };
     }
 

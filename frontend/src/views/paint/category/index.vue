@@ -2,6 +2,7 @@
 import { NButton, NPopconfirm, NTag, NSpace } from 'naive-ui';
 import { ref } from 'vue';
 import { fetchPaintCategoryList, deletePaintCategory } from '@/service/api';
+import CategoryOperateDrawer from './modules/category-operate-drawer.vue';
 
 const loading = ref(false);
 const data = ref<any[]>([]);
@@ -126,13 +127,14 @@ const columns = [
         class="sm:h-full"
       />
 
-      <CategoryOperateDrawer
-        v-model:visible="drawerVisible"
-        :operate-type="operateType"
-        :row-data="editingData"
-        @submitted="getData"
-      />
     </NCard>
+
+    <CategoryOperateDrawer
+      v-model:visible="drawerVisible"
+      :operate-type="operateType"
+      :row-data="editingData"
+      @submitted="getData"
+    />
   </div>
 </template>
 

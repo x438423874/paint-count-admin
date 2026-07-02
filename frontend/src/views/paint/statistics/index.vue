@@ -1,7 +1,7 @@
 <script setup lang="tsx">
 import { ref, computed, onMounted, watch, nextTick } from 'vue';
 import { NCard, NGrid, NGi, NStatistic, NSelect, NSpace, NTag, NDataTable, NH3, NNumberAnimation, NDatePicker, NButton, NEmpty } from 'naive-ui';
-import { fetchMonthlyStatistics, fetchShopComparison, fetchYearOverview, fetchPaintShopList, fetchCategoryBreakdown, exportStatisticsCsv, exportStatisticsExcel } from '@/service/api';
+import { fetchMonthlyStatistics, fetchShopComparison, fetchYearOverview, fetchPaintShopList, fetchCategoryBreakdown, exportStatisticsCsv, exportStatisticsExcel, exportStatisticsPdf } from '@/service/api';
 import { useEcharts } from '@/hooks/common/echarts';
 
 const shops = ref<{ id: string; name: string; code: string }[]>([]);
@@ -59,10 +59,28 @@ async function loadAllData() {
 }
 
 const totalStats = computed(() => {
+  const totalOrders = monthlyData.value.reduce((s, d) => s + (d.totalOrders || 0), 0);
+  const totalPaintCount = monthlyData.value.reduce((s, d) => s + Number(d.totalPaintCount || 0), 0);
+  const totalVehicles = monthlyData.value.reduce((s, d) => s + (d.totalVehicles || 0), 0);
+  const pendingOrders = monthlyData.value.reduce((s, d) => s + (d.pendingOrders || 0), 0);
+  const pendingPaintCount = monthlyData.value.reduce((s, d) => s + Number(d.pendingPaintCount || 0), 0);
+  const pendingVehicles = monthlyData.value.reduce((s, d) => s + (d.pendingVehicles || 0), 0);
+  const auditedOrders = monthlyData.value.reduce((s, d) => s + (d.auditedOrders || 0), 0);
+  const auditedPaintCount = monthlyData.value.reduce((s, d) => s + Number(d.auditedPaintCount || 0), 0);
+  const auditedVehicles = monthlyData.value.reduce((s, d) => s + (d.auditedVehicles || 0), 0);
   return {
-    totalOrders: monthlyData.value.reduce((s, d) => s + (d.totalOrders || 0), 0),
-    totalPaintCount: monthlyData.value.reduce((s, d) => s + Number(d.totalPaintCount || 0), 0),
-    shopCount: monthlyData.value.length
+    totalOrders,
+    totalPaintCount,
+    totalVehicles,
+    shopCount: monthlyData.value.length,
+    avgPaintPerVehicle: totalVehicles > 0 ? +(totalPaintCount / totalVehicles).toFixed(2) : 0,
+    avgPaintPerOrder: totalOrders > 0 ? +(totalPaintCount / totalOrders).toFixed(2) : 0,
+    pendingOrders,
+    pendingPaintCount,
+    pendingVehicles,
+    auditedOrders,
+    auditedPaintCount,
+    auditedVehicles
   };
 });
 
@@ -81,14 +99,28 @@ const categoryColumns = [
 const comparisonColumns = [
   { key: 'shopName', title: '门店', minWidth: 150 },
   { key: 'totalOrders', title: '工单数', width: 90, align: 'center' as const },
+  { key: 'totalVehicles', title: '车辆数', width: 90, align: 'center' as const },
   { key: 'totalPaintCount', title: '总幅数', width: 100, align: 'center' as const, render: (row: any) => <NTag type="success">{row.totalPaintCount?.toFixed(1)}</NTag> },
-  { key: 'avgPaintPerOrder', title: '平均幅数/单', width: 110, align: 'center' as const }
+  { key: 'pendingOrders', title: '待审核工单', width: 100, align: 'center' as const, render: (row: any) => <NTag type="warning">{row.pendingOrders || 0}</NTag> },
+  { key: 'pendingVehicles', title: '待审核车牌', width: 100, align: 'center' as const },
+  { key: 'pendingPaintCount', title: '待审核幅数', width: 100, align: 'center' as const, render: (row: any) => <NTag type="warning">{(row.pendingPaintCount || 0).toFixed(1)}</NTag> },
+  { key: 'auditedOrders', title: '已审核工单', width: 100, align: 'center' as const, render: (row: any) => <NTag type="success">{row.auditedOrders || 0}</NTag> },
+  { key: 'auditedVehicles', title: '已审核车牌', width: 100, align: 'center' as const },
+  { key: 'auditedPaintCount', title: '已审核幅数', width: 100, align: 'center' as const, render: (row: any) => <NTag type="success">{(row.auditedPaintCount || 0).toFixed(1)}</NTag> },
+  { key: 'avgPaintPerVehicle', title: '台均幅数', width: 100, align: 'center' as const },
+  { key: 'avgPaintPerOrder', title: '单均幅数', width: 100, align: 'center' as const }
 ];
 
 const yearColumns = [
   { key: 'month', title: '月份', width: 70, align: 'center' as const, render: (row: any) => `${row.month}月` },
   { key: 'totalOrders', title: '工单数', width: 90, align: 'center' as const },
-  { key: 'totalPaintCount', title: '总幅数', width: 100, align: 'center' as const, render: (row: any) => <NTag type="info">{row.totalPaintCount?.toFixed(1)}</NTag> }
+  { key: 'totalPaintCount', title: '总幅数', width: 100, align: 'center' as const, render: (row: any) => <NTag type="info">{row.totalPaintCount?.toFixed(1)}</NTag> },
+  { key: 'pendingOrders', title: '待审核工单', width: 100, align: 'center' as const, render: (row: any) => <NTag type="warning">{row.pendingOrders || 0}</NTag> },
+  { key: 'pendingVehicles', title: '待审核车牌', width: 100, align: 'center' as const },
+  { key: 'pendingPaintCount', title: '待审核幅数', width: 100, align: 'center' as const, render: (row: any) => <NTag type="warning">{(row.pendingPaintCount || 0).toFixed(1)}</NTag> },
+  { key: 'auditedOrders', title: '已审核工单', width: 100, align: 'center' as const, render: (row: any) => <NTag type="success">{row.auditedOrders || 0}</NTag> },
+  { key: 'auditedVehicles', title: '已审核车牌', width: 100, align: 'center' as const },
+  { key: 'auditedPaintCount', title: '已审核幅数', width: 100, align: 'center' as const, render: (row: any) => <NTag type="success">{(row.auditedPaintCount || 0).toFixed(1)}</NTag> }
 ];
 
 function getDailyStats(shopData: any) {
@@ -99,10 +131,26 @@ function getDailyStats(shopData: any) {
 
 // 1. 每日幅数趋势折线图
 const { domRef: dailyChartRef, updateOptions: updateDailyChartOptions } = useEcharts(() => ({
-  tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-  legend: { data: [] as string[] },
-  grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
-  xAxis: { type: 'category', data: [] as string[] },
+  tooltip: {
+    trigger: 'axis',
+    axisPointer: { type: 'cross' },
+    valueFormatter: (val: any) => `${Number(val).toFixed(1)} 幅`
+  },
+  legend: { data: [] as string[], top: 5 },
+  grid: { left: '3%', right: '4%', bottom: '15%', containLabel: true },
+  toolbox: {
+    show: true,
+    right: 10,
+    feature: {
+      dataZoom: { yAxisIndex: 'none' },
+      saveAsImage: { name: '每日幅数趋势' }
+    }
+  },
+  dataZoom: [
+    { type: 'inside', start: 0, end: 100 },
+    { type: 'slider', height: 18, bottom: 8, start: 0, end: 100 }
+  ],
+  xAxis: { type: 'category', boundaryGap: false, data: [] as string[] },
   yAxis: { type: 'value', name: '幅数' },
   series: [] as any[]
 }));
@@ -140,16 +188,22 @@ function updateDailyChart() {
 // 2. 门店对比柱状图
 const { domRef: shopComparisonChartRef, updateOptions: updateShopComparisonChartOptions } = useEcharts(() => ({
   tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-  legend: { data: ['总幅数', '工单数'] },
-  grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
-  xAxis: { type: 'category', data: [] as string[] },
+  legend: { data: ['总幅数', '工单数', '车辆数'], top: 5 },
+  grid: { left: '3%', right: '4%', bottom: '8%', containLabel: true },
+  toolbox: {
+    show: true,
+    right: 10,
+    feature: { saveAsImage: { name: '门店对比' } }
+  },
+  xAxis: { type: 'category', data: [] as string[], axisLabel: { interval: 0, rotate: 0 } },
   yAxis: [
     { type: 'value', name: '幅数' },
-    { type: 'value', name: '工单数' }
+    { type: 'value', name: '数量' }
   ],
   series: [
-    { name: '总幅数', type: 'bar', data: [] as number[], itemStyle: { color: '#5470c6' } },
-    { name: '工单数', type: 'bar', yAxisIndex: 1, data: [] as number[], itemStyle: { color: '#91cc75' } }
+    { name: '总幅数', type: 'bar', data: [] as number[], itemStyle: { color: '#5470c6' }, label: { show: true, position: 'top', formatter: '{c}' } },
+    { name: '工单数', type: 'bar', yAxisIndex: 1, data: [] as number[], itemStyle: { color: '#91cc75' } },
+    { name: '车辆数', type: 'bar', yAxisIndex: 1, data: [] as number[], itemStyle: { color: '#fac858' } }
   ]
 }));
 
@@ -159,11 +213,13 @@ function updateShopComparisonChart() {
   const shopNames = shopComparison.value.map(s => s.shopName);
   const paintCounts = shopComparison.value.map(s => Number(s.totalPaintCount || 0));
   const orderCounts = shopComparison.value.map(s => Number(s.totalOrders || 0));
+  const vehicleCounts = shopComparison.value.map(s => Number(s.totalVehicles || 0));
 
   updateShopComparisonChartOptions(opts => {
     opts.xAxis.data = shopNames;
     opts.series[0].data = paintCounts;
     opts.series[1].data = orderCounts;
+    opts.series[2].data = vehicleCounts;
     return opts;
   });
 }
@@ -171,8 +227,13 @@ function updateShopComparisonChart() {
 // 3. 年度趋势折线图
 const { domRef: yearTrendChartRef, updateOptions: updateYearTrendChartOptions } = useEcharts(() => ({
   tooltip: { trigger: 'axis' },
-  legend: { data: ['总幅数', '工单数'] },
-  grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+  legend: { data: ['总幅数', '工单数', '待审核幅数', '已审核幅数'], top: 5 },
+  grid: { left: '3%', right: '4%', bottom: '8%', containLabel: true },
+  toolbox: {
+    show: true,
+    right: 10,
+    feature: { saveAsImage: { name: '年度趋势' } }
+  },
   xAxis: { type: 'category', data: [] as string[], name: '月份' },
   yAxis: [
     { type: 'value', name: '幅数' },
@@ -180,7 +241,9 @@ const { domRef: yearTrendChartRef, updateOptions: updateYearTrendChartOptions } 
   ],
   series: [
     { name: '总幅数', type: 'line', smooth: true, data: [] as number[], itemStyle: { color: '#5470c6' }, areaStyle: { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: 'rgba(84,112,198,0.3)' }, { offset: 1, color: 'rgba(84,112,198,0.05)' }] } } },
-    { name: '工单数', type: 'line', smooth: true, yAxisIndex: 1, data: [] as number[], itemStyle: { color: '#91cc75' } }
+    { name: '工单数', type: 'line', smooth: true, yAxisIndex: 1, data: [] as number[], itemStyle: { color: '#91cc75' } },
+    { name: '待审核幅数', type: 'bar', stack: 'audit', data: [] as number[], itemStyle: { color: '#f0a020' }, barWidth: 16 },
+    { name: '已审核幅数', type: 'bar', stack: 'audit', data: [] as number[], itemStyle: { color: '#18a058' }, barWidth: 16 }
   ]
 }));
 
@@ -190,11 +253,15 @@ function updateYearTrendChart() {
   const months = yearOverview.value.map(d => `${d.month}月`);
   const paintCounts = yearOverview.value.map(d => Number(d.totalPaintCount || 0));
   const orderCounts = yearOverview.value.map(d => Number(d.totalOrders || 0));
+  const pendingPaintCounts = yearOverview.value.map(d => Number(d.pendingPaintCount || 0));
+  const auditedPaintCounts = yearOverview.value.map(d => Number(d.auditedPaintCount || 0));
 
   updateYearTrendChartOptions(opts => {
     opts.xAxis.data = months;
     opts.series[0].data = paintCounts;
     opts.series[1].data = orderCounts;
+    opts.series[2].data = pendingPaintCounts;
+    opts.series[3].data = auditedPaintCounts;
     return opts;
   });
 }
@@ -202,13 +269,23 @@ function updateYearTrendChart() {
 // 4. 项目类别饼图
 const { domRef: categoryChartRef, updateOptions: updateCategoryChartOptions } = useEcharts(() => ({
   tooltip: { trigger: 'item', formatter: '{b}: {c}幅 ({d}%)' },
-  legend: { orient: 'vertical', left: 'left', type: 'scroll' },
+  legend: { orient: 'vertical', left: 'left', type: 'scroll', top: 20 },
+  toolbox: {
+    show: true,
+    right: 10,
+    feature: { saveAsImage: { name: '项目类别分布' } }
+  },
   series: [{
     type: 'pie',
     radius: ['40%', '70%'],
+    center: ['60%', '55%'],
     avoidLabelOverlap: true,
     itemStyle: { borderRadius: 6, borderColor: '#fff', borderWidth: 2 },
     label: { show: true, formatter: '{b}\n{d}%' },
+    emphasis: {
+      label: { show: true, fontSize: 14, fontWeight: 'bold' },
+      itemStyle: { shadowBlur: 10, shadowOffsetX: 0, shadowColor: 'rgba(0, 0, 0, 0.5)' }
+    },
     data: [] as { name: string; value: number }[]
   }]
 }));
@@ -278,6 +355,30 @@ async function handleExportExcel() {
     exporting.value = false;
   }
 }
+
+async function handleExportPdf() {
+  if (!selectedSettlementMonth.value) {
+    window.$message?.warning('请先选择结算月');
+    return;
+  }
+  exporting.value = true;
+  try {
+    const { data, error } = await exportStatisticsPdf(selectedSettlementMonth.value, selectedShopId.value || undefined);
+    if (error) return;
+    if (data) {
+      const blob = data instanceof Blob ? data : new Blob([data as any], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `幅数统计_${selectedSettlementMonth.value}.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+      window.$message?.success('PDF导出成功');
+    }
+  } finally {
+    exporting.value = false;
+  }
+}
 </script>
 
 <template>
@@ -310,14 +411,27 @@ async function handleExportExcel() {
           <template #icon><icon-ic-outline-file-download /></template>
           导出Excel
         </NButton>
+        <NButton type="warning" :loading="exporting" @click="handleExportPdf">
+          <template #icon><icon-ic-outline-picture-as-pdf /></template>
+          导出PDF
+        </NButton>
       </NSpace>
     </NCard>
 
-    <NGrid :cols="4" :x-gap="16" :y-gap="16">
+    <NGrid :cols="6" :x-gap="16" :y-gap="16">
       <NGi>
         <NCard :bordered="true" size="small">
           <NStatistic label="门店数量" :value="totalStats.shopCount">
             <template #prefix><icon-ic-outline-store /></template>
+          </NStatistic>
+        </NCard>
+      </NGi>
+      <NGi>
+        <NCard :bordered="true" size="small">
+          <NStatistic label="车辆总数">
+            <NNumberAnimation :value="totalStats.totalVehicles" />
+            <template #prefix><icon-ic-outline-directions-car /></template>
+            <template #suffix>台</template>
           </NStatistic>
         </NCard>
       </NGi>
@@ -340,10 +454,68 @@ async function handleExportExcel() {
       </NGi>
       <NGi>
         <NCard :bordered="true" size="small">
-          <NStatistic label="平均每单幅数" :value="totalStats.totalOrders > 0 ? +(totalStats.totalPaintCount / totalStats.totalOrders).toFixed(2) : 0" :precision="2">
+          <NStatistic label="台均幅数" :value="totalStats.avgPaintPerVehicle" :precision="2">
+            <template #prefix><icon-ic-outline-calculate /></template>
+            <template #suffix>幅/台</template>
+          </NStatistic>
+        </NCard>
+      </NGi>
+      <NGi>
+        <NCard :bordered="true" size="small">
+          <NStatistic label="单均幅数" :value="totalStats.avgPaintPerOrder" :precision="2">
             <template #prefix><icon-ic-outline-calculate /></template>
             <template #suffix>幅/单</template>
           </NStatistic>
+        </NCard>
+      </NGi>
+    </NGrid>
+
+    <!-- 待审核/已审核统计 -->
+    <NGrid :cols="2" :x-gap="16">
+      <NGi>
+        <NCard title="待审核" :bordered="true" size="small" style="border-left: 3px solid #f0a020;">
+          <NGrid :cols="3" :x-gap="12">
+            <NGi>
+              <NStatistic label="工单数">
+                <NNumberAnimation :value="totalStats.pendingOrders" />
+              </NStatistic>
+            </NGi>
+            <NGi>
+              <NStatistic label="车牌数">
+                <NNumberAnimation :value="totalStats.pendingVehicles" />
+                <template #suffix>台</template>
+              </NStatistic>
+            </NGi>
+            <NGi>
+              <NStatistic label="幅数">
+                <NNumberAnimation :value="totalStats.pendingPaintCount" :precision="1" />
+                <template #suffix>幅</template>
+              </NStatistic>
+            </NGi>
+          </NGrid>
+        </NCard>
+      </NGi>
+      <NGi>
+        <NCard title="已审核" :bordered="true" size="small" style="border-left: 3px solid #18a058;">
+          <NGrid :cols="3" :x-gap="12">
+            <NGi>
+              <NStatistic label="工单数">
+                <NNumberAnimation :value="totalStats.auditedOrders" />
+              </NStatistic>
+            </NGi>
+            <NGi>
+              <NStatistic label="车牌数">
+                <NNumberAnimation :value="totalStats.auditedVehicles" />
+                <template #suffix>台</template>
+              </NStatistic>
+            </NGi>
+            <NGi>
+              <NStatistic label="幅数">
+                <NNumberAnimation :value="totalStats.auditedPaintCount" :precision="1" />
+                <template #suffix>幅</template>
+              </NStatistic>
+            </NGi>
+          </NGrid>
         </NCard>
       </NGi>
     </NGrid>
@@ -403,7 +575,7 @@ async function handleExportExcel() {
             size="small"
             :bordered="true"
             :max-height="400"
-            :scroll-x="500"
+            :scroll-x="1300"
           />
           <NEmpty v-if="!shopComparison.length && !loading" description="暂无数据" />
         </NCard>
@@ -419,7 +591,7 @@ async function handleExportExcel() {
             size="small"
             :bordered="true"
             :max-height="400"
-            :scroll-x="280"
+            :scroll-x="900"
           />
           <NEmpty v-if="!yearOverview.length && !loading" description="暂无数据" />
         </NCard>

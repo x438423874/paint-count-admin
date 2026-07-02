@@ -66,7 +66,11 @@ function closeDrawer() {
 }
 
 async function handleSubmit() {
-  await validate();
+  try {
+    await validate();
+  } catch {
+    return;
+  }
 
   const submitData = {
     name: model.name,
@@ -77,11 +81,17 @@ async function handleSubmit() {
 
   if (props.operateType === 'add') {
     const { error } = await createPaintCategory(submitData);
-    if (error) return;
+    if (error) {
+      window.$message?.error('创建失败');
+      return;
+    }
     window.$message?.success('创建成功');
   } else {
     const { error } = await updatePaintCategory(props.rowData.id, submitData);
-    if (error) return;
+    if (error) {
+      window.$message?.error('更新失败');
+      return;
+    }
     window.$message?.success('更新成功');
   }
   closeDrawer();

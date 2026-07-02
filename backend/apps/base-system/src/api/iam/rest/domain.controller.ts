@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import { CommandBus, QueryBus } from '@nestjs/cqrs';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
 
 import { DomainCreateCommand } from '@app/base-system/lib/bounded-contexts/iam/domain/commands/domain-create.command';
 import { DomainDeleteCommand } from '@app/base-system/lib/bounded-contexts/iam/domain/commands/domain-delete.command';
@@ -66,7 +67,7 @@ export class DomainController {
   @ApiResponse({ status: 403, description: 'Forbidden.' })
   async createDomain(
     @Body() dto: DomainCreateDto,
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ): Promise<ApiRes<null>> {
     await this.commandBus.execute(
       new DomainCreateCommand(
@@ -88,7 +89,7 @@ export class DomainController {
   @ApiResponse({ status: 403, description: 'Forbidden.' })
   async updateDomain(
     @Body() dto: DomainUpdateDto,
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ): Promise<ApiRes<null>> {
     await this.commandBus.execute(
       new DomainUpdateCommand(

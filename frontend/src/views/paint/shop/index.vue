@@ -4,6 +4,14 @@ import { ref } from 'vue';
 import { fetchPaintShopPage, deletePaintShop, fetchStandardTemplateList, applyTemplateToShop } from '@/service/api';
 import { useTable, useTableOperate } from '@/hooks/common/table';
 import ShopOperateDrawer from './modules/shop-operate-drawer.vue';
+import OcrTemplateEditor from './modules/ocr-template-editor.vue';
+import OcrFieldLabelsEditor from './modules/ocr-field-labels-editor.vue';
+import { canManageShop, canEdit } from '@/utils/permission';
+
+// 权限控制：门店的创建/编辑/删除仅超管可操作
+const allowManageShop = canManageShop();
+// OCR 模板/字段别名配置：除只读/财务外都可
+const allowEditShop = canEdit();
 
 const {
   columns,
@@ -77,7 +85,7 @@ const {
         return (
           <NSpace align="center" size={4}>
             <NTag size="small" type="warning">未关联</NTag>
-            {showTemplateSelect.value === row.id ? (
+            {allowManageShop && showTemplateSelect.value === row.id ? (
               <NSelect
                 size="small"
                 style="width: 140px"
@@ -87,11 +95,11 @@ const {
                 onUpdateValue={(val: string) => handleAssociateTemplate(row.id, val)}
                 onBlur={() => { showTemplateSelect.value = ''; }}
               />
-            ) : (
+            ) : allowManageShop ? (
               <NButton type="primary" text size="tiny" onClick={() => { showTemplateSelect.value = row.id; }}>
                 关联
               </NButton>
-            )}
+            ) : null}
           </NSpace>
         );
       }
@@ -111,22 +119,36 @@ const {
       key: 'operate',
       title: '操作',
       align: 'center',
-      width: 160,
+      width: 300,
       render: (row: any) => (
         <div class="flex-center gap-8px">
-          <NButton type="primary" ghost size="small" onClick={() => edit(row.id)}>
-            编辑
-          </NButton>
-          <NPopconfirm onPositiveClick={() => handleDelete(row.id)}>
-            {{
-              default: () => '确认删除此门店？',
-              trigger: () => (
-                <NButton type="error" ghost size="small">
-                  删除
-                </NButton>
-              )
-            }}
-          </NPopconfirm>
+          {allowManageShop && (
+            <NButton type="primary" ghost size="small" onClick={() => edit(row.id)}>
+              编辑
+            </NButton>
+          )}
+          {allowEditShop && (
+            <NButton type="warning" ghost size="small" onClick={() => openOcrTemplateEditor(row)}>
+              OCR模板
+            </NButton>
+          )}
+          {allowEditShop && (
+            <NButton type="info" ghost size="small" onClick={() => openFieldLabelsEditor(row)}>
+              字段别名
+            </NButton>
+          )}
+          {allowManageShop && (
+            <NPopconfirm onPositiveClick={() => handleDelete(row.id)}>
+              {{
+                default: () => '确认删除此门店？',
+                trigger: () => (
+                  <NButton type="error" ghost size="small">
+                    删除
+                  </NButton>
+                )
+              }}
+            </NPopconfirm>
+          )}
         </div>
       )
     }
@@ -141,10 +163,32 @@ const {
   handleEdit,
   checkedRowKeys,
   onDeleted
-} = useTableOperate(data, getData);
+} = useTableOperate(data as any, getData);
 
 function edit(id: string) {
   handleEdit(id);
+}
+
+// OCR 模板编辑器
+const ocrTemplateVisible = ref(false);
+const ocrTemplateShopId = ref('');
+const ocrTemplateShopName = ref('');
+
+function openOcrTemplateEditor(row: any) {
+  ocrTemplateShopId.value = row.id;
+  ocrTemplateShopName.value = row.name;
+  ocrTemplateVisible.value = true;
+}
+
+// OCR 字段别名编辑器
+const fieldLabelsVisible = ref(false);
+const fieldLabelsShopId = ref('');
+const fieldLabelsShopName = ref('');
+
+function openFieldLabelsEditor(row: any) {
+  fieldLabelsShopId.value = row.id;
+  fieldLabelsShopName.value = row.name;
+  fieldLabelsVisible.value = true;
 }
 
 // 一键关联模板
@@ -190,7 +234,16 @@ async function handleDelete(id: string) {
           :loading="loading"
           @add="handleAdd"
           @refresh="getData"
-        />
+        >
+          <template v-if="allowManageShop" #default>
+            <NButton size="small" ghost type="primary" @click="handleAdd">
+              <template #icon>
+                <icon-ic-round-plus class="text-icon" />
+              </template>
+              新增
+            </NButton>
+          </template>
+        </TableHeaderOperation>
       </template>
 
       <NAlert type="info" class="mb-12px">
@@ -216,6 +269,18 @@ async function handleDelete(id: string) {
         :operate-type="operateType"
         :row-data="editingData"
         @submitted="getDataByPage"
+      />
+
+      <OcrTemplateEditor
+        v-model:visible="ocrTemplateVisible"
+        :shop-id="ocrTemplateShopId"
+        :shop-name="ocrTemplateShopName"
+      />
+
+      <OcrFieldLabelsEditor
+        v-model:visible="fieldLabelsVisible"
+        :shop-id="fieldLabelsShopId"
+        :shop-name="fieldLabelsShopName"
       />
     </NCard>
   </div>

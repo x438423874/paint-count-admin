@@ -1,5 +1,6 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '@lib/shared/prisma/prisma.service';
+import { MetricsService } from '@lib/shared/metrics/metrics.service';
 import * as XLSX from 'xlsx';
 import { WorkOrderService } from './work-order.service';
 
@@ -59,6 +60,7 @@ export class WorkOrderExcelService {
   constructor(
     private prisma: PrismaService,
     private workOrderService: WorkOrderService,
+    private metricsService: MetricsService,
   ) {}
 
   /** 获取门店的模板配置，无则返回默认 */
@@ -261,6 +263,7 @@ export class WorkOrderExcelService {
       }
     }
 
+    this.metricsService.recordExcelImport(shopId, results.success > 0);
     return results;
   }
 

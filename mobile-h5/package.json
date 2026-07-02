@@ -1,0 +1,81 @@
+{
+  "name": "vue3-vant-mobile",
+  "type": "module",
+  "version": "3.15.0",
+  "packageManager": "pnpm@11.5.1",
+  "description": "An mobile web apps template based on the Vue 3 ecosystem",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.22.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build:dev": "vue-tsc --noEmit && vite build --mode development",
+    "build:pro": "vue-tsc --noEmit && vite build --mode production",
+    "preview": "vite preview",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "release": "bumpp --commit --push --tag",
+    "typecheck": "vue-tsc --noEmit",
+    "commitlint": "commitlint --edit",
+    "prepare": "simple-git-hooks"
+  },
+  "dependencies": {
+    "@unhead/vue": "3.1.4",
+    "@vant/touch-emulator": "^1.5.0",
+    "@vant/use": "^1.6.0",
+    "@vueuse/core": "^14.3.0",
+    "axios": "^1.18.0",
+    "nprogress": "^0.2.0",
+    "pinia": "^3.0.4",
+    "pinia-plugin-persistedstate": "^4.7.1",
+    "vant": "^4.9.24",
+    "vconsole": "^3.15.1",
+    "vue": "^3.5.38",
+    "vue-i18n": "^11.4.6",
+    "vue-router": "^5.1.0"
+  },
+  "devDependencies": {
+    "@antfu/eslint-config": "9.0.0",
+    "@commitlint/cli": "^21.0.2",
+    "@commitlint/config-conventional": "^21.0.2",
+    "@commitlint/types": "^21.0.1",
+    "@iconify-json/carbon": "^1.2.23",
+    "@intlify/unplugin-vue-i18n": "^11.2.4",
+    "@types/node": "^25.9.3",
+    "@types/nprogress": "^0.2.3",
+    "@unocss/eslint-config": "66.7.2",
+    "@vant/auto-import-resolver": "^1.3.0",
+    "@vitejs/plugin-legacy": "^8.0.2",
+    "@vitejs/plugin-vue": "^6.0.7",
+    "autoprefixer": "^10.5.0",
+    "bumpp": "^11.1.0",
+    "cross-env": "^10.1.0",
+    "eslint": "^10.5.0",
+    "eslint-plugin-format": "^2.0.1",
+    "less": "^4.6.6",
+    "lint-staged": "^17.0.7",
+    "postcss-mobile-forever": "^5.0.0",
+    "simple-git-hooks": "^2.13.1",
+    "typescript": "^6.0.3",
+    "unocss": "66.7.2",
+    "unplugin-auto-import": "^21.0.0",
+    "unplugin-vue-components": "^32.1.0",
+    "vite": "^8.0.16",
+    "vite-plugin-pwa": "^1.3.0",
+    "vite-plugin-sitemap": "^0.8.2",
+    "vite-plugin-vconsole": "^2.1.1",
+    "vite-plugin-vue-devtools": "^8.1.3",
+    "vue-tsc": "^3.3.5"
+  },
+  "resolutions": {
+    "vite": "^8.0.16"
+  },
+  "simple-git-hooks": {
+    "pre-commit": "pnpm lint-staged",
+    "commit-msg": "pnpm commitlint $1"
+  },
+  "lint-staged": {
+    "*": "eslint --fix"
+  }
+}

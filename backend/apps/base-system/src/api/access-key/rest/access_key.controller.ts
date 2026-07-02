@@ -10,6 +10,7 @@ import {
 } from '@nestjs/common';
 import { CommandBus, QueryBus } from '@nestjs/cqrs';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
 
 import { AccessKeyCreateCommand } from '@app/base-system/lib/bounded-contexts/access-key/commands/access_key-create.command';
 import { AccessKeyDeleteCommand } from '@app/base-system/lib/bounded-contexts/access-key/commands/access_key-delete.command';
@@ -42,7 +43,7 @@ export class AccessKeyController {
   @ApiResponseDoc({ type: AccessKeyReadModel, isPaged: true })
   async page(
     @Query() queryDto: PageAccessKeysQueryDto,
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ): Promise<ApiRes<PaginationResult<AccessKeyProperties>>> {
     const query = new PageAccessKeysQuery({
       current: queryDto.current,
@@ -66,11 +67,11 @@ export class AccessKeyController {
   @ApiResponse({ status: 403, description: 'Forbidden.' })
   async createAccessKey(
     @Body() dto: AccessKeyCreateDto,
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ): Promise<ApiRes<null>> {
     await this.commandBus.execute(
       new AccessKeyCreateCommand(
-        req.user.domain === BUILT_IN ? dto.domain : req.user.domain,
+        req.user.domain === BUILT_IN ? dto.domain! : req.user.domain!,
         dto.description,
         req.user.uid,
       ),

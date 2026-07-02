@@ -77,7 +77,24 @@ export class AuthenticationService {
     this.publisher.mergeObjectContext(tokensAggregate);
     tokensAggregate.commit();
 
+    // refresh token 成功后同步刷新 Redis 中的角色缓存，避免 token 未过期但角色缓存已过期
+    await this.refreshUserRolesCache(tokensAggregate.userId);
+
     return tokens;
+  }
+
+  /**
+   * 刷新 Redis 中用户角色缓存，保持与 token 生命周期一致
+   */
+  private async refreshUserRolesCache(userId: string) {
+    const result = await this.repository.findRolesByUserId(userId);
+    const roles = Array.from(result);
+    const key = `${CacheConstant.AUTH_TOKEN_PREFIX}${userId}`;
+    await RedisUtility.instance.del(key);
+    if (roles.length > 0) {
+      await RedisUtility.instance.sadd(key, ...roles);
+    }
+    await RedisUtility.instance.expire(key, this.securityConfig.jwtExpiresIn);
   }
 
   async execPasswordLogin(
@@ -132,11 +149,7 @@ export class AuthenticationService {
     this.publisher.mergeObjectContext(userAggregate);
     userAggregate.commit();
 
-    const result = await this.repository.findRolesByUserId(user.id);
-    const key = `${CacheConstant.AUTH_TOKEN_PREFIX}${user.id}`;
-    await RedisUtility.instance.del(key);
-    await RedisUtility.instance.sadd(key, ...result);
-    await RedisUtility.instance.expire(key, this.securityConfig.jwtExpiresIn);
+    await this.refreshUserRolesCache(user.id);
 
     return tokens;
   }

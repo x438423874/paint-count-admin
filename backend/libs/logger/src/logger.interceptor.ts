@@ -9,6 +9,7 @@ import { FastifyRequest, FastifyReply } from 'fastify';
 import { WINSTON_MODULE_PROVIDER } from 'nest-winston';
 import { Observable } from 'rxjs';
 import { tap } from 'rxjs/operators';
+import { randomUUID } from 'crypto';
 import { Logger } from 'winston';
 
 interface LogEntry {
@@ -23,6 +24,8 @@ interface LogEntry {
   statusCode?: number;
   error?: any;
   duration?: number;
+  requestId?: string;
+  userId?: string;
 }
 
 @Injectable()
@@ -49,6 +52,11 @@ export class LoggerInterceptor implements NestInterceptor {
     const { method, url } = request;
     const now = Date.now();
 
+    // 生成或复用 requestId，用于关联同一请求的 Request/Response/Error 日志
+    const requestId = (request.headers['x-request-id'] as string) || randomUUID();
+    // 从已认证的用户中提取 userId（如有）
+    const userId = (request as any).user?.id || (request as any).user?.userId;
+
     const sanitizedBody = this.sanitizeData(request.body);
     const sanitizedQuery = this.sanitizeData(request.query);
     const sanitizedParams = this.sanitizeData(request.params);
@@ -63,12 +71,16 @@ export class LoggerInterceptor implements NestInterceptor {
       query: sanitizedQuery,
       params: sanitizedParams,
       headers: sanitizedHeaders,
+      requestId,
+      userId,
     });
 
     return next.handle().pipe(
       tap({
-        next: (data: any) => {
+        next: (_data: any) => {
           const response = context.switchToHttp().getResponse<FastifyReply>();
+          // 将 requestId 写入响应头，方便前端排查问题
+          response.header('x-request-id', requestId);
           this.addToBuffer({
             type: 'Response',
             timestamp: Date.now(),
@@ -76,6 +88,8 @@ export class LoggerInterceptor implements NestInterceptor {
             url,
             statusCode: response.statusCode,
             duration: Date.now() - now,
+            requestId,
+            userId,
           });
         },
         error: (error: any) => {
@@ -87,8 +101,11 @@ export class LoggerInterceptor implements NestInterceptor {
             error: {
               message: error.message,
               stack: error.stack,
+              statusCode: error.status || error.statusCode,
             },
             duration: Date.now() - now,
+            requestId,
+            userId,
           });
         },
       }),
@@ -119,10 +136,13 @@ export class LoggerInterceptor implements NestInterceptor {
     const logs = this.logBuffer.splice(0, this.logBuffer.length);
 
     const requests = logs.filter((log) => log.type === 'Request');
+    const responses = logs.filter((log) => log.type === 'Response');
     const errors = logs.filter((log) => log.type === 'Error');
 
     requests.forEach((log) => {
       this.logger.info('HTTP Request', {
+        requestId: log.requestId,
+        userId: log.userId,
         method: log.method,
         url: log.url,
         body: log.body,
@@ -132,8 +152,22 @@ export class LoggerInterceptor implements NestInterceptor {
       });
     });
 
+    responses.forEach((log) => {
+      this.logger.info('HTTP Response', {
+        requestId: log.requestId,
+        userId: log.userId,
+        method: log.method,
+        url: log.url,
+        statusCode: log.statusCode,
+        duration: log.duration,
+        timestamp: new Date(log.timestamp).toISOString(),
+      });
+    });
+
     errors.forEach((log) => {
       this.logger.error('Request Error', {
+        requestId: log.requestId,
+        userId: log.userId,
         method: log.method,
         url: log.url,
         error: log.error,

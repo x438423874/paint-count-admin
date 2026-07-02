@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { QueryBus } from '@nestjs/cqrs';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
 
 import { CasbinRuleApiEndpointService } from '@app/base-system/lib/bounded-contexts/api-endpoint/api-endpoint/application/service/casbin-rule-api-endpoint.service';
 import {
@@ -76,7 +77,7 @@ export class EndpointController {
   })
   async authApiEndpoint(
     @Param('roleCode') roleCode: string,
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ) {
     const result = await this.casbinRuleApiEndpointService.authApiEndpoint(
       roleCode,

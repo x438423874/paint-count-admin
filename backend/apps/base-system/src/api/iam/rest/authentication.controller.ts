@@ -10,6 +10,7 @@ import { CacheConstant } from '@lib/constants/cache.constant';
 import { USER_AGENT } from '@lib/constants/rest.constant';
 import { Public } from '@lib/infra/decorators/public.decorator';
 import { ApiRes } from '@lib/infra/rest/res.response';
+import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
 import { Ip2regionService } from '@lib/shared/ip2region/ip2region.service';
 import { RedisUtility } from '@lib/shared/redis/redis.util';
 import { IAuthentication } from '@lib/typings/global';
@@ -83,7 +84,7 @@ export class AuthenticationController {
   }
 
   @Get('getUserInfo')
-  async getProfile(@Request() req: any): Promise<ApiRes<any>> {
+  async getProfile(@Request() req: AuthenticatedRequest): Promise<ApiRes<any>> {
     const user: IAuthentication = req.user;
     const userRoles = await RedisUtility.instance.smembers(
       `${CacheConstant.AUTH_TOKEN_PREFIX}${user.uid}`,

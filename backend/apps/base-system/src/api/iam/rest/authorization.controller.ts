@@ -9,6 +9,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
 
 import { AuthorizationService } from '@app/base-system/lib/bounded-contexts/iam/authentication/application/service/authorization.service';
 import { RoleAssignPermissionCommand } from '@app/base-system/lib/bounded-contexts/iam/authentication/commands/role-assign-permission.command';
@@ -84,7 +85,7 @@ export class AuthorizationController {
     description:
       'Retrieve user-specific routes based on their roles and domain.',
   })
-  async getUserRoutes(@Request() req: any): Promise<ApiRes<UserRoute>> {
+  async getUserRoutes(@Request() req: AuthenticatedRequest): Promise<ApiRes<UserRoute>> {
     const user: IAuthentication = req.user;
     const userRoleCode = await RedisUtility.instance.smembers(
       `${CacheConstant.AUTH_TOKEN_PREFIX}${user.uid}`,

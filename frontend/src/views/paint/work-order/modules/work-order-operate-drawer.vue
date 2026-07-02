@@ -1,11 +1,10 @@
 <script setup lang="ts">
 import { computed, reactive, watch, ref, nextTick, h } from 'vue';
-import { NSelect, NInputNumber, NCheckbox, NButton, NText } from 'naive-ui';
-import { createWorkOrder, updateWorkOrder, fetchPaintShopList, fetchShopCategoriesWithStandard, uploadWorkOrderImage, removeWorkOrderImage, fetchSpecialPaintList, ocrRecognizeImage, getSettlementHistory, addSettlementRecord } from '@/service/api';
+import { NSelect, NInputNumber, NCheckbox, NButton, NText, NImage } from 'naive-ui';
+import { createWorkOrder, updateWorkOrder, fetchPaintShopList, fetchShopCategoriesWithStandard, fetchSpecialPaintList, uploadWorkOrderImage, removeWorkOrderImage, ocrRecognizeImage, getSettlementHistory, addSettlementRecord } from '@/service/api';
+import type { PaintOrderStatus } from '@/service/api/paint';
 import { useFormRules, useNaiveForm } from '@/hooks/common/form';
 import { $t } from '@/locales';
-import { recognizeFromCanvas, cropImageRegion } from '@/utils/ocr';
-import type { CropRegion } from '@/utils/ocr';
 import { compressDualImage } from '@/utils/image-compress';
 
 defineOptions({
@@ -68,7 +67,7 @@ interface FormModel {
   contactPerson: string;
   description: string;
   remark: string;
-  status: string;
+  status: PaintOrderStatus;
   settlementMonth: string;
   items: OrderItem[];
 }
@@ -111,7 +110,7 @@ async function loadShops() {
 loadShops();
 
 async function loadSpecialPaints() {
-  const { data, error } = await fetchSpecialPaintList(true);
+  const { data, error } = await fetchSpecialPaintList(undefined, true);
   if (!error && data) {
     specialPaints.value = data.map((sp: any) => ({ id: sp.id, name: sp.name, multiplier: Number(sp.multiplier) }));
   }
@@ -297,7 +296,7 @@ const totalPaintCount = computed(() => {
 interface ImageItem {
   id?: string;
   url: string;
-  thumbnailUrl?: string;
+  thumbnailUrl?: string | null;
   imageType: string;
   status: 'finished' | 'uploading' | 'error';
   file?: File;
@@ -317,6 +316,10 @@ const isDrawing = ref(false);
 const drawStart = ref({ x: 0, y: 0 });
 const drawEnd = ref({ x: 0, y: 0 });
 const hasCropRegion = ref(false);
+
+// OCR 冲突确认弹窗
+const showConflictModal = ref(false);
+const conflictFields = ref<Array<{ key: string; label: string; oldValue: string; newValue: string; checked: boolean }>>([]);
 
 // 获取图片的显示URL
 // 列表展示用缩略图（加载快），OCR用高清图
@@ -353,6 +356,32 @@ function openOcrModal(index: number) {
     // OCR 用高清图
     imgEl.src = getHdImageUrl(img);
   });
+}
+
+// 快速OCR识别：直接对第一张图片进行全图识别，跳过弹窗
+async function ocrQuickRecognize() {
+  if (images.value.length === 0) {
+    window.$message?.warning('请先上传工单图片');
+    return;
+  }
+  ocrImageIndex.value = 0;
+
+  // 预加载图片到 ocrImgRef，以防 fetch 失败时降级到 canvas 方式
+  const img = images.value[0];
+  if (img && !img.file) {
+    await new Promise<void>((resolve) => {
+      const imgEl = new Image();
+      imgEl.crossOrigin = 'anonymous';
+      imgEl.onload = () => {
+        ocrImgRef.value = imgEl;
+        resolve();
+      };
+      imgEl.onerror = () => resolve();
+      imgEl.src = getHdImageUrl(img);
+    });
+  }
+
+  await ocrRecognizeFull();
 }
 
 // 绘制OCR画布（图片+可选框选区域）
@@ -424,116 +453,125 @@ function onOcrMouseUp() {
   isDrawing.value = false;
 }
 
-// 全图OCR识别（调用后端API）
+// 全图OCR识别（调用后端 PaddleOCR API）
 async function ocrRecognizeFull() {
   const img = images.value[ocrImageIndex.value];
   if (!img?.file && !img?.url) return;
 
   ocrLoading.value = true;
   try {
-    // 优先使用后端OCR识别
-    if (img.file) {
-      // 新上传的图片，直接用文件调后端
-      const formData = new FormData();
-      formData.append('file', img.file);
-      const { data, error } = await ocrRecognizeImage(formData);
-      if (!error && data) {
-        const result = data;
-        if (result.plateNumber) {
-          model.plateNumber = result.plateNumber;
-          window.$message?.success(`识别到车牌号：${result.plateNumber}`);
-        }
-        if (result.orderNo && !model.orderNo) {
-          model.orderNo = result.orderNo;
-          window.$message?.success(`识别到工单号：${result.orderNo}`);
-        }
-        if (!result.plateNumber && !result.orderNo) {
-          window.$message?.warning('未识别到车牌号或工单号，请尝试框选标记区域识别');
-        }
-        showOcrModal.value = false;
-      } else {
-        window.$message?.error('后端OCR识别失败，尝试前端识别...');
-        // 降级到前端识别
-        const result = await recognizeFromCanvas(getImageCanvas());
-        if (result.plateNumber) {
-          model.plateNumber = result.plateNumber;
-          window.$message?.success(`识别到车牌号：${result.plateNumber}`);
-        }
-        if (result.orderNo && !model.orderNo) {
-          model.orderNo = result.orderNo;
-          window.$message?.success(`识别到工单号：${result.orderNo}`);
-        }
-        if (!result.plateNumber && !result.orderNo) {
-          window.$message?.warning('未识别到车牌号或工单号');
-        }
-        showOcrModal.value = false;
-      }
-    } else {
-      // 已有图片（URL），从canvas获取数据调后端
-      const imgEl = ocrImgRef.value;
-      if (!imgEl) return;
-      const canvas = document.createElement('canvas');
-      canvas.width = imgEl.naturalWidth;
-      canvas.height = imgEl.naturalHeight;
-      canvas.getContext('2d')!.drawImage(imgEl, 0, 0);
+    let blob: Blob | null = null;
 
-      // 转为Blob发送到后端
-      const blob = await new Promise<Blob>((resolve) => {
-        canvas.toBlob((b) => resolve(b!), 'image/png');
-      });
-      const formData = new FormData();
-      formData.append('file', blob, 'ocr_image.png');
-      const { data, error } = await ocrRecognizeImage(formData);
-      if (!error && data) {
-        const result = data;
-        if (result.plateNumber) {
-          model.plateNumber = result.plateNumber;
-          window.$message?.success(`识别到车牌号：${result.plateNumber}`);
+    if (img.file) {
+      // 新上传的图片，直接用文件
+      blob = img.file;
+    } else {
+      // 已有图片（URL），优先通过 fetch 下载原始图片（避免 canvas 跨域污染和质量损失）
+      try {
+        const hdUrl = getHdImageUrl(img);
+        const response = await fetch(hdUrl, { mode: 'cors' });
+        if (response.ok) {
+          blob = await response.blob();
         }
-        if (result.orderNo && !model.orderNo) {
-          model.orderNo = result.orderNo;
-          window.$message?.success(`识别到工单号：${result.orderNo}`);
+      } catch {
+        // fetch 失败（可能是跨域），降级到 canvas 方式
+        console.warn('fetch 图片失败，降级到 canvas 方式');
+      }
+
+      if (!blob) {
+        // fetch 失败，使用 canvas 方式
+        const imgEl = ocrImgRef.value;
+        if (!imgEl) {
+          window.$message?.error('无法获取图片');
+          return;
         }
-        if (!result.plateNumber && !result.orderNo) {
-          window.$message?.warning('未识别到车牌号或工单号，请尝试框选标记区域识别');
-        }
-        showOcrModal.value = false;
-      } else {
-        // 降级到前端识别
-        const result = await recognizeFromCanvas(canvas);
-        if (result.plateNumber) {
-          model.plateNumber = result.plateNumber;
-          window.$message?.success(`识别到车牌号：${result.plateNumber}`);
-        }
-        if (result.orderNo && !model.orderNo) {
-          model.orderNo = result.orderNo;
-          window.$message?.success(`识别到工单号：${result.orderNo}`);
-        }
-        if (!result.plateNumber && !result.orderNo) {
-          window.$message?.warning('未识别到车牌号或工单号');
-        }
-        showOcrModal.value = false;
+        const canvas = document.createElement('canvas');
+        canvas.width = imgEl.naturalWidth;
+        canvas.height = imgEl.naturalHeight;
+        canvas.getContext('2d')!.drawImage(imgEl, 0, 0);
+
+        blob = await new Promise<Blob>((resolve) => {
+          canvas.toBlob((b) => resolve(b!), 'image/png');
+        });
       }
     }
+
+    // 调用后端 PaddleOCR 识别
+    const formData = new FormData();
+    formData.append('file', blob, 'ocr_image.png');
+    if (model.shopId) formData.append('shopId', model.shopId);
+    const { data, error } = await ocrRecognizeImage(formData);
+    if (!error && data) {
+      applyOcrResult(data);
+      showOcrModal.value = false;
+    } else {
+      // 后端识别失败（通常是 PaddleOCR 服务未启动）
+      const errMsg = (error as any)?.message || 'OCR识别失败，请确认 PaddleOCR 服务已启动';
+      window.$message?.error(errMsg);
+    }
   } catch {
-    window.$message?.error('OCR识别失败');
+    window.$message?.error('OCR识别失败，请确认 PaddleOCR 服务已启动（端口 8500）');
   } finally {
     ocrLoading.value = false;
   }
 }
 
-function getImageCanvas(): HTMLCanvasElement {
-  const imgEl = ocrImgRef.value;
-  const canvas = document.createElement('canvas');
-  if (imgEl) {
-    canvas.width = imgEl.naturalWidth;
-    canvas.height = imgEl.naturalHeight;
-    canvas.getContext('2d')!.drawImage(imgEl, 0, 0);
+// 将OCR识别结果应用到表单（空字段直接填充，冲突字段弹窗确认）
+function applyOcrResult(result: { plateNumber?: string; orderNo?: string; customerName?: string; phone?: string; carModel?: string; date?: string }) {
+  const fieldMap: Array<{ key: 'plateNumber' | 'orderNo' | 'customerName' | 'phone' | 'carModel' | 'orderDate'; label: string; ocrKey: string }> = [
+    { key: 'plateNumber', label: '车牌号', ocrKey: 'plateNumber' },
+    { key: 'orderNo', label: '工单号', ocrKey: 'orderNo' },
+    { key: 'customerName', label: '客户名称', ocrKey: 'customerName' },
+    { key: 'phone', label: '联系电话', ocrKey: 'phone' },
+    { key: 'carModel', label: '车型', ocrKey: 'carModel' },
+    { key: 'orderDate', label: '日期', ocrKey: 'date' },
+  ];
+
+  const filledMessages: string[] = [];
+  const conflicts: Array<{ key: string; label: string; oldValue: string; newValue: string; checked: boolean }> = [];
+
+  for (const { key, label, ocrKey } of fieldMap) {
+    const ocrValue = ((result as any)[ocrKey] || '').trim();
+    if (!ocrValue) continue;
+
+    const currentValue = (model[key] || '').trim();
+    if (!currentValue) {
+      // 空字段直接填充
+      (model as any)[key] = ocrValue;
+      filledMessages.push(`${label}：${ocrValue}`);
+    } else if (currentValue !== ocrValue) {
+      // 冲突字段，加入确认列表
+      conflicts.push({ key, label, oldValue: currentValue, newValue: ocrValue, checked: false });
+    }
   }
-  return canvas;
+
+  if (filledMessages.length > 0) {
+    window.$message?.success(`已填充 ${filledMessages.join('、')}`);
+  }
+
+  if (conflicts.length > 0) {
+    // 有冲突字段，弹出确认弹窗
+    conflictFields.value = conflicts;
+    showConflictModal.value = true;
+  } else if (filledMessages.length === 0) {
+    window.$message?.warning('未识别到有效信息，请尝试框选标记区域识别');
+  }
 }
 
-// 框选区域OCR识别
+// 确认覆盖冲突字段
+function confirmConflictOverwrite() {
+  const selected = conflictFields.value.filter(f => f.checked);
+  for (const field of selected) {
+    (model as any)[field.key] = field.newValue;
+  }
+  if (selected.length > 0) {
+    window.$message?.success(`已覆盖 ${selected.map(f => f.label).join('、')}`);
+  }
+  showConflictModal.value = false;
+  conflictFields.value = [];
+}
+
+// 框选区域OCR识别（裁剪后调用后端 PaddleOCR API）
 async function ocrRecognizeCrop() {
   const imgEl = ocrImgRef.value;
   if (!imgEl || !hasCropRegion.value) return;
@@ -563,24 +601,44 @@ async function ocrRecognizeCrop() {
 
   ocrLoading.value = true;
   try {
-    // 直接从原图裁剪，传入原图坐标
-    const croppedCanvas = cropImageRegion(imgEl, region, imgEl.naturalWidth, imgEl.naturalHeight);
-    const result = await recognizeFromCanvas(croppedCanvas);
+    // 从原图裁剪区域，转为 blob 发送给后端 PaddleOCR
+    const cropCanvas = document.createElement('canvas');
+    cropCanvas.width = Math.round(region.width);
+    cropCanvas.height = Math.round(region.height);
+    const ctx = cropCanvas.getContext('2d')!;
+    ctx.drawImage(
+      imgEl,
+      Math.round(region.x),
+      Math.round(region.y),
+      Math.round(region.width),
+      Math.round(region.height),
+      0,
+      0,
+      cropCanvas.width,
+      cropCanvas.height
+    );
 
-    if (result.plateNumber) {
-      model.plateNumber = result.plateNumber;
-      window.$message?.success(`识别到车牌号：${result.plateNumber}`);
+    const blob = await new Promise<Blob>((resolve, reject) => {
+      cropCanvas.toBlob((b) => {
+        if (b) resolve(b);
+        else reject(new Error('裁剪失败'));
+      }, 'image/png');
+    });
+
+    // 调用后端 PaddleOCR 识别
+    const formData = new FormData();
+    formData.append('file', blob, 'ocr_crop.png');
+    if (model.shopId) formData.append('shopId', model.shopId);
+    const { data, error } = await ocrRecognizeImage(formData);
+    if (!error && data) {
+      applyOcrResult(data);
+      showOcrModal.value = false;
+    } else {
+      const errMsg = (error as any)?.message || 'OCR识别失败，请确认 PaddleOCR 服务已启动';
+      window.$message?.error(errMsg);
     }
-    if (result.orderNo && !model.orderNo) {
-      model.orderNo = result.orderNo;
-      window.$message?.success(`识别到工单号：${result.orderNo}`);
-    }
-    if (!result.plateNumber && !result.orderNo) {
-      window.$message?.warning('该区域未识别到有效信息');
-    }
-    showOcrModal.value = false;
   } catch {
-    window.$message?.error('OCR识别失败');
+    window.$message?.error('OCR识别失败，请确认 PaddleOCR 服务已启动（端口 8500）');
   } finally {
     ocrLoading.value = false;
   }
@@ -748,7 +806,7 @@ async function loadSettlementHistory(orderId: string) {
     <NScrollbar style="max-height: calc(85vh - 120px);">
       <NForm ref="formRef" :model="model" :rules="rules" label-placement="left" :label-width="80" class="px-4px">
         <NAlert v-if="operateType === 'edit' && images.length > 0 && !model.plateNumber" type="info" :bordered="false" class="mb-12px">
-          此工单通过快速录入创建，请点击图片上的OCR识别按钮确认车牌号和工单号。
+          此工单通过快速录入创建，请点击图片上的OCR识别按钮确认工单信息。
         </NAlert>
 
         <NDivider title-placement="left">基本信息</NDivider>
@@ -891,28 +949,53 @@ async function loadSettlementHistory(orderId: string) {
           size="small"
           :bordered="true"
           :pagination="false"
-          :row-key="(row: any, index: number) => String(index)"
+          :row-key="(row: OrderItem) => row.categoryId"
         />
         <NEmpty v-else-if="model.shopId" description="暂未添加喷漆项目" />
 
-        <NDivider title-placement="left">工单图片</NDivider>
-
-        <NUpload
-          :max="9"
-          accept="image/*"
-          :show-file-list="false"
-          :custom-request="({ file }) => handleUploadImage({ file: file.file as File })"
-        >
-          <NButton :loading="uploadingImage">
-            <template #icon><icon-ic-round-add-photo-alternate /></template>
-            选择图片
+        <NDivider title-placement="left">
+          工单图片
+          <NButton
+            v-if="images.length > 0"
+            type="primary"
+            size="small"
+            dashed
+            :loading="ocrLoading"
+            class="ml-12px"
+            @click="ocrQuickRecognize"
+          >
+            <template #icon><icon-ic-round-search /></template>
+            OCR识别填充
           </NButton>
-        </NUpload>
+        </NDivider>
+
+        <NSpace :size="8" align="center">
+          <NUpload
+            :max="9"
+            accept="image/*"
+            :show-file-list="false"
+            :custom-request="({ file }) => handleUploadImage({ file: file.file as File })"
+          >
+            <NButton :loading="uploadingImage">
+              <template #icon><icon-ic-round-add-photo-alternate /></template>
+              选择图片
+            </NButton>
+          </NUpload>
+          <NText v-if="images.length > 0" depth="3" style="font-size: 12px;">
+            点击"OCR识别填充"一键识别第一张图，或点击图片左上角搜索图标进行框选识别
+          </NText>
+        </NSpace>
 
         <NGrid :cols="3" :x-gap="8" :y-gap="8" class="mt-12px">
           <NGridItem v-for="(img, index) in images" :key="index">
             <NCard size="small" :bordered="true" style="position: relative; padding: 0;">
-              <img :src="getImageDisplayUrl(img)" style="width: 100%; height: 120px; object-fit: cover; border-radius: 4px;" />
+              <NImage
+                :src="getImageDisplayUrl(img)"
+                :preview-src="getHdImageUrl(img)"
+                object-fit="cover"
+                style="width: 100%; height: 120px; border-radius: 4px;"
+                show-toolbar
+              />
               <NButton
                 type="error"
                 quaternary
@@ -937,10 +1020,6 @@ async function loadSettlementHistory(orderId: string) {
             </NCard>
           </NGridItem>
         </NGrid>
-
-        <NText v-if="images.length > 0" depth="3" class="mt-8px" style="display: block; font-size: 12px;">
-          点击图片左上角搜索按钮可进行OCR识别，支持框选标记区域精准识别
-        </NText>
       </NForm>
     </NScrollbar>
 
@@ -956,7 +1035,7 @@ async function loadSettlementHistory(orderId: string) {
   <NModal v-model:show="showOcrModal" preset="card" title="OCR识别" style="width: 640px" :mask-closable="false">
     <NSpace vertical :size="12">
       <NAlert type="info" :bordered="false">
-        全图识别：直接识别整张图片中的车牌号和工单号<br />
+        全图识别：直接识别整张图片中的工单号、车牌号、客户名称、联系电话、车型<br />
         标记识别：在图片上拖拽框选区域，精准识别指定位置的文字（推荐）
       </NAlert>
 
@@ -985,6 +1064,33 @@ async function loadSettlementHistory(orderId: string) {
         <NButton type="primary" :loading="ocrLoading" :disabled="!hasCropRegion" @click="ocrRecognizeCrop">
           标记区域识别
         </NButton>
+      </NSpace>
+    </template>
+  </NModal>
+
+  <!-- OCR 冲突确认弹窗 -->
+  <NModal v-model:show="showConflictModal" preset="card" title="OCR识别结果冲突确认" style="width: 560px" :mask-closable="false">
+    <NSpace vertical :size="12">
+      <NAlert type="warning" :bordered="false">
+        以下字段的OCR识别结果与工单原有数据不一致，勾选需要覆盖的字段
+      </NAlert>
+      <div v-for="(field, index) in conflictFields" :key="field.key" style="display: flex; align-items: center; gap: 12px; padding: 8px 12px; border: 1px solid #e0e0e0; border-radius: 4px;">
+        <NCheckbox v-model:checked="conflictFields[index].checked" />
+        <div style="flex: 1;">
+          <div style="font-weight: bold; font-size: 13px; margin-bottom: 4px;">{{ field.label }}</div>
+          <NSpace align="center" :size="8" style="font-size: 13px;">
+            <NText depth="3">原值：</NText>
+            <NText style="text-decoration: line-through; color: #999;">{{ field.oldValue }}</NText>
+            <NText>→</NText>
+            <NText type="warning" style="font-weight: bold;">{{ field.newValue }}</NText>
+          </NSpace>
+        </div>
+      </div>
+    </NSpace>
+    <template #footer>
+      <NSpace justify="end">
+        <NButton @click="showConflictModal = false">不覆盖</NButton>
+        <NButton type="primary" @click="confirmConflictOverwrite">覆盖选中字段</NButton>
       </NSpace>
     </template>
   </NModal>

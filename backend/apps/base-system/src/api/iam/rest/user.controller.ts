@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import { CommandBus, QueryBus } from '@nestjs/cqrs';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
 
 import { UserCreateCommand } from '@app/base-system/lib/bounded-contexts/iam/authentication/commands/user-create.command';
 import { UserDeleteCommand } from '@app/base-system/lib/bounded-contexts/iam/authentication/commands/user-delete.command';
@@ -67,7 +68,7 @@ export class UserController {
   @ApiResponse({ status: 403, description: 'Forbidden.' })
   async createUser(
     @Body() dto: UserCreateDto,
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ): Promise<ApiRes<null>> {
     await this.commandBus.execute(
       new UserCreateCommand(
@@ -93,7 +94,7 @@ export class UserController {
   @ApiResponse({ status: 403, description: 'Forbidden.' })
   async updateUser(
     @Body() dto: UserUpdateDto,
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ): Promise<ApiRes<null>> {
     await this.commandBus.execute(
       new UserUpdateCommand(

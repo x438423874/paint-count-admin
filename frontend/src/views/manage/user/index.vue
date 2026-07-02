@@ -1,14 +1,29 @@
 <script setup lang="tsx">
+import { ref } from 'vue';
 import { NAvatar, NButton, NPopconfirm, NTag } from 'naive-ui';
 import { enableStatusRecord } from '@/constants/business';
 import { deleteUser, fetchGetUserList } from '@/service/api';
 import { useAppStore } from '@/store/modules/app';
 import { useTable, useTableOperate } from '@/hooks/common/table';
 import { $t } from '@/locales';
+import { isSuperAdmin as checkIsSuperAdmin } from '@/utils/permission';
 import UserOperateDrawer from './modules/user-operate-drawer.vue';
 import UserSearch from './modules/user-search.vue';
+import UserShopBindDrawer from './modules/user-shop-bind-drawer.vue';
 
 const appStore = useAppStore();
+
+// 是否为超级管理员（用于显示"绑定门店"按钮）
+const isSuperAdmin = ref(checkIsSuperAdmin());
+
+// 用户-门店绑定抽屉
+const bindDrawerVisible = ref(false);
+const bindUserId = ref<string | null>(null);
+
+function handleBindShop(userId: string) {
+  bindUserId.value = userId;
+  bindDrawerVisible.value = true;
+}
 
 const {
   columns,
@@ -109,12 +124,17 @@ const {
       key: 'operate',
       title: $t('common.operate'),
       align: 'center',
-      width: 130,
+      width: isSuperAdmin.value ? 240 : 130,
       render: row => (
         <div class="flex-center gap-8px">
           <NButton type="primary" ghost size="small" onClick={() => edit(row.id)}>
             {$t('common.edit')}
           </NButton>
+          {isSuperAdmin.value && (
+            <NButton type="info" ghost size="small" onClick={() => handleBindShop(row.id)}>
+              绑定门店
+            </NButton>
+          )}
           <NPopconfirm onPositiveClick={() => handleDelete(row.id)}>
             {{
               default: () => $t('common.confirmDelete'),
@@ -195,6 +215,7 @@ function edit(id: string) {
         :row-data="editingData"
         @submitted="getDataByPage"
       />
+      <UserShopBindDrawer v-model:visible="bindDrawerVisible" :user-id="bindUserId" />
     </NCard>
   </div>
 </template>

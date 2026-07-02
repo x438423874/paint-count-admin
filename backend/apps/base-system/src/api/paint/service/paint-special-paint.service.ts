@@ -5,25 +5,26 @@ import { PrismaService } from '@lib/shared/prisma/prisma.service';
 export class PaintSpecialPaintService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async findAll(activeOnly?: boolean) {
+  async findAll(templateId?: string, activeOnly?: boolean) {
     const where: any = {};
+    if (templateId) where.templateId = templateId;
     if (activeOnly) where.isActive = true;
     return this.prisma.paintSpecialPaint.findMany({ where, orderBy: { name: 'asc' } });
   }
 
-  async create(data: { name: string; multiplier: number; description?: string; isActive?: boolean }) {
+  async create(data: { templateId: string; name: string; multiplier: number; description?: string; isActive?: boolean }) {
+    if (!data.templateId) {
+      throw new BadRequestException('模板ID不能为空');
+    }
     if (!data.name?.trim()) {
       throw new BadRequestException('车漆名称不能为空');
     }
     if (!data.multiplier || data.multiplier < 1) {
       throw new BadRequestException('倍数必须大于等于1');
     }
-    const existing = await this.prisma.paintSpecialPaint.findFirst({ where: { name: data.name.trim() } });
-    if (existing) {
-      throw new BadRequestException('车漆名称已存在');
-    }
     return this.prisma.paintSpecialPaint.create({
       data: {
+        templateId: data.templateId,
         name: data.name.trim(),
         multiplier: data.multiplier,
         description: data.description,
@@ -37,10 +38,6 @@ export class PaintSpecialPaintService {
   }
 
   async delete(id: string) {
-    const templateItemCount = await this.prisma.paintStandardTemplateItem.count({ where: { specialPaintId: id } });
-    if (templateItemCount > 0) {
-      throw new BadRequestException(`该特殊车漆已被 ${templateItemCount} 个标准模板项目引用，无法删除`);
-    }
     const orderItemCount = await this.prisma.paintWorkOrderItem.count({ where: { specialPaintId: id } });
     if (orderItemCount > 0) {
       throw new BadRequestException(`该特殊车漆已被 ${orderItemCount} 个工单引用，无法删除`);

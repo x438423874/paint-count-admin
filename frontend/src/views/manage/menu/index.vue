@@ -19,7 +19,7 @@ const { bool: visible, setTrue: openModal } = useBoolean();
 const wrapperRef = ref<HTMLElement | null>(null);
 
 const { columns, columnChecks, data, loading, getData, getDataByPage } = useTable({
-  apiFn: fetchGetMenuList,
+  apiFn: fetchGetMenuList as unknown as NaiveUI.TableApiFn<Api.SystemManage.Menu>,
   columns: () => [
     {
       type: 'selection',

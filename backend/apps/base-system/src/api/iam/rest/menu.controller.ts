@@ -10,6 +10,7 @@ import {
 } from '@nestjs/common';
 import { CommandBus, QueryBus } from '@nestjs/cqrs';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
 
 import { MenuRoute } from '@app/base-system/lib/bounded-contexts/iam/menu/application/dto/route.dto';
 import { MenuService } from '@app/base-system/lib/bounded-contexts/iam/menu/application/service/menu.service';
@@ -79,7 +80,7 @@ export class MenuController {
   @ApiResponse({ status: 403, description: 'Forbidden.' })
   async createRoute(
     @Body() dto: RouteCreateDto,
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ): Promise<ApiRes<null>> {
     await this.commandBus.execute(
       new MenuCreateCommand(
@@ -116,7 +117,7 @@ export class MenuController {
   @ApiResponse({ status: 403, description: 'Forbidden.' })
   async updateRoute(
     @Body() dto: RouteUpdateDto,
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ): Promise<ApiRes<null>> {
     await this.commandBus.execute(
       new MenuUpdateCommand(
@@ -161,11 +162,11 @@ export class MenuController {
   @ApiOperation({
     summary: 'Authorized Routes',
   })
-  async authRoute(@Param('roleId') roleId: string, @Request() req: any) {
+  async authRoute(@Param('roleId') roleId: string, @Request() req: AuthenticatedRequest) {
     const result = await this.queryBus.execute<
       MenuIdsByRoleIdAndDomainQuery,
       number[]
-    >(new MenuIdsByRoleIdAndDomainQuery(roleId, req.user.domain));
+    >(new MenuIdsByRoleIdAndDomainQuery(roleId, req.user.domain!));
     return ApiRes.success(result);
   }
 }

@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsNotEmpty, IsOptional, IsString, IsInt, IsDateString, IsEnum, ValidateNested, IsArray, IsBoolean } from 'class-validator';
+import { IsNotEmpty, IsOptional, IsString, IsInt, IsDateString, IsEnum, IsIn, ValidateNested, IsArray, IsBoolean } from 'class-validator';
 import { Type } from 'class-transformer';
 import { PaintOrderStatus } from '@prisma/client';
 
@@ -126,7 +126,7 @@ export class UpdateWorkOrderDto {
   @IsString()
   phone?: string;
 
-  @ApiPropertyOptional({ description: '状态' })
+  @ApiPropertyOptional({ description: '状态：PENDING=待处理, IN_PROGRESS=进行中, COMPLETED=已完成, CANCELLED=已取消' })
   @IsOptional()
   @IsEnum(PaintOrderStatus)
   status?: PaintOrderStatus;
@@ -192,10 +192,10 @@ export class PageWorkOrderDto {
   @IsString()
   settlementMonth?: string;
 
-  @ApiPropertyOptional({ description: '状态' })
+  @ApiPropertyOptional({ description: '状态：PENDING=待处理/待审核, IN_PROGRESS=进行中, COMPLETED=已完成, CANCELLED=已取消, AUDITED=已审核, SETTLED=已结算' })
   @IsOptional()
-  @IsEnum(PaintOrderStatus)
-  status?: PaintOrderStatus;
+  @IsIn(['PENDING', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED', 'AUDITED', 'SETTLED'])
+  status?: string;
 
   @ApiPropertyOptional({ description: '是否已审核' })
   @IsOptional()

@@ -71,4 +71,13 @@ export class PaintStandardService {
   async deleteStandard(id: string) {
     return (this.prisma as any).paintStandard.delete({ where: { id } });
   }
+
+  /** 查询单个标准所属门店 ID，用于数据权限校验 */
+  async findShopIdByStandardId(id: string): Promise<string | null> {
+    const standard = await (this.prisma as any).paintStandard.findUnique({
+      where: { id },
+      select: { shopId: true },
+    });
+    return standard?.shopId ?? null;
+  }
 }

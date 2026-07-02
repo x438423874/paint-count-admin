@@ -117,13 +117,15 @@ export class PaintShopService {
     });
   }
 
-  async page(dto: PageShopDto): Promise<PaginationResult<any>> {
+  async page(dto: PageShopDto, accessibleShopIds?: string[] | null): Promise<PaginationResult<any>> {
     const current = dto.current ?? 1;
     const size = dto.size ?? 10;
 
+    // 数据权限：accessibleShopIds 为 null 表示不限制，数组表示限制到这些门店
     const where = {
       ...(dto.name && { name: { contains: dto.name, mode: 'insensitive' as const } }),
       ...(dto.brand && { brand: { contains: dto.brand, mode: 'insensitive' as const } }),
+      ...(accessibleShopIds && accessibleShopIds.length > 0 ? { id: { in: accessibleShopIds } } : {}),
     };
     const [records, total] = await Promise.all([
       this.prisma.paintShop.findMany({
@@ -138,8 +140,9 @@ export class PaintShopService {
     return { current, size, total, records };
   }
 
-  async findAll() {
+  async findAll(accessibleShopIds?: string[] | null) {
     return this.prisma.paintShop.findMany({
+      where: accessibleShopIds ? { id: { in: accessibleShopIds } } : undefined,
       orderBy: { createdAt: 'desc' },
       include: { standardTemplate: { select: { id: true, name: true } } },
     });

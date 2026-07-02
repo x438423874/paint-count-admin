@@ -1,4 +1,5 @@
-import { Controller, Get, Inject, UseGuards } from '@nestjs/common';
+import { Controller, Get, Inject, UseGuards, Res } from '@nestjs/common';
+import { FastifyReply } from 'fastify';
 import {
   DiskHealthIndicator,
   HealthCheck,
@@ -23,6 +24,7 @@ import { ApiKeyGuard } from '@lib/infra/guard/api-key/api-key.guard';
 import { IApiKeyService } from '@lib/infra/guard/api-key/services/api-key.interface';
 import { ApiRes } from '@lib/infra/rest/res.response';
 import { PrismaService } from '@lib/shared/prisma/prisma.service';
+import { MetricsService } from '@lib/shared/metrics/metrics.service';
 
 import { AppService } from './app.service';
 
@@ -36,6 +38,7 @@ export class AppController {
     private readonly db: PrismaHealthIndicator,
     private readonly memory: MemoryHealthIndicator,
     private readonly disk: DiskHealthIndicator,
+    private readonly metricsService: MetricsService,
     @Inject(SimpleApiKeyServiceToken)
     private readonly simpleApiKeyService: IApiKeyService,
     @Inject(ComplexApiKeyServiceToken)
@@ -63,6 +66,15 @@ export class AppController {
           thresholdPercent: 0.9,
         }),
     ]);
+  }
+
+  @Get('/metrics')
+  @Public()
+  @BypassTransform()
+  async getMetrics(@Res() res: FastifyReply) {
+    const metrics = await this.metricsService.getMetrics();
+    res.header('Content-Type', this.metricsService.getContentType());
+    res.send(metrics);
   }
 
   @Get('/system-info')

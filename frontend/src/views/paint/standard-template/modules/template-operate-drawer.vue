@@ -5,7 +5,8 @@ import {
   updateStandardTemplate,
   fetchPaintCategoryList,
   fetchSpecialPaintList,
-  createSpecialPaint
+  createSpecialPaint,
+  deleteSpecialPaint
 } from '@/service/api';
 import { useFormRules, useNaiveForm } from '@/hooks/common/form';
 
@@ -67,6 +68,7 @@ interface FormModel {
 }
 
 const model: FormModel = reactive(createDefaultModel());
+const deletedSpecialPaintIds = ref<string[]>([]);
 
 function createDefaultModel(): FormModel {
   return {
@@ -90,7 +92,8 @@ async function loadCategories() {
 loadCategories();
 
 async function loadSpecialPaints() {
-  const { data, error } = await fetchSpecialPaintList(true);
+  const templateId = props.operateType === 'edit' && props.rowData ? props.rowData.id : undefined;
+  const { data, error } = await fetchSpecialPaintList(templateId, true);
   if (!error && data) {
     model.specialPaints = (data as any[]).map((sp: any) => ({
       id: sp.id,
@@ -102,7 +105,6 @@ async function loadSpecialPaints() {
     }));
   }
 }
-loadSpecialPaints();
 
 // 部位多选选项
 const categoryOptions = computed(() =>
@@ -150,11 +152,16 @@ function addSpecialPaint() {
 }
 
 function removeSpecialPaint(index: number) {
+  const sp = model.specialPaints[index];
+  if (sp.id && !sp.isNew) {
+    deletedSpecialPaintIds.value.push(sp.id);
+  }
   model.specialPaints.splice(index, 1);
 }
 
 function handleInitModel() {
   Object.assign(model, createDefaultModel());
+  deletedSpecialPaintIds.value = [];
 
   if (props.operateType === 'edit' && props.rowData) {
     // 后端返回的items是扁平的（每个item一个categoryId），需要按系数+新件加幅+别名合并
@@ -187,6 +194,9 @@ function handleInitModel() {
       items: mergedItems
     });
   }
+
+  // 加载特殊车漆列表
+  loadSpecialPaints();
 }
 
 function closeDrawer() {
@@ -196,10 +206,18 @@ function closeDrawer() {
 async function handleSubmit() {
   await validate();
 
+  // 先删除已移除的特殊车漆
+  for (const id of deletedSpecialPaintIds.value) {
+    await deleteSpecialPaint(id);
+  }
+
   // 先保存新增的特殊车漆
   const newPaints = model.specialPaints.filter(sp => sp.isNew && sp.name.trim());
+  const templateId = props.operateType === 'edit' && props.rowData ? props.rowData.id : undefined;
   for (const sp of newPaints) {
+    if (!templateId) continue; // 新增模板时，先创建模板后再创建特殊车漆
     const { data, error } = await createSpecialPaint({
+      templateId,
       name: sp.name.trim(),
       multiplier: sp.multiplier,
       description: sp.description || undefined,
@@ -232,8 +250,21 @@ async function handleSubmit() {
   };
 
   if (props.operateType === 'add') {
-    const { error } = await createStandardTemplate(submitData);
+    const { data, error } = await createStandardTemplate(submitData);
     if (error) return;
+    // 新增模板后，用返回的模板ID创建特殊车漆
+    const newTemplateId = (data as any)?.id;
+    if (newTemplateId) {
+      for (const sp of newPaints) {
+        await createSpecialPaint({
+          templateId: newTemplateId,
+          name: sp.name.trim(),
+          multiplier: sp.multiplier,
+          description: sp.description || undefined,
+          isActive: sp.isActive
+        });
+      }
+    }
     window.$message?.success('创建成功');
   } else {
     const { error } = await updateStandardTemplate({ id: props.rowData.id, ...submitData });
