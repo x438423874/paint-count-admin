@@ -47,7 +47,7 @@ describe('PaintStatisticsService', () => {
           orderDate: new Date('2026-05-02'),
           totalPaintCount: 1.1,
           shopId: 'shop-1',
-          isAudited: true,
+          status: 'AUDITED',
           plateNumber: '粤A123',
           items: [],
         },
@@ -56,7 +56,7 @@ describe('PaintStatisticsService', () => {
           orderDate: new Date('2026-05-06'),
           totalPaintCount: 4.5,
           shopId: 'shop-1',
-          isAudited: false,
+          status: 'PENDING',
           plateNumber: '粤B456',
           items: [],
         },
@@ -65,7 +65,7 @@ describe('PaintStatisticsService', () => {
           orderDate: new Date('2026-05-06'),
           totalPaintCount: 2.0,
           shopId: 'shop-1',
-          isAudited: true,
+          status: 'AUDITED',
           plateNumber: '粤A123', // 与 o1 同车牌
           items: [],
         },
@@ -88,8 +88,8 @@ describe('PaintStatisticsService', () => {
         { id: 'shop-1', name: '门店A', code: 'SHOPA' },
       ]);
       prisma.paintWorkOrder.findMany.mockResolvedValue([
-        { id: 'o1', orderDate: new Date('2026-05-02'), totalPaintCount: 3, shopId: 'shop-1', isAudited: true, plateNumber: 'A', items: [] },
-        { id: 'o2', orderDate: new Date('2026-05-03'), totalPaintCount: 5, shopId: 'shop-1', isAudited: false, plateNumber: 'B', items: [] },
+        { id: 'o1', orderDate: new Date('2026-05-02'), totalPaintCount: 3, shopId: 'shop-1', status: 'AUDITED', plateNumber: 'A', items: [] },
+        { id: 'o2', orderDate: new Date('2026-05-03'), totalPaintCount: 5, shopId: 'shop-1', status: 'PENDING', plateNumber: 'B', items: [] },
       ]);
 
       const result = await service.getMonthlyStatistics('2026-05');
@@ -110,9 +110,9 @@ describe('PaintStatisticsService', () => {
         { id: 'shop-1', name: '门店A', code: 'SHOPA' },
       ]);
       prisma.paintWorkOrder.findMany.mockResolvedValue([
-        { id: 'o1', orderDate: new Date('2026-05-02'), totalPaintCount: 1.1, shopId: 'shop-1', isAudited: true, plateNumber: 'A', items: [] },
-        { id: 'o2', orderDate: new Date('2026-05-02'), totalPaintCount: 2.0, shopId: 'shop-1', isAudited: true, plateNumber: 'B', items: [] },
-        { id: 'o3', orderDate: new Date('2026-05-06'), totalPaintCount: 4.5, shopId: 'shop-1', isAudited: true, plateNumber: 'C', items: [] },
+        { id: 'o1', orderDate: new Date('2026-05-02'), totalPaintCount: 1.1, shopId: 'shop-1', status: 'AUDITED', plateNumber: 'A', items: [] },
+        { id: 'o2', orderDate: new Date('2026-05-02'), totalPaintCount: 2.0, shopId: 'shop-1', status: 'AUDITED', plateNumber: 'B', items: [] },
+        { id: 'o3', orderDate: new Date('2026-05-06'), totalPaintCount: 4.5, shopId: 'shop-1', status: 'AUDITED', plateNumber: 'C', items: [] },
       ]);
 
       const result = await service.getMonthlyStatistics('2026-05');

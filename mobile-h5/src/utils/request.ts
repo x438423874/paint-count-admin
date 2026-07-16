@@ -19,7 +19,44 @@ export type RequestError = AxiosError<{
 
 // 刷新 token 状态管理
 let refreshing = false
+let proactiveRefreshPromise: Promise<boolean> | null = null
 let taskQueue: Array<{ resolve: (value: any) => void; reject: (reason?: any) => void; config: any }> = []
+
+/** 解析 token 剩余有效时间（秒） */
+function getTokenRemainingTime(): number {
+  const accessToken = getToken()
+  if (!accessToken) return -1
+  try {
+    const payload = JSON.parse(atob(accessToken.split('.')[1]))
+    if (!payload.exp) return -1
+    return payload.exp - Math.floor(Date.now() / 1000)
+  }
+  catch {
+    return -1
+  }
+}
+
+/** token 即将过期时主动刷新 */
+async function tryProactiveRefresh(): Promise<boolean> {
+  const remaining = getTokenRemainingTime()
+  if (remaining < 0 || remaining > 120) return true
+
+  if (!proactiveRefreshPromise) {
+    proactiveRefreshPromise = (async () => {
+      try {
+        await doRefreshToken()
+        return true
+      }
+      catch {
+        return false
+      }
+      finally {
+        proactiveRefreshPromise = null
+      }
+    })()
+  }
+  return proactiveRefreshPromise
+}
 
 // 异常拦截处理器
 function errorHandler(error: RequestError): Promise<any> {
@@ -91,7 +128,8 @@ async function doRefreshToken() {
 }
 
 // 请求拦截器
-function requestHandler(config: InternalAxiosRequestConfig): InternalAxiosRequestConfig | Promise<InternalAxiosRequestConfig> {
+async function requestHandler(config: InternalAxiosRequestConfig): Promise<InternalAxiosRequestConfig> {
+  await tryProactiveRefresh()
   const savedToken = getToken()
   if (savedToken)
     config.headers[REQUEST_TOKEN_KEY] = `Bearer ${savedToken}`

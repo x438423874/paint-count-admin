@@ -1,91 +1,87 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '@lib/shared/prisma/prisma.service';
-import { Prisma } from '@prisma/client';
+import { SettlementMonthService } from './settlement-month.service';
 
 @Injectable()
 export class WorkOrderSettlementService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly settlementMonthService: SettlementMonthService,
+  ) {}
 
-  /** 添加结算记录（结算工单） */
-  async addSettlementRecord(orderId: string, settlementMonth: string, remark?: string) {
+  /** 结算工单：只改状态，参照审核逻辑，不修改 settlementMonth */
+  async settle(orderId: string, _settlementMonth?: string, settledBy?: string) {
     const order = await this.prisma.paintWorkOrder.findUnique({
       where: { id: orderId },
-      include: { items: true, settlements: true },
     });
     if (!order) throw new NotFoundException('工单不存在');
 
-    // 必须已审核才能结算
-    if (!order.isAudited) {
-      throw new BadRequestException('工单未审核，不能结算');
-    }
+    // 封单校验
+    await this.settlementMonthService.assertOrderNotSealed(orderId);
 
-    // 异常标注的工单不能结算
-    if (order.isAbnormal) {
+    const currentStatus = order.status;
+
+    if (currentStatus === ('ABNORMAL' as any)) {
       throw new BadRequestException('工单有异常标注，不能结算');
     }
 
-    // 检查是否已有该月份的结算记录
-    const existing = await this.prisma.paintSettlementRecord.findFirst({
-      where: { orderId, settlementMonth },
-    });
-    if (existing) {
-      throw new BadRequestException(`工单已在 ${settlementMonth} 结算过`);
+    if (currentStatus === ('SETTLED' as any)) {
+      throw new BadRequestException('工单已结算，不能重复结算');
     }
 
-    return this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-      const record = await tx.paintSettlementRecord.create({
-        data: {
-          orderId,
-          settlementMonth,
-          paintCount: order.totalPaintCount,
-          itemCount: order.items.length,
-          remark,
-        },
-      });
+    if (currentStatus !== ('AUDITED' as any)) {
+      throw new BadRequestException('只有已审核的工单才能结算');
+    }
 
-      // 更新工单的结算月份为最新的结算月份
-      await tx.paintWorkOrder.update({
-        where: { id: orderId },
-        data: { settlementMonth },
-      });
+    // 结算只改状态，不修改 settlementMonth
+    // 如果工单没有 settlementMonth，则从 orderDate 推导
+    const updateData: any = {
+      status: 'SETTLED',
+      settledAt: new Date(),
+      settledBy: settledBy || null,
+    };
 
-      return record;
+    // 仅在工单没有 settlementMonth 时才补充
+    if (!order.settlementMonth) {
+      updateData.settlementMonth = this.getMonthFromDate(order.orderDate);
+    }
+
+    return this.prisma.paintWorkOrder.update({
+      where: { id: orderId },
+      data: updateData,
+      include: { items: { include: { category: true, specialPaint: true } }, shop: true },
     });
   }
 
-  /** 取消结算（删除结算记录） */
-  async removeSettlementRecord(recordId: string) {
-    const record = await this.prisma.paintSettlementRecord.findUnique({
-      where: { id: recordId },
+  /** 取消结算：只改状态回已审核 */
+  async unsettle(orderId: string) {
+    const order = await this.prisma.paintWorkOrder.findUnique({
+      where: { id: orderId },
     });
-    if (!record) throw new NotFoundException('结算记录不存在');
+    if (!order) throw new NotFoundException('工单不存在');
 
-    return this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-      await tx.paintSettlementRecord.delete({
-        where: { id: recordId },
-      });
+    // 封单校验
+    await this.settlementMonthService.assertOrderNotSealed(orderId);
 
-      // 查看该工单是否还有其他结算记录
-      const remaining = await tx.paintSettlementRecord.findFirst({
-        where: { orderId: record.orderId },
-        orderBy: { createdAt: 'desc' },
-      });
+    const currentStatus = order.status;
 
-      // 更新工单结算月份为最新剩余记录的月份，如果没有则清空
-      await tx.paintWorkOrder.update({
-        where: { id: record.orderId },
-        data: { settlementMonth: remaining?.settlementMonth || null },
-      });
+    if (currentStatus !== ('SETTLED' as any)) {
+      throw new BadRequestException('只有已结算的工单才能取消结算');
+    }
 
-      return { success: true };
+    return this.prisma.paintWorkOrder.update({
+      where: { id: orderId },
+      data: {
+        status: 'AUDITED' as any,
+        settledAt: null,
+        settledBy: null,
+      },
+      include: { items: { include: { category: true, specialPaint: true } }, shop: true },
     });
   }
 
-  /** 获取工单的结算历史 */
-  async getSettlementHistory(orderId: string) {
-    return this.prisma.paintSettlementRecord.findMany({
-      where: { orderId },
-      orderBy: { createdAt: 'desc' },
-    });
+  private getMonthFromDate(date: Date | null | undefined): string {
+    const d = date || new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
   }
 }

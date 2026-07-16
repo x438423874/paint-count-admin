@@ -2,10 +2,10 @@
 import {
   getWorkOrderDetail, auditWorkOrder, unauditWorkOrder, deleteWorkOrder,
   uploadWorkOrderImage, deleteWorkOrderImage, getShopList, updateWorkOrder, getShopCategoriesWithStandard,
-  addSettlementRecord, removeSettlementRecord, getSettlementHistory, setAbnormal, ocrRecognizeImage,
+  settleWorkOrder, unsettleWorkOrder, setAbnormal, ocrRecognizeImage,
   getSpecialPaintList,
 } from '@/api/paint'
-import type { PaintWorkOrder, PaintShop, PaintStandard, PaintSpecialPaint, CreateWorkOrderItemDto, SettlementRecord } from '@/api/types/paint'
+import type { PaintWorkOrder, PaintShop, PaintStandard, PaintSpecialPaint, CreateWorkOrderItemDto } from '@/api/types/paint'
 import { compressImage } from '@/utils/image-compress'
 import { canAudit, canDelete, canEdit } from '@/utils/permission'
 
@@ -22,6 +22,7 @@ const loading = ref(false)
 const shops = ref<PaintShop[]>([])
 const isEditing = ref(false)
 const saving = ref(false)
+const ocrCorrectionMode = ref(false)
 
 // OCR 识别状态
 const ocrLoading = ref(false)
@@ -34,11 +35,38 @@ const editForm = reactive({
   orderNo: '',
   plateNumber: '',
   carModel: '',
+  vin: '',
+  brand: '',
+  orderDate: '',
+  settlementMonth: '',
   customerName: '',
   phone: '',
   remark: '',
   items: [] as CreateWorkOrderItemDto[],
 })
+
+// 日期选择器
+const showEditDatePicker = ref(false)
+const editDatePickerValues = ref<string[]>(['2024', '01', '01'])
+
+function onEditDateConfirm({ selectedValues }: any) {
+  editForm.orderDate = selectedValues.join('-')
+  showEditDatePicker.value = false
+}
+
+// 结算月份选择器
+const showEditSettlementMonthPicker = ref(false)
+const editSettlementMonthPickerValue = computed<string[]>({
+  get: () => (editForm.settlementMonth ? editForm.settlementMonth.split('-') : []),
+  set: (val) => {
+    editForm.settlementMonth = val.join('-')
+  },
+})
+
+function onEditSettlementMonthConfirm({ selectedValues }: { selectedValues: string[] }) {
+  editForm.settlementMonth = selectedValues.join('-')
+  showEditSettlementMonthPicker.value = false
+}
 
 // 编辑用的标准
 const editStandards = ref<PaintStandard[]>([])
@@ -46,10 +74,18 @@ const specialPaints = ref<PaintSpecialPaint[]>([])
 const showCategoryPicker = ref(false)
 const editingItemIndex = ref(-1)
 const categoryColumns = computed(() => {
-  return editStandards.value.map(s => ({
-    text: s.category?.name || s.alias || s.categoryId,
-    value: s.categoryId,
-  }))
+  const currentItem = editForm.items[editingItemIndex.value]
+  const currentCategoryId = currentItem?.categoryId
+  const selectedIds = new Set(editForm.items
+    .filter((_, idx) => idx !== editingItemIndex.value)
+    .map(i => i.categoryId)
+    .filter(Boolean) as string[])
+  return editStandards.value
+    .filter(s => !selectedIds.has(s.categoryId) || s.categoryId === currentCategoryId)
+    .map(s => ({
+      text: `${s.category?.name || s.alias || s.categoryId} (${Number(s.coefficient).toFixed(1)}幅)`,
+      value: s.categoryId,
+    }))
 })
 
 // 编辑模式下的图片状态
@@ -64,6 +100,51 @@ function getShopName(shopId: string) {
   if (!shopId) return '-'
   const shop = shops.value.find(s => s.id === shopId)
   return shop?.name || shopId
+}
+
+function getStatusClass(status?: string): string {
+  const map: Record<string, string> = {
+    DRAFT: 'draft',
+    PENDING: 'pending',
+    AUDITED: 'audited',
+    SETTLED: 'settled',
+    ABNORMAL: 'abnormal',
+  }
+  return map[status || ''] || 'pending'
+}
+
+function getStatusIcon(status?: string): string {
+  const map: Record<string, string> = {
+    DRAFT: 'notes-o',
+    PENDING: 'clock-o',
+    AUDITED: 'success',
+    SETTLED: 'balance-o',
+    ABNORMAL: 'warning-o',
+  }
+  return map[status || ''] || 'clock-o'
+}
+
+function getStatusLabel(status?: string): string {
+  const map: Record<string, string> = {
+    DRAFT: '草稿',
+    PENDING: '待审核',
+    AUDITED: '已审核',
+    SETTLED: '已结算',
+    ABNORMAL: '异常',
+  }
+  return map[status || ''] || status || '-'
+}
+
+function isUnauditedStatus(status?: string): boolean {
+  return status === 'DRAFT' || status === 'PENDING'
+}
+
+function isAuditedStatus(status?: string): boolean {
+  return status === 'AUDITED'
+}
+
+function isAbnormalStatus(status?: string): boolean {
+  return status === 'ABNORMAL'
 }
 
 async function loadShops() {
@@ -82,34 +163,57 @@ async function loadDetail() {
   try {
     const res = await getWorkOrderDetail(orderId.value)
     order.value = res as any as PaintWorkOrder
+    reworkRemarkInput.value = order.value?.reworkRemark || ''
   }
   catch {
     order.value = null
+    reworkRemarkInput.value = ''
   }
   finally {
     loading.value = false
+    nextTick(() => {
+      window.scrollTo(0, 0)
+    })
   }
 }
 
 function enterEdit() {
-  if (!order.value || order.value.isAudited) return
-  editForm.orderNo = order.value.orderNo || ''
-  editForm.plateNumber = order.value.plateNumber || ''
-  editForm.carModel = order.value.carModel || ''
-  editForm.customerName = order.value.customerName || ''
-  editForm.phone = order.value.phone || ''
-  editForm.remark = order.value.remark || ''
-  editForm.items = (order.value.items || []).map(item => ({
-    categoryId: item.categoryId,
-    quantity: item.quantity,
-    newPartQuantity: item.newPartQuantity,
-    specialPaintId: item.specialPaintId || undefined,
-  }))
+  if (!order.value || !isUnauditedStatus(order.value.status)) return
+  ocrCorrectionMode.value = false
+  initEditForm(order.value)
   editPendingUploads.value = []
   editPendingDeleteIds.value = []
   loadEditStandards()
   loadSpecialPaints()
   isEditing.value = true
+}
+
+function enterOcrCorrection() {
+  if (!order.value || !isAuditedStatus(order.value.status)) return
+  ocrCorrectionMode.value = true
+  initEditForm(order.value)
+  editPendingUploads.value = []
+  editPendingDeleteIds.value = []
+  isEditing.value = true
+}
+
+function initEditForm(source: PaintWorkOrder) {
+  editForm.orderNo = source.orderNo || ''
+  editForm.plateNumber = source.plateNumber || ''
+  editForm.carModel = source.carModel || ''
+  editForm.vin = source.vin || ''
+  editForm.brand = source.brand || ''
+  editForm.orderDate = source.orderDate ? source.orderDate.slice(0, 10) : ''
+  editForm.settlementMonth = source.settlementMonth || ''
+  editForm.customerName = source.customerName || ''
+  editForm.phone = source.phone || ''
+  editForm.remark = source.remark || ''
+  editForm.items = (source.items || []).map(item => ({
+    categoryId: item.categoryId,
+    quantity: item.quantity,
+    newPartQuantity: item.newPartQuantity,
+    specialPaintId: item.specialPaintId || undefined,
+  }))
 }
 
 async function loadSpecialPaints() {
@@ -135,6 +239,7 @@ async function loadEditStandards() {
 
 function cancelEdit() {
   isEditing.value = false
+  ocrCorrectionMode.value = false
   // 释放待上传图片的 Object URL
   editPendingUploads.value.forEach(item => URL.revokeObjectURL(item.previewUrl))
   editPendingUploads.value = []
@@ -185,6 +290,9 @@ async function doOcrRecognizeByUrl(imageUrl: string) {
       { key: 'customerName', label: '客户名称', ocrKey: 'customerName' },
       { key: 'phone', label: '联系电话', ocrKey: 'phone' },
       { key: 'carModel', label: '车型', ocrKey: 'carModel' },
+      { key: 'vin', label: '车架号', ocrKey: 'vin' },
+      { key: 'brand', label: '品牌', ocrKey: 'brand' },
+      { key: 'orderDate', label: '工单日期', ocrKey: 'date' },
     ]
 
     const filledMessages: string[] = []
@@ -239,48 +347,70 @@ function confirmOcrConflict() {
 
 async function saveEdit() {
   if (!order.value) return
-  const validItems = editForm.items.filter(item => item.quantity && item.quantity > 0)
-  if (validItems.length === 0) {
-    showNotify({ type: 'warning', message: '请至少添加一个喷漆项目' })
-    return
-  }
   saving.value = true
   try {
-    // 1. 保存基本信息
-    await updateWorkOrder({
-      id: order.value.id,
-      orderNo: editForm.orderNo || undefined,
-      plateNumber: editForm.plateNumber || undefined,
-      carModel: editForm.carModel || undefined,
-      customerName: editForm.customerName || undefined,
-      phone: editForm.phone || undefined,
-      remark: editForm.remark || undefined,
-      items: validItems,
-    })
-
-    // 2. 批量删除图片
-    for (const imageId of editPendingDeleteIds.value) {
-      try {
-        await deleteWorkOrderImage(imageId)
-      }
-      catch {
-        // 单个图片删除失败不阻断整体流程
-      }
+    if (ocrCorrectionMode.value) {
+      // 修正 OCR：只提交基础字段，不修改项目、不增删图片
+      await updateWorkOrder({
+        id: order.value.id,
+        orderNo: editForm.orderNo || undefined,
+        plateNumber: editForm.plateNumber || undefined,
+        carModel: editForm.carModel || undefined,
+        vin: editForm.vin || undefined,
+        brand: editForm.brand || undefined,
+        orderDate: editForm.orderDate || undefined,
+        customerName: editForm.customerName || undefined,
+        phone: editForm.phone || undefined,
+      })
     }
-
-    // 3. 批量上传新图片（压缩后上传）
-    for (const item of editPendingUploads.value) {
-      try {
-        const compressed = await compressImage(item.file)
-        await uploadWorkOrderImage(orderId.value, compressed, 'BEFORE')
+    else {
+      const validItems = editForm.items.filter(item => item.quantity && item.quantity > 0)
+      if (validItems.length === 0) {
+        showNotify({ type: 'warning', message: '请至少添加一个喷漆项目' })
+        saving.value = false
+        return
       }
-      catch {
-        // 单个图片上传失败不阻断整体流程
+      // 1. 保存基本信息
+      await updateWorkOrder({
+        id: order.value.id,
+        orderNo: editForm.orderNo || undefined,
+        plateNumber: editForm.plateNumber || undefined,
+        carModel: editForm.carModel || undefined,
+        vin: editForm.vin || undefined,
+        brand: editForm.brand || undefined,
+        orderDate: editForm.orderDate || undefined,
+        settlementMonth: editForm.settlementMonth || undefined,
+        customerName: editForm.customerName || undefined,
+        phone: editForm.phone || undefined,
+        remark: editForm.remark || undefined,
+        items: validItems,
+      })
+
+      // 2. 批量删除图片
+      for (const imageId of editPendingDeleteIds.value) {
+        try {
+          await deleteWorkOrderImage(imageId)
+        }
+        catch {
+          // 单个图片删除失败不阻断整体流程
+        }
+      }
+
+      // 3. 批量上传新图片（压缩后上传）
+      for (const item of editPendingUploads.value) {
+        try {
+          const compressed = await compressImage(item.file)
+          await uploadWorkOrderImage(orderId.value, compressed, 'BEFORE')
+        }
+        catch {
+          // 单个图片上传失败不阻断整体流程
+        }
       }
     }
 
     showNotify({ type: 'success', message: '保存成功' })
     isEditing.value = false
+    ocrCorrectionMode.value = false
     // 释放待上传图片的 Object URL
     editPendingUploads.value.forEach(item => URL.revokeObjectURL(item.previewUrl))
     editPendingUploads.value = []
@@ -304,8 +434,14 @@ function addEditItem() {
     showNotify({ type: 'warning', message: '部位标准加载中，请稍后重试' })
     return
   }
+  const selectedIds = new Set(editForm.items.map(i => i.categoryId).filter(Boolean) as string[])
+  const firstUnselected = editStandards.value.find(s => !selectedIds.has(s.categoryId))
+  if (!firstUnselected) {
+    showNotify({ type: 'warning', message: '所有部位已选择' })
+    return
+  }
   editForm.items.push({
-    categoryId: editStandards.value[0]?.categoryId || '',
+    categoryId: firstUnselected.categoryId,
     quantity: 1,
     newPartQuantity: 0,
   })
@@ -361,8 +497,9 @@ async function handleUnaudit() {
       showNotify({ type: 'success', message: '已取消审核' })
       loadDetail()
     }
-    catch {
-      showNotify({ type: 'danger', message: '取消审核失败' })
+    catch (e: any) {
+      const msg = e?.message || e?.msg || '取消审核失败'
+      showNotify({ type: 'danger', message: msg })
     }
   }).catch(() => {})
 }
@@ -385,11 +522,23 @@ async function handleDelete() {
 }
 
 // ===== 结算相关 =====
-const showSettlePopup = ref(false)
-const settleMonth = ref('')
-const settleRemark = ref('')
-const settlementRecords = ref<SettlementRecord[]>([])
-const showSettlementHistory = ref(false)
+
+async function handleSettle() {
+  if (!order.value) return
+  showDialog({
+    title: '确认结算',
+    message: '确认结算此工单？',
+  }).then(async () => {
+    try {
+      await settleWorkOrder(order.value!.id)
+      showNotify({ type: 'success', message: '结算成功' })
+      await loadDetail()
+    }
+    catch (e: any) {
+      showNotify({ type: 'danger', message: e?.message || '结算失败' })
+    }
+  }).catch(() => {})
+}
 
 // ===== 异常标注相关 =====
 const showAbnormalPopup = ref(false)
@@ -398,7 +547,7 @@ const abnormalRemarkInput = ref('')
 
 function openAbnormalPopup() {
   if (!order.value) return
-  abnormalFlag.value = !order.value.isAbnormal
+  abnormalFlag.value = order.value.status !== 'ABNORMAL'
   abnormalRemarkInput.value = order.value.abnormalRemark || ''
   showAbnormalPopup.value = true
 }
@@ -416,60 +565,45 @@ async function confirmAbnormal() {
   }
 }
 
-function getCurrentMonth() {
-  const now = new Date()
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
-}
+// ===== 返工标记相关 =====
+const reworkRemarkInput = ref('')
+const reworkSaving = ref(false)
 
-function openSettlePopup() {
-  settleMonth.value = order.value?.settlementMonth || getCurrentMonth()
-  settleRemark.value = ''
-  showSettlePopup.value = true
-}
-
-async function confirmSettle() {
-  if (!order.value || !settleMonth.value) return
+async function toggleRework(isRework: boolean) {
+  if (!order.value || reworkSaving.value) return
+  reworkSaving.value = true
   try {
-    await addSettlementRecord(order.value.id, settleMonth.value, settleRemark.value || undefined)
-    showNotify({ type: 'success', message: '结算成功' })
-    showSettlePopup.value = false
+    await updateWorkOrder({
+      id: order.value.id,
+      isRework,
+      reworkRemark: isRework ? (reworkRemarkInput.value || undefined) : undefined
+    })
+    showNotify({ type: 'success', message: isRework ? '已标记返工' : '已取消返工' })
     await loadDetail()
   }
   catch (e: any) {
-    showNotify({ type: 'danger', message: e?.message || '结算失败' })
+    showNotify({ type: 'danger', message: e?.message || '操作失败' })
+  }
+  finally {
+    reworkSaving.value = false
   }
 }
 
-async function handleUnsettle(recordId: string) {
+async function handleUnsettle() {
   if (!order.value) return
   showDialog({
     title: '确认取消结算',
-    message: '确认删除此结算记录？',
+    message: '确认取消结算？',
   }).then(async () => {
     try {
-      await removeSettlementRecord(order.value!.id, recordId)
+      await unsettleWorkOrder(order.value!.id)
       showNotify({ type: 'success', message: '已取消结算' })
       await loadDetail()
-      // 刷新结算历史
-      const res = await getSettlementHistory(order.value!.id)
-      settlementRecords.value = res as any as SettlementRecord[]
     }
     catch (e: any) {
       showNotify({ type: 'danger', message: e?.message || '取消结算失败' })
     }
   }).catch(() => {})
-}
-
-async function openSettlementHistoryPopup() {
-  if (!order.value) return
-  try {
-    const res = await getSettlementHistory(order.value.id)
-    settlementRecords.value = res as any as SettlementRecord[]
-  }
-  catch {
-    settlementRecords.value = []
-  }
-  showSettlementHistory.value = true
 }
 
 function handleAddImage() {
@@ -541,17 +675,18 @@ const editTotalPaintCount = computed(() => {
 })
 
 const editPartCount = computed(() => {
-  return editForm.items.filter(item => item.quantity && item.quantity > 0).length
+  return editForm.items.reduce((sum, item) => sum + (item.quantity || 0), 0)
 })
 
 // 查看模式下的部位数
 const viewPartCount = computed(() => {
   if (!order.value?.items) return 0
-  return order.value.items.filter(item => item.quantity && item.quantity > 0).length
+  return order.value.items.reduce((sum, item) => sum + (item.quantity || 0), 0)
 })
 
 onMounted(() => {
   orderId.value = (route.query.id as string) || ''
+  window.scrollTo(0, 0)
   loadShops()
   loadDetail()
 })
@@ -565,10 +700,10 @@ onMounted(() => {
 
     <div v-else-if="order" class="detail-content">
       <!-- 顶部状态栏 -->
-      <div :class="['status-banner', order.isAudited ? (order.isAbnormal ? 'abnormal' : 'audited') : 'pending']">
+      <div :class="['status-banner', getStatusClass(order.status)]">
         <div class="status-left">
-          <van-icon :name="order.isAbnormal ? 'warning-o' : (order.isAudited ? 'success' : 'clock-o')" size="20" color="#fff" />
-          <span class="status-text">{{ order.isAbnormal ? '异常' : (order.isAudited ? '已审核' : '待审核') }}</span>
+          <van-icon :name="getStatusIcon(order.status)" size="20" color="#fff" />
+          <span class="status-text">{{ getStatusLabel(order.status) }}</span>
         </div>
         <span class="order-no">{{ order.orderNo }}</span>
       </div>
@@ -590,6 +725,14 @@ onMounted(() => {
             <span class="info-value">{{ order.carModel || '-' }}</span>
           </div>
           <div class="info-item">
+            <span class="info-label">车架号</span>
+            <span class="info-value">{{ order.vin || '-' }}</span>
+          </div>
+          <div class="info-item">
+            <span class="info-label">品牌</span>
+            <span class="info-value">{{ order.brand || '-' }}</span>
+          </div>
+          <div class="info-item">
             <span class="info-label">所属门店</span>
             <span class="info-value">{{ getShopName(order.shopId) }}</span>
           </div>
@@ -609,8 +752,11 @@ onMounted(() => {
             <span class="info-label">结算月份</span>
             <span class="info-value">{{ order.settlementMonth || '-' }}</span>
           </div>
-          <div v-if="order.isAbnormal" class="info-item" style="grid-column: 1 / -1">
+          <div v-if="isAbnormalStatus(order.status)" class="info-item" style="grid-column: 1 / -1">
             <van-notice-bar left-icon="warning" :text="'异常原因: ' + (order.abnormalRemark || '未填写')" background="#fff2f0" color="#ff4d4f" />
+          </div>
+          <div v-if="order.isRework && order.reworkRemark" class="info-item" style="grid-column: 1 / -1">
+            <van-notice-bar left-icon="warning" :text="'返工原因: ' + order.reworkRemark" background="#fff2f0" color="#ff4d4f" />
           </div>
         </div>
 
@@ -624,14 +770,53 @@ onMounted(() => {
           <van-field v-model="editForm.orderNo" label="工单号" placeholder="请输入工单号" />
           <van-field v-model="editForm.plateNumber" label="车牌号" placeholder="请输入车牌号" />
           <van-field v-model="editForm.carModel" label="车型" placeholder="请输入车型" />
+          <van-field v-model="editForm.vin" label="车架号" placeholder="请输入车架号(VIN)" />
+          <van-field v-model="editForm.brand" label="品牌" placeholder="请输入品牌" />
+          <van-cell title="工单日期" :value="editForm.orderDate || '请选择日期'" is-link @click="showEditDatePicker = true" />
+          <van-cell title="结算月份" :value="editForm.settlementMonth || '请选择月份'" is-link @click="showEditSettlementMonthPicker = true" />
           <van-field v-model="editForm.customerName" label="客户名称" placeholder="请输入客户名称" />
           <van-field v-model="editForm.phone" label="联系电话" placeholder="请输入电话" type="tel" />
           <van-field v-model="editForm.remark" label="备注" type="textarea" placeholder="请输入备注" rows="2" />
         </div>
       </div>
 
+      <!-- 返工标记 -->
+      <div v-if="!isEditing" class="info-section">
+        <div class="section-title">
+          返工标记
+        </div>
+        <van-cell center title="是否返工">
+          <template #right-icon>
+            <van-switch
+              :model-value="order.isRework"
+              :loading="reworkSaving"
+              size="22"
+              @update:model-value="toggleRework"
+            />
+          </template>
+        </van-cell>
+        <van-field
+          v-if="order.isRework"
+          v-model="reworkRemarkInput"
+          label="返工原因"
+          type="textarea"
+          placeholder="请输入返工原因（选填）"
+          rows="2"
+        />
+        <van-button
+          v-if="order.isRework"
+          block
+          type="danger"
+          size="small"
+          :loading="reworkSaving"
+          @click="toggleRework(true)"
+        >
+          保存返工原因
+        </van-button>
+      </div>
+
       <!-- 喷漆项目 -->
-      <div class="info-section">
+      <div v-if="!isEditing || !ocrCorrectionMode" class="info-section">
         <div class="section-title">
           喷漆项目
         </div>
@@ -652,7 +837,7 @@ onMounted(() => {
         </div>
 
         <!-- 编辑模式 -->
-        <div v-if="isEditing" class="edit-items-list">
+        <div v-if="isEditing && !ocrCorrectionMode" class="edit-items-list">
           <div v-for="(item, index) in editForm.items" :key="index" class="edit-item-card">
             <div class="edit-item-header">
               <span class="item-name clickable" @click="openCategoryPicker(index)">
@@ -707,12 +892,12 @@ onMounted(() => {
       <div class="info-section">
         <div class="section-title-row">
           <span class="section-title">工单图片</span>
-          <div v-if="isEditing" class="add-image-btn" @click="handleAddImage">
+          <div v-if="isEditing && !ocrCorrectionMode" class="add-image-btn" @click="handleAddImage">
             <van-icon name="plus" />
             <span>添加</span>
           </div>
         </div>
-        <div v-if="isEditing" class="image-grid">
+        <div v-if="isEditing && !ocrCorrectionMode" class="image-grid">
           <!-- 已有图片（未标记删除的） -->
           <div v-for="img in editImages" :key="img.id" class="image-item">
             <van-image :src="img.thumbnailUrl || img.url" fit="cover" class="order-image" @click="previewImage(img.url)" />
@@ -754,28 +939,31 @@ onMounted(() => {
           </van-button>
         </template>
         <template v-else>
-          <van-button v-if="!order.isAudited && allowEdit" plain type="primary" @click="enterEdit">
+          <van-button v-if="isUnauditedStatus(order.status) && allowEdit" plain type="primary" @click="enterEdit">
             编辑
           </van-button>
-          <van-button v-if="!order.isAudited && allowAudit" type="primary" @click="handleAudit">
+          <van-button v-if="!isUnauditedStatus(order.status) && allowEdit && order.images && order.images.length" plain type="warning" @click="enterOcrCorrection">
+            修正OCR
+          </van-button>
+          <van-button v-if="isUnauditedStatus(order.status) && allowAudit" type="primary" @click="handleAudit">
             审核
           </van-button>
-          <van-button v-if="order.isAudited && allowAudit" type="warning" @click="handleUnaudit">
+          <van-button v-if="isAuditedStatus(order.status) && allowAudit" type="warning" @click="handleUnaudit">
             取消审核
           </van-button>
-          <van-button v-if="order.isAudited && !order.settlements?.length && allowAudit" type="success" @click="openSettlePopup">
+          <van-button v-if="isAuditedStatus(order.status) && allowAudit" type="success" @click="handleSettle">
             结算
           </van-button>
-          <van-button v-if="order.isAudited && !order.isAbnormal && !order.settlements?.length && allowAudit" type="warning" plain @click="openAbnormalPopup">
+          <van-button v-if="order.status === 'SETTLED' && allowAudit" type="warning" @click="handleUnsettle">
+            取消结算
+          </van-button>
+          <van-button v-if="isAuditedStatus(order.status) && allowAudit" type="warning" plain @click="openAbnormalPopup">
             标记异常
           </van-button>
-          <van-button v-if="order.isAudited && order.isAbnormal && allowAudit" type="danger" plain @click="openAbnormalPopup">
+          <van-button v-if="isAbnormalStatus(order.status) && allowAudit" type="danger" plain @click="openAbnormalPopup">
             取消异常
           </van-button>
-          <van-button v-if="order.settlements?.length" type="warning" plain @click="openSettlementHistoryPopup">
-            结算记录({{ order.settlements.length }})
-          </van-button>
-          <van-button v-if="!order.isAudited && allowDelete" type="danger" plain @click="handleDelete">
+          <van-button v-if="isUnauditedStatus(order.status) && allowDelete" type="danger" plain @click="handleDelete">
             删除
           </van-button>
         </template>
@@ -791,6 +979,31 @@ onMounted(() => {
       />
     </van-popup>
 
+    <!-- 编辑日期选择器 -->
+    <van-popup v-model:show="showEditDatePicker" position="bottom" round>
+      <van-date-picker
+        v-model="editDatePickerValues"
+        title="选择工单日期"
+        :min-date="new Date(2020, 0, 1)"
+        :max-date="new Date()"
+        @confirm="onEditDateConfirm"
+        @cancel="showEditDatePicker = false"
+      />
+    </van-popup>
+
+    <!-- 编辑结算月份选择器 -->
+    <van-popup v-model:show="showEditSettlementMonthPicker" position="bottom" round>
+      <van-date-picker
+        v-model="editSettlementMonthPickerValue"
+        title="选择结算月份"
+        :columns-type="['year', 'month']"
+        :min-date="new Date(2020, 0, 1)"
+        :max-date="new Date()"
+        @confirm="onEditSettlementMonthConfirm"
+        @cancel="showEditSettlementMonthPicker = false"
+      />
+    </van-popup>
+
     <!-- 异常标注弹窗 -->
     <van-popup v-model:show="showAbnormalPopup" position="bottom" round :style="{ padding: '20px' }">
       <div class="settle-popup">
@@ -801,39 +1014,6 @@ onMounted(() => {
           <van-button block @click="showAbnormalPopup = false">取消</van-button>
           <van-button :type="abnormalFlag ? 'warning' : 'success'" block @click="confirmAbnormal">{{ abnormalFlag ? '确认标记' : '确认取消异常' }}</van-button>
         </div>
-      </div>
-    </van-popup>
-
-    <!-- 结算弹窗 -->
-    <van-popup v-model:show="showSettlePopup" position="bottom" round :style="{ padding: '20px' }">
-      <div class="settle-popup">
-        <div class="settle-title">结算工单</div>
-        <van-field v-model="settleMonth" label="结算月份" placeholder="如 2026-05" />
-        <van-field v-model="settleRemark" label="备注" type="textarea" placeholder="选填" rows="2" />
-        <div class="settle-actions">
-          <van-button block @click="showSettlePopup = false">取消</van-button>
-          <van-button type="primary" block @click="confirmSettle">确认结算</van-button>
-        </div>
-      </div>
-    </van-popup>
-
-    <!-- 结算历史弹窗 -->
-    <van-popup v-model:show="showSettlementHistory" position="bottom" round :style="{ maxHeight: '60vh' }">
-      <div class="settlement-history">
-        <div class="settle-title">结算记录</div>
-        <van-empty v-if="settlementRecords.length === 0" description="暂无结算记录" />
-        <div v-else class="settlement-list">
-          <div v-for="record in settlementRecords" :key="record.id" class="settlement-item">
-            <div class="settlement-info">
-              <div class="settlement-month">{{ record.settlementMonth }}</div>
-              <div class="settlement-detail">幅数: {{ Number(record.paintCount).toFixed(1) }} | 项目数: {{ record.itemCount }}</div>
-              <div v-if="record.remark" class="settlement-remark">备注: {{ record.remark }}</div>
-              <div class="settlement-time">{{ formatDate(record.createdAt) }}</div>
-            </div>
-            <van-button type="danger" size="small" plain @click="handleUnsettle(record.id)">删除</van-button>
-          </div>
-        </div>
-        <van-button block style="margin-top: 12px" @click="showSettlementHistory = false">关闭</van-button>
       </div>
     </van-popup>
 
@@ -915,8 +1095,10 @@ onMounted(() => {
   padding: 16px;
   color: #fff;
 
+  &.draft { background: linear-gradient(135deg, #8c8c8c, #bfbfbf); }
   &.pending { background: linear-gradient(135deg, #fa8c16, #ffa940); }
   &.audited { background: linear-gradient(135deg, #52c41a, #73d13d); }
+  &.settled { background: linear-gradient(135deg, #1890ff, #40a9ff); }
   &.abnormal { background: linear-gradient(135deg, #ff4d4f, #ff7875); }
 }
 
@@ -1193,8 +1375,8 @@ onMounted(() => {
 
 .image-item {
   position: relative;
-  width: calc(33.33% - 6px);
-  aspect-ratio: 1;
+  width: 100%;
+  height: 220px;
 }
 
 .order-image {
@@ -1248,59 +1430,5 @@ onMounted(() => {
     gap: 12px;
     margin-top: 16px;
   }
-}
-
-.settlement-history {
-  padding: 16px;
-
-  .settle-title {
-    font-size: 16px;
-    font-weight: 600;
-    text-align: center;
-    margin-bottom: 12px;
-  }
-}
-
-.settlement-list {
-  max-height: 40vh;
-  overflow-y: auto;
-}
-
-.settlement-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 12px;
-  background: #f7f8fa;
-  border-radius: 8px;
-  margin-bottom: 8px;
-}
-
-.settlement-info {
-  flex: 1;
-}
-
-.settlement-month {
-  font-size: 15px;
-  font-weight: 600;
-  color: #333;
-}
-
-.settlement-detail {
-  font-size: 13px;
-  color: #666;
-  margin-top: 4px;
-}
-
-.settlement-remark {
-  font-size: 12px;
-  color: #999;
-  margin-top: 2px;
-}
-
-.settlement-time {
-  font-size: 12px;
-  color: #bbb;
-  margin-top: 2px;
 }
 </style>

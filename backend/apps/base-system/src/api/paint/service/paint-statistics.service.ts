@@ -18,6 +18,13 @@ export interface MonthlyStat {
   auditedOrders: number;
   auditedPaintCount: number;
   auditedVehicles: number;
+  abnormalOrders: number;
+  abnormalPaintCount: number;
+  settledOrders: number;
+  settledPaintCount: number;
+  reworkOrders: number;
+  reworkPaintCount: number;
+  reworkVehicles: number;
 }
 
 export interface DailyStat {
@@ -36,6 +43,11 @@ export interface CategoryBreakdown {
 @Injectable()
 export class PaintStatisticsService {
   constructor(private readonly prisma: PrismaService) {}
+
+  private round(value: number, decimals = 1): number {
+    const factor = 10 ** decimals;
+    return Math.round(value * factor) / factor;
+  }
 
   async getMonthlyStatistics(
     settlementMonth?: string,
@@ -75,7 +87,8 @@ export class PaintStatisticsService {
         orderDate: true,
         totalPaintCount: true,
         shopId: true,
-        isAudited: true,
+        status: true,
+        isRework: true,
         plateNumber: true,
         items: { select: { categoryId: true, quantity: true, paintCount: true, specialPaintId: true, specialPaintMultiplier: true } },
       },
@@ -98,13 +111,27 @@ export class PaintStatisticsService {
       const plateNumbers = new Set<string>();
       const pendingPlateNumbers = new Set<string>();
       const auditedPlateNumbers = new Set<string>();
+      const reworkPlateNumbers = new Set<string>();
       let pendingOrders = 0;
       let pendingPaintCount = 0;
       let auditedOrders = 0;
       let auditedPaintCount = 0;
+      let reworkOrders = 0;
+      let reworkPaintCount = 0;
 
       for (const order of shopOrders) {
+        if (!order.orderDate) continue;
         const dateKey = new Date(order.orderDate).toISOString().split('T')[0];
+
+        if (order.isRework) {
+          reworkOrders += 1;
+          reworkPaintCount += Number(order.totalPaintCount);
+          if (order.plateNumber)
+            reworkPlateNumbers.add(order.plateNumber);
+          // 返工单不计入总幅数、日报、待审/已审统计
+          continue;
+        }
+
         const existing = dailyMap.get(dateKey) || { date: dateKey, orderCount: 0, paintCount: 0 };
         existing.orderCount += 1;
         existing.paintCount += Number(order.totalPaintCount);
@@ -112,7 +139,7 @@ export class PaintStatisticsService {
         if (order.plateNumber)
           plateNumbers.add(order.plateNumber);
 
-        if (order.isAudited) {
+        if (order.status === 'AUDITED' || order.status === 'SETTLED' || order.status === 'ABNORMAL') {
           auditedOrders += 1;
           auditedPaintCount += Number(order.totalPaintCount);
           if (order.plateNumber)
@@ -125,9 +152,18 @@ export class PaintStatisticsService {
         }
       }
 
-      const totalPaintCount = shopOrders.reduce((sum, o) => sum + Number(o.totalPaintCount), 0);
-      const totalOrders = shopOrders.length;
+      const totalPaintCount = this.round(shopOrders.filter(o => !o.isRework).reduce((sum, o) => sum + Number(o.totalPaintCount), 0));
+      const totalOrders = shopOrders.filter(o => !o.isRework).length;
       const totalVehicles = plateNumbers.size;
+
+      const dailyStats = Array.from(dailyMap.values())
+        .sort((a, b) => a.date.localeCompare(b.date))
+        .map(d => ({ ...d, paintCount: this.round(d.paintCount) }));
+
+      const abnormalOrders = shopOrders.filter(o => !o.isRework && o.status === 'ABNORMAL').length;
+      const abnormalPaintCount = this.round(shopOrders.filter(o => !o.isRework && o.status === 'ABNORMAL').reduce((sum, o) => sum + Number(o.totalPaintCount), 0));
+      const settledOrders = shopOrders.filter(o => !o.isRework && o.status === 'SETTLED').length;
+      const settledPaintCount = this.round(shopOrders.filter(o => !o.isRework && o.status === 'SETTLED').reduce((sum, o) => sum + Number(o.totalPaintCount), 0));
 
       results.push({
         settlementMonth: targetMonth,
@@ -135,17 +171,24 @@ export class PaintStatisticsService {
         shopName: shop.name,
         shopCode: shop.code,
         totalOrders,
-        totalPaintCount,
         totalVehicles,
-        avgPaintPerVehicle: totalVehicles > 0 ? +(totalPaintCount / totalVehicles).toFixed(2) : 0,
-        avgPaintPerOrder: totalOrders > 0 ? +(totalPaintCount / totalOrders).toFixed(2) : 0,
-        dailyStats: Array.from(dailyMap.values()).sort((a, b) => a.date.localeCompare(b.date)),
+        totalPaintCount,
+        avgPaintPerVehicle: totalVehicles > 0 ? this.round(totalPaintCount / totalVehicles, 2) : 0,
+        avgPaintPerOrder: totalOrders > 0 ? this.round(totalPaintCount / totalOrders, 2) : 0,
+        dailyStats,
         pendingOrders,
-        pendingPaintCount,
+        pendingPaintCount: this.round(pendingPaintCount),
         pendingVehicles: pendingPlateNumbers.size,
         auditedOrders,
-        auditedPaintCount,
+        auditedPaintCount: this.round(auditedPaintCount),
         auditedVehicles: auditedPlateNumbers.size,
+        abnormalOrders,
+        abnormalPaintCount,
+        settledOrders,
+        settledPaintCount,
+        reworkOrders,
+        reworkPaintCount: this.round(reworkPaintCount),
+        reworkVehicles: reworkPlateNumbers.size,
       });
     }
 
@@ -193,7 +236,9 @@ export class PaintStatisticsService {
       categoryMap.set(key, existing);
     }
 
-    return Array.from(categoryMap.values()).sort((a, b) => b.totalPaintCount - a.totalPaintCount);
+    return Array.from(categoryMap.values())
+      .map(item => ({ ...item, totalPaintCount: this.round(item.totalPaintCount) }))
+      .sort((a, b) => b.totalPaintCount - a.totalPaintCount);
   }
 
   async getShopComparison(settlementMonth?: string, accessibleShopIds?: string[] | null) {
@@ -245,7 +290,8 @@ export class PaintStatisticsService {
         settlementMonth: true,
         totalPaintCount: true,
         shopId: true,
-        isAudited: true,
+        status: true,
+        isRework: true,
         plateNumber: true,
       },
     });
@@ -261,6 +307,9 @@ export class PaintStatisticsService {
       auditedOrders: number;
       auditedPaintCount: number;
       auditedPlateNumbers: Set<string>;
+      reworkOrders: number;
+      reworkPaintCount: number;
+      reworkPlateNumbers: Set<string>;
     }>();
     for (let m = 1; m <= 12; m++) {
       const monthStr = `${targetYear}-${String(m).padStart(2, '0')}`;
@@ -274,6 +323,9 @@ export class PaintStatisticsService {
         auditedOrders: 0,
         auditedPaintCount: 0,
         auditedPlateNumbers: new Set(),
+        reworkOrders: 0,
+        reworkPaintCount: 0,
+        reworkPlateNumbers: new Set(),
       });
     }
 
@@ -281,11 +333,20 @@ export class PaintStatisticsService {
       const month = order.settlementMonth;
       if (!month || !monthMap.has(month)) continue;
       const stat = monthMap.get(month)!;
+
+      if (order.isRework) {
+        stat.reworkOrders += 1;
+        stat.reworkPaintCount += Number(order.totalPaintCount);
+        if (order.plateNumber)
+          stat.reworkPlateNumbers.add(order.plateNumber);
+        continue;
+      }
+
       stat.totalOrders += 1;
       stat.totalPaintCount += Number(order.totalPaintCount);
       stat.shopCount.add(order.shopId);
 
-      if (order.isAudited) {
+      if (order.status === 'AUDITED' || order.status === 'SETTLED' || order.status === 'ABNORMAL') {
         stat.auditedOrders += 1;
         stat.auditedPaintCount += Number(order.totalPaintCount);
         if (order.plateNumber)
@@ -304,14 +365,17 @@ export class PaintStatisticsService {
         month,
         settlementMonth,
         totalOrders: stat.totalOrders,
-        totalPaintCount: stat.totalPaintCount,
+        totalPaintCount: this.round(stat.totalPaintCount),
         shopCount: stat.shopCount.size,
         pendingOrders: stat.pendingOrders,
-        pendingPaintCount: stat.pendingPaintCount,
+        pendingPaintCount: this.round(stat.pendingPaintCount),
         pendingVehicles: stat.pendingPlateNumbers.size,
         auditedOrders: stat.auditedOrders,
-        auditedPaintCount: stat.auditedPaintCount,
+        auditedPaintCount: this.round(stat.auditedPaintCount),
         auditedVehicles: stat.auditedPlateNumbers.size,
+        reworkOrders: stat.reworkOrders,
+        reworkPaintCount: this.round(stat.reworkPaintCount),
+        reworkVehicles: stat.reworkPlateNumbers.size,
       };
     });
   }
@@ -347,13 +411,13 @@ export class PaintStatisticsService {
       工单号: order.orderNo,
       门店: (order.shop as any)?.name || '',
       门店编码: (order.shop as any)?.code || '',
-      工单日期: new Date(order.orderDate).toISOString().split('T')[0],
+      工单日期: order.orderDate ? new Date(order.orderDate).toISOString().split('T')[0] : '',
       结算月份: order.settlementMonth || '',
       车牌号: order.plateNumber || '',
       车型: order.carModel || '',
       客户名称: order.customerName || '',
       总幅数: Number(order.totalPaintCount),
-      是否审核: order.isAudited ? '是' : '否',
+      是否审核: order.status !== 'DRAFT' && order.status !== 'PENDING' ? '是' : '否',
       审核时间: order.auditedAt ? new Date(order.auditedAt).toISOString().split('T')[0] : '',
       审核人: order.auditedBy || '',
       状态: order.status,
@@ -367,5 +431,64 @@ export class PaintStatisticsService {
       })),
       备注: order.remark || '',
     }));
+  }
+
+  /**
+   * 获取月度概览 KPI
+   */
+  async getOverview(
+    settlementMonth?: string,
+    shopId?: string,
+    accessibleShopIds?: string[] | null,
+  ) {
+    const monthly = await this.getMonthlyStatistics(settlementMonth, shopId, accessibleShopIds);
+    const totalOrders = monthly.reduce((s, d) => s + d.totalOrders, 0);
+    const totalPaintCount = monthly.reduce((s, d) => s + d.totalPaintCount, 0);
+    const auditedOrders = monthly.reduce((s, d) => s + d.auditedOrders, 0);
+    const auditedPaintCount = monthly.reduce((s, d) => s + d.auditedPaintCount, 0);
+    const pendingOrders = monthly.reduce((s, d) => s + d.pendingOrders, 0);
+    const pendingPaintCount = monthly.reduce((s, d) => s + d.pendingPaintCount, 0);
+    const abnormalOrders = monthly.reduce((s, d) => s + d.abnormalOrders, 0);
+    const abnormalPaintCount = monthly.reduce((s, d) => s + d.abnormalPaintCount, 0);
+    const settledOrders = monthly.reduce((s, d) => s + d.settledOrders, 0);
+    const settledPaintCount = monthly.reduce((s, d) => s + d.settledPaintCount, 0);
+    const reworkOrders = monthly.reduce((s, d) => s + d.reworkOrders, 0);
+    const reworkPaintCount = monthly.reduce((s, d) => s + d.reworkPaintCount, 0);
+    const reworkVehicles = monthly.reduce((s, d) => s + d.reworkVehicles, 0);
+
+    return {
+      totalOrders,
+      totalPaintCount,
+      auditedOrders,
+      auditedPaintCount,
+      auditRate: totalOrders > 0 ? this.round((auditedOrders / totalOrders) * 100, 2) : 0,
+      pendingOrders,
+      pendingPaintCount,
+      abnormalOrders,
+      abnormalPaintCount,
+      settledOrders,
+      settledPaintCount,
+      settlementRate: totalOrders > 0 ? this.round((settledOrders / totalOrders) * 100, 2) : 0,
+      avgPaintPerOrder: totalOrders > 0 ? this.round(totalPaintCount / totalOrders, 2) : 0,
+      reworkOrders,
+      reworkPaintCount,
+      reworkVehicles,
+    };
+  }
+
+  /**
+   * 获取有数据的最新结算月份
+   */
+  async getLatestSettlementMonth(accessibleShopIds?: string[] | null): Promise<string | null> {
+    const allowedShopIds = accessibleShopIds && accessibleShopIds.length > 0 ? accessibleShopIds : null;
+    const result = await this.prisma.paintWorkOrder.findFirst({
+      where: {
+        settlementMonth: { not: null },
+        ...(allowedShopIds && { shopId: { in: allowedShopIds } }),
+      },
+      orderBy: { settlementMonth: 'desc' },
+      select: { settlementMonth: true },
+    });
+    return result?.settlementMonth || null;
   }
 }

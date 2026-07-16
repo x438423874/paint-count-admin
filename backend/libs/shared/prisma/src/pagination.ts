@@ -13,5 +13,6 @@ export class PaginationResult<T> implements IQueryResult {
     public readonly size: number,
     public readonly total: number,
     public readonly records: T[],
+    public readonly totalPaintCount?: number,
   ) {}
 }

@@ -15,6 +15,9 @@ NProgress.configure({ showSpinner: true, parent: '#app' })
 const router = createRouter({
   history: createWebHistory(import.meta.env.VITE_APP_PUBLIC_PATH),
   routes,
+  scrollBehavior() {
+    return { top: 0, left: 0 }
+  },
 })
 
 // This will update routes at runtime without reloading the page

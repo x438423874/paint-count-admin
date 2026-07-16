@@ -44,7 +44,7 @@ export interface PaintShopListItem {
 }
 
 /** 工单状态 */
-export type PaintOrderStatus = 'PENDING' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED';
+export type PaintOrderStatus = 'DRAFT' | 'PENDING' | 'AUDITED' | 'SETTLED' | 'ABNORMAL';
 
 /** 图片类型 */
 export type PaintImageType = 'BEFORE' | 'DURING' | 'AFTER';
@@ -99,46 +99,36 @@ export interface PaintWorkOrderImage {
   createdAt: string;
 }
 
-/** 结算记录 */
-export interface PaintSettlementRecord {
-  id: string;
-  orderId: string;
-  settlementMonth: string;
-  paintCount: number;
-  itemCount: number;
-  remark?: string | null;
-  createdAt: string;
-}
-
 /** 工单 */
 export interface PaintWorkOrder {
   id: string;
-  orderNo: string;
+  orderNo?: string | null;
   shopId: string;
   orderDate: string;
   settlementMonth?: string | null;
   carModel?: string | null;
   plateNumber?: string | null;
   vin?: string | null;
+  brand?: string | null;
   customerName?: string | null;
   phone?: string | null;
   contactPerson?: string | null;
   description?: string | null;
   totalPaintCount: number;
   status: PaintOrderStatus;
-  isAudited: boolean;
   auditedAt?: string | null;
   auditedBy?: string | null;
   remark?: string | null;
   mergeGroupId?: string | null;
   shopName?: string | null;
   isAbnormal?: boolean | null;
+  isRework?: boolean | null;
+  reworkRemark?: string | null;
   createdAt: string;
   updatedAt?: string | null;
   shop?: PaintShopListItem;
   items?: PaintWorkOrderItem[];
   images?: PaintWorkOrderImage[];
-  settlements?: PaintSettlementRecord[];
 }
 
 /** 工单创建数据 */
@@ -150,6 +140,7 @@ export interface CreateWorkOrderData {
   carModel?: string;
   plateNumber?: string;
   vin?: string;
+  brand?: string;
   customerName?: string;
   phone?: string;
   contactPerson?: string;
@@ -161,15 +152,23 @@ export interface CreateWorkOrderData {
 /** 工单更新数据 */
 export interface UpdateWorkOrderData {
   id: string;
+  shopId?: string;
   orderNo?: string;
+  orderDate?: string;
   carModel?: string;
   plateNumber?: string;
+  vin?: string;
+  brand?: string;
   customerName?: string;
   phone?: string;
+  contactPerson?: string;
+  description?: string;
   status?: PaintOrderStatus;
   settlementMonth?: string;
   items?: WorkOrderItemInput[];
   remark?: string;
+  isRework?: boolean;
+  reworkRemark?: string;
 }
 
 /** 工单项目输入 */
@@ -236,6 +235,9 @@ export interface MonthlyStat {
   auditedOrders: number;
   auditedPaintCount: number;
   auditedVehicles: number;
+  reworkOrders: number;
+  reworkPaintCount: number;
+  reworkVehicles: number;
 }
 
 /** 类别统计 */
@@ -262,6 +264,9 @@ export interface ShopComparison {
   auditedOrders: number;
   auditedPaintCount: number;
   auditedVehicles: number;
+  reworkOrders: number;
+  reworkPaintCount: number;
+  reworkVehicles: number;
 }
 
 /** 年度概览 */
@@ -329,13 +334,6 @@ export function fetchPaintShopPage(params?: { current?: number; size?: number; n
   });
 }
 
-export function fetchPaintShopById(id: string) {
-  return request<PaintShop>({
-    url: `/paint/shop/${id}`,
-    method: 'get'
-  });
-}
-
 export function createPaintShop(data: { name: string; code: string; brand: string; address?: string; phone?: string; standardTemplateId?: string }) {
   return request({
     url: '/paint/shop',
@@ -359,9 +357,16 @@ export function deletePaintShop(id: string) {
   });
 }
 
+export function fetchCategoryAliasMap(shopId: string) {
+  return request<Record<string, string>>({
+    url: `/paint/shop/${shopId}/category-alias-map`,
+    method: 'get'
+  });
+}
+
 // ==================== 工单 API ====================
 
-export function fetchWorkOrderPage(params?: {
+export function fetchWorkOrderPage(params: {
   current?: number;
   size?: number;
   shopId?: string;
@@ -369,6 +374,8 @@ export function fetchWorkOrderPage(params?: {
   customerName?: string;
   settlementMonth?: string;
   status?: string;
+  isRework?: boolean;
+  categoryId?: string;
 }) {
   return request<PageResult<PaintWorkOrder>>({
     url: '/paint/work-order/page',
@@ -401,8 +408,21 @@ export function quickCreateWorkOrder(shopId: string, formData: FormData) {
   });
 }
 
+/** OCR 识别的部位项 */
+export interface OcrRecognizedItem {
+  categoryId?: string;
+  matchedName: string;
+  rawText: string;
+  quantity: number;
+  newPartQuantity: number;
+  matched: boolean;
+}
+
+/** OCR 识别模式：basic 仅基础资料 / items 仅部位 / all 全部 */
+export type OcrMode = 'basic' | 'items' | 'all';
+
 export function ocrRecognizeImage(formData: FormData) {
-  return request<{ plateNumber: string; orderNo: string; customerName: string; phone: string; carModel: string; date: string; rawText: string }>({
+  return request<{ plateNumber: string; orderNo: string; customerName: string; phone: string; carModel: string; vin: string; brand: string; date: string; rawText: string; items?: OcrRecognizedItem[] }>({
     url: '/paint/work-order/ocr',
     method: 'post',
     data: formData,
@@ -410,104 +430,61 @@ export function ocrRecognizeImage(formData: FormData) {
   });
 }
 
-/** 智能标注：自动识别字段区域坐标 */
-export function ocrSmartAnnotate(formData: FormData) {
-  return request<Record<string, { x: number; y: number; width: number; height: number } | null>>({
-    url: '/paint/work-order/ocr-smart-annotate',
+export interface BatchOcrPreviewItem {
+  id: string;
+  fileName: string;
+  thumbnail: string;
+  result: {
+    plateNumber: string;
+    orderNo: string;
+    customerName: string;
+    phone: string;
+    carModel: string;
+    vin: string;
+    brand: string;
+    date: string;
+    rawText: string;
+    items?: OcrRecognizedItem[];
+  };
+  warnings: string[];
+  valid: boolean;
+}
+
+export function batchOcrPreview(formData: FormData) {
+  return request<{ items: BatchOcrPreviewItem[] }>({
+    url: '/paint/work-order/batch-ocr-preview',
     method: 'post',
     data: formData,
-    timeout: 120_000
+    timeout: 300_000
   });
 }
 
-export function getOcrTemplate(shopId: string) {
-  return request<any>({
-    url: '/paint/work-order/ocr-template',
-    method: 'get',
-    params: { shopId }
-  });
+export interface BatchCreateItem {
+  id: string;
+  plateNumber?: string;
+  orderNo?: string;
+  customerName?: string;
+  phone?: string;
+  carModel?: string;
+  vin?: string;
+  brand?: string;
+  orderDate?: string;
+  settlementMonth?: string;
+  items?: { categoryId: string; quantity: number; newPartQuantity: number }[];
 }
 
-export function saveOcrTemplate(shopId: string, config: any) {
-  return request({
-    url: '/paint/work-order/ocr-template',
-    method: 'post',
-    data: { shopId, config }
-  });
-}
-
-export function deleteOcrTemplate(shopId: string) {
-  return request({
-    url: '/paint/work-order/ocr-template',
-    method: 'delete',
-    params: { shopId }
-  });
-}
-
-// 获取默认字段别名配置
-export function getDefaultFieldLabels() {
-  return request<Record<string, string[]>>({
-    url: '/paint/work-order/ocr-field-labels/default',
-    method: 'get'
-  });
-}
-
-// 获取门店字段别名配置
-export function getShopFieldLabels(shopId: string) {
-  return request<Record<string, string[]>>({
-    url: '/paint/work-order/ocr-field-labels',
-    method: 'get',
-    params: { shopId }
-  });
-}
-
-// 保存门店字段别名配置
-export function saveShopFieldLabels(shopId: string, config: Record<string, string[]>) {
-  return request({
-    url: '/paint/work-order/ocr-field-labels',
-    method: 'post',
-    data: { shopId, config }
-  });
-}
-
-// OCR诊断：返回详细的识别过程信息
-export function ocrDiagnose(file: File, shopId?: string) {
+export function batchCreateWorkOrder(shopId: string, items: BatchCreateItem[], files: Map<string, File>) {
   const formData = new FormData();
-  formData.append('file', file);
-  if (shopId) formData.append('shopId', shopId);
-  return request({
-    url: '/paint/work-order/ocr-diagnose',
+  formData.append('shopId', shopId);
+  formData.append('items', JSON.stringify(items));
+  files.forEach((file, id) => {
+    formData.append(id, file);
+  });
+  return request<{ created: any[]; errors: { id: string; message: string }[]; total: number }>({
+    url: '/paint/work-order/batch-create',
     method: 'post',
     data: formData,
-    headers: { 'Content-Type': 'multipart/form-data' },
-    timeout: 120000
-  });
-}
-
-// 修复脏数据：没有有效区域标注但标记为已验证的记录重置为待验证
-export function fixOcrVerifiedStatus(shopId?: string) {
-  return request<{ fixed: number }>({
-    url: '/paint/work-order/ocr-fix-verified-status',
-    method: 'post',
-    data: shopId ? { shopId } : {}
-  });
-}
-
-export function batchValidateOcr(shopId: string, limit: number = 20) {
-  return request<{
-    total: number;
-    fields: Record<string, { total: number; matched: number; accuracy: number }>;
-    details: Array<{
-      orderId: string;
-      orderNo: string;
-      expected: Record<string, string>;
-      actual: Record<string, string>;
-      matched: Record<string, boolean>;
-    }>;
-  }>({
-    url: '/paint/work-order/ocr-batch-validate',
-    method: 'post',
-    data: { shopId, limit }
+    timeout: 300_000
   });
 }
 
@@ -522,21 +499,6 @@ export function updateWorkOrder(data: UpdateWorkOrderData) {
 export function deleteWorkOrder(id: string) {
   return request({
     url: `/paint/work-order/${id}`,
-    method: 'delete'
-  });
-}
-
-export function addWorkOrderItems(orderId: string, items: WorkOrderItemInput[]) {
-  return request({
-    url: `/paint/work-order/${orderId}/items`,
-    method: 'post',
-    data: items
-  });
-}
-
-export function removeWorkOrderItem(orderId: string, itemId: string) {
-  return request({
-    url: `/paint/work-order/${orderId}/items/${itemId}`,
     method: 'delete'
   });
 }
@@ -557,6 +519,13 @@ export function removeWorkOrderImage(imageId: string) {
 }
 
 // ==================== 统计 API ====================
+
+export function fetchLatestSettlementMonth() {
+  return request<string | null>({
+    url: '/paint/statistics/latest-month',
+    method: 'get'
+  });
+}
 
 export function fetchMonthlyStatistics(params?: { settlementMonth?: string; shopId?: string }) {
   return request<MonthlyStat[]>({
@@ -590,6 +559,30 @@ export function fetchYearOverview(params?: { year?: number; shopId?: string }) {
   });
 }
 
+export interface StatisticsOverview {
+  totalOrders: number;
+  totalPaintCount: number;
+  auditedOrders: number;
+  auditedPaintCount: number;
+  auditRate: number;
+  pendingOrders: number;
+  pendingPaintCount: number;
+  abnormalOrders: number;
+  abnormalPaintCount: number;
+  settledOrders: number;
+  settledPaintCount: number;
+  settlementRate: number;
+  avgPaintPerOrder: number;
+}
+
+export function fetchStatisticsOverview(params?: { settlementMonth?: string; shopId?: string }) {
+  return request<StatisticsOverview>({
+    url: '/paint/statistics/overview',
+    method: 'get',
+    params
+  });
+}
+
 // ==================== 幅数标准 API ====================
 
 export function fetchPaintCategoryList() {
@@ -599,40 +592,10 @@ export function fetchPaintCategoryList() {
   });
 }
 
-export function fetchShopStandards(shopId: string) {
-  return request<PaintStandard[]>({
-    url: `/paint/standard/shop/${shopId}`,
-    method: 'get'
-  });
-}
-
 export function fetchShopCategoriesWithStandard(shopId: string) {
   return request<(PaintItemCategory & { standard?: PaintStandard })[]>({
     url: `/paint/standard/shop/${shopId}/categories`,
     method: 'get'
-  });
-}
-
-export function setShopStandards(shopId: string, standards: { categoryId: string; coefficient: number; newPartAddition?: number; alias?: string }[]) {
-  return request({
-    url: `/paint/standard/shop/${shopId}`,
-    method: 'post',
-    data: { standards }
-  });
-}
-
-export function updatePaintStandard(id: string, coefficient: number) {
-  return request({
-    url: `/paint/standard/${id}`,
-    method: 'put',
-    data: { coefficient }
-  });
-}
-
-export function deletePaintStandard(id: string) {
-  return request({
-    url: `/paint/standard/${id}`,
-    method: 'delete'
   });
 }
 
@@ -729,14 +692,6 @@ export function createSpecialPaint(data: { templateId: string; name: string; mul
   });
 }
 
-export function updateSpecialPaint(data: { id: string; name?: string; multiplier?: number; description?: string; isActive?: boolean }) {
-  return request<PaintSpecialPaint>({
-    url: '/paint/standard-template/special-paint',
-    method: 'put',
-    data
-  });
-}
-
 export function deleteSpecialPaint(id: string) {
   return request({
     url: `/paint/standard-template/special-paint/${id}`,
@@ -779,20 +734,20 @@ export function mergeWorkOrders(targetId: string, sourceIds: string[]) {
   });
 }
 
-// ==================== 工单结算记录 ====================
+// ==================== 工单结算（状态变更） ====================
 
-export function addSettlementRecord(orderId: string, settlementMonth: string, remark?: string) {
-  return request<PaintSettlementRecord>({
+export function settleWorkOrder(orderId: string, settlementMonth?: string) {
+  return request({
     url: `/paint/work-order/${orderId}/settlement`,
     method: 'post',
-    data: { settlementMonth, remark }
+    data: { settlementMonth }
   });
 }
 
-export function removeSettlementRecord(orderId: string, recordId: string) {
+export function unsettleWorkOrder(orderId: string) {
   return request({
-    url: `/paint/work-order/${orderId}/settlement/${recordId}`,
-    method: 'delete'
+    url: `/paint/work-order/${orderId}/unsettle`,
+    method: 'post'
   });
 }
 
@@ -804,11 +759,10 @@ export function setAbnormal(orderId: string, isAbnormal: boolean, abnormalRemark
   });
 }
 
-export function getSettlementHistory(orderId: string) {
-  return request<PaintSettlementRecord[]>({
-    url: `/paint/work-order/${orderId}/settlements`,
-    method: 'get'
-  });
+export interface OrderNoRule {
+  pattern: string;
+  length: number;
+  description?: string;
 }
 
 // ==================== 工单导入导出 ====================
@@ -826,12 +780,85 @@ export function importWorkOrderExcel(file: File, shopId: string, settlementMonth
   });
 }
 
-export function exportWorkOrderExcel(shopId: string, settlementMonth?: string) {
+export function exportWorkOrderExcel(shopId: string, settlementMonth?: string, mode: 'detail' | 'summary' = 'detail') {
   return request({
     url: '/paint/work-order/export',
     method: 'get',
-    params: { shopId, ...(settlementMonth && { settlementMonth }) },
+    params: { shopId, mode, ...(settlementMonth && { settlementMonth }) },
     responseType: 'blob'
+  });
+}
+
+export interface ReconcileSummary {
+  excelTotal: number;
+  systemTotal: number;
+  diff: number;
+  excelCount: number;
+  systemCount: number;
+  matchedCount: number;
+  diffCount: number;
+  missingInSystemCount: number;
+  extraInSystemCount: number;
+  duplicateCount: number;
+}
+
+export type ReconcileItemType = 'matched' | 'diff' | 'missing_in_system' | 'extra_in_system' | 'duplicate';
+
+export interface ReconcileItem {
+  id?: string;
+  type: ReconcileItemType;
+  orderNo: string;
+  plateNumber: string;
+  excelPaintCount?: number;
+  systemPaintCount?: number;
+  diff?: number;
+  status?: string;
+  systemRemark?: string | null;
+  remark?: string;
+  source?: 'excel' | 'system';
+  count?: number;
+}
+
+export interface ReconcileResult {
+  summary: ReconcileSummary;
+  items: ReconcileItem[];
+}
+
+export function reconcileWorkOrderExcel(file: File, shopId: string, settlementMonth: string) {
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('shopId', shopId);
+  formData.append('settlementMonth', settlementMonth);
+  return request<ReconcileResult>({
+    url: '/paint/work-order/reconcile',
+    method: 'post',
+    data: formData,
+    headers: { 'Content-Type': null as unknown as string },
+    timeout: 120000
+  });
+}
+
+export function fetchOrderNoRules(shopId: string) {
+  return request<OrderNoRule[]>({
+    url: '/paint/work-order/order-no-rules',
+    method: 'get',
+    params: { shopId }
+  });
+}
+
+export function saveOrderNoRules(shopId: string, rules: OrderNoRule[]) {
+  return request({
+    url: '/paint/work-order/order-no-rules',
+    method: 'post',
+    data: { shopId, rules }
+  });
+}
+
+export function analyzeOrderNoRules(shopId: string) {
+  return request<OrderNoRule[]>({
+    url: '/paint/work-order/analyze-order-no-rules',
+    method: 'post',
+    data: { shopId }
   });
 }
 
@@ -858,11 +885,15 @@ export function detectExcelTemplate(file: File, shopId: string) {
   });
 }
 
-export function saveExcelTemplate(shopId: string, config: ExcelTemplateConfig) {
+export function saveExcelTemplateAndAliasMap(
+  shopId: string,
+  config: ExcelTemplateConfig,
+  aliasMap: Record<string, string[]>
+) {
   return request<PaintShop>({
-    url: '/paint/work-order/save-template',
+    url: '/paint/work-order/save-template-and-alias-map',
     method: 'post',
-    data: { shopId, config }
+    data: { shopId, config, aliasMap }
   });
 }
 
@@ -903,140 +934,12 @@ export function exportStatisticsPdf(settlementMonth: string, shopId?: string) {
   });
 }
 
-// ==================== OCR 标注学习 API ====================
-
-/** OCR 标注数据 */
-export interface OcrAnnotation {
-  id: string;
-  shopId: string;
-  orderId?: string | null;
-  imageUrl: string;
-  imageWidth: number;
-  imageHeight: number;
-  regions: Record<string, { x: number; y: number; width: number; height: number } | null>;
-  groundTruth?: Record<string, string> | null;
-  isVerified: boolean;
-  annotatedBy?: string | null;
-  createdAt: string;
-}
-
-/** 聚合模板 */
-export interface AggregatedTemplate {
-  name: string;
-  imageWidth: number;
-  imageHeight: number;
-  regions: Record<string, { x: number; y: number; width: number; height: number }>;
-  annotationCount: number;
-  fieldCoverage: Record<string, number>;
-}
-
-/** 标注统计 */
-export interface AnnotationStats {
-  total: number;
-  verified: number;
-  unverified: number;
-  coverage: Record<string, number>;
-}
-
-/** 保存 OCR 标注 */
-export function saveOcrAnnotation(data: {
-  shopId: string;
-  orderId?: string;
-  imageUrl: string;
-  imageWidth: number;
-  imageHeight: number;
-  regions: Record<string, any>;
-  groundTruth?: Record<string, string>;
-  isVerified?: boolean;
-}) {
-  return request<OcrAnnotation>({
-    url: '/paint/work-order/ocr-annotation',
-    method: 'post',
-    data
-  });
-}
-
-/** 查询门店标注列表 */
-export function getOcrAnnotations(shopId: string, page?: number, pageSize?: number) {
-  return request<{ list: OcrAnnotation[]; total: number }>({
-    url: '/paint/work-order/ocr-annotations',
-    method: 'get',
-    params: { shopId, page, pageSize }
-  });
-}
-
-/** 删除标注 */
-export function deleteOcrAnnotation(id: string, shopId: string) {
-  return request({
-    url: `/paint/work-order/ocr-annotation/${id}`,
-    method: 'delete',
-    params: { shopId }
-  });
-}
-
-/** 验证标注 */
-export function verifyOcrAnnotation(id: string, isCorrect: boolean) {
-  return request({
-    url: `/paint/work-order/ocr-annotation/${id}/verify`,
-    method: 'post',
-    data: { isCorrect }
-  });
-}
-
-/** 获取聚合模板 */
-export function getAggregatedOcrTemplate(shopId: string) {
-  return request<AggregatedTemplate | null>({
-    url: '/paint/work-order/ocr-aggregated-template',
-    method: 'get',
-    params: { shopId }
-  });
-}
-
-/** 获取标注统计 */
-export function getOcrAnnotationStats(shopId: string) {
-  return request<AnnotationStats>({
-    url: '/paint/work-order/ocr-annotation-stats',
-    method: 'get',
-    params: { shopId }
-  });
-}
-
-/** 获取已标注的工单ID列表（用于区分已标注/未标注） */
-export function getAnnotatedOrderIds(shopId: string) {
-  return request<string[]>({
-    url: '/paint/work-order/ocr-annotated-order-ids',
-    method: 'get',
-    params: { shopId }
-  });
-}
-
 // ==================== 定时任务管理 ====================
 
 export function fetchScheduledTasks() {
   return request<ScheduledTask[]>({
     url: '/scheduled-tasks',
     method: 'get'
-  });
-}
-
-export function fetchScheduledTaskByName(name: string) {
-  return request<ScheduledTask>({
-    url: `/scheduled-tasks/${name}`,
-    method: 'get'
-  });
-}
-
-export function startScheduledTask(name: string) {
-  return request({
-    url: `/scheduled-tasks/${name}/start`,
-    method: 'post'
-  });
-}
-
-export function stopScheduledTask(name: string) {
-  return request({
-    url: `/scheduled-tasks/${name}/stop`,
-    method: 'post'
   });
 }
 
@@ -1072,5 +975,41 @@ export function bindUserShops(userId: string, shopIds: string[]) {
     url: `/paint/user-shop/user/${userId}`,
     method: 'put',
     data: { shopIds }
+  });
+}
+
+// ==================== 封单管理 API ====================
+
+export interface SettlementMonthRecord {
+  id: string;
+  shopId: string;
+  month: string;
+  isSealed: boolean;
+  sealedAt: string | null;
+  sealedBy: string | null;
+  shop?: { id: string; name: string };
+}
+
+export function sealSettlementMonth(shopId: string, month: string) {
+  return request<SettlementMonthRecord>({
+    url: '/paint/settlement-month/seal',
+    method: 'post',
+    data: { shopId, month }
+  });
+}
+
+export function unsealSettlementMonth(shopId: string, month: string) {
+  return request<SettlementMonthRecord>({
+    url: '/paint/settlement-month/unseal',
+    method: 'post',
+    data: { shopId, month }
+  });
+}
+
+export function getSealStatus(shopId: string, month: string) {
+  return request<SettlementMonthRecord | null>({
+    url: '/paint/settlement-month/status',
+    method: 'get',
+    params: { shopId, month }
   });
 }

@@ -19,6 +19,14 @@ export class PaintStatisticsController {
     private readonly pdfExportService: PaintPdfExportService,
   ) {}
 
+  @Get('latest-month')
+  @ApiOperation({ summary: '获取有数据的最新结算月份' })
+  async latestMonth(@Request() req: AuthenticatedRequest) {
+    const accessibleShopIds = await this.userShopService.getAccessibleShopIds(req.user.uid);
+    const data = await this.statisticsService.getLatestSettlementMonth(accessibleShopIds);
+    return ApiRes.success(data);
+  }
+
   @Get('monthly')
   @ApiOperation({ summary: '结算月幅数统计(按天汇总)' })
   async monthly(
@@ -28,6 +36,18 @@ export class PaintStatisticsController {
   ) {
     const accessibleShopIds = await this.userShopService.getAccessibleShopIds(req.user.uid);
     const data = await this.statisticsService.getMonthlyStatistics(settlementMonth, shopId, accessibleShopIds);
+    return ApiRes.success(data);
+  }
+
+  @Get('overview')
+  @ApiOperation({ summary: '月度概览 KPI' })
+  async overview(
+    @Request() req: AuthenticatedRequest,
+    @Query('settlementMonth') settlementMonth?: string,
+    @Query('shopId') shopId?: string,
+  ) {
+    const accessibleShopIds = await this.userShopService.getAccessibleShopIds(req.user.uid);
+    const data = await this.statisticsService.getOverview(settlementMonth, shopId, accessibleShopIds);
     return ApiRes.success(data);
   }
 

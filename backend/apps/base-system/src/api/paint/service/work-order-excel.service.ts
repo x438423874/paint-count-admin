@@ -2,6 +2,7 @@ import { Injectable, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '@lib/shared/prisma/prisma.service';
 import { MetricsService } from '@lib/shared/metrics/metrics.service';
 import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
 import { WorkOrderService } from './work-order.service';
 
 /** 默认列映射（作为后备） */
@@ -168,6 +169,23 @@ export class WorkOrderExcelService {
   }
 
   /**
+   * 统一保存门店 Excel 模板配置和部位别名映射
+   */
+  async saveTemplateAndAliasMap(
+    shopId: string,
+    config: ExcelTemplateConfig,
+    aliasMap: Record<string, string[]>,
+  ) {
+    return this.prisma.paintShop.update({
+      where: { id: shopId },
+      data: {
+        excelTemplateConfig: JSON.stringify(config),
+        categoryAliasMap: JSON.stringify(aliasMap),
+      },
+    });
+  }
+
+  /**
    * 导入Excel台账数据
    */
   async importExcel(buffer: Buffer, shopId: string, settlementMonth?: string) {
@@ -183,9 +201,11 @@ export class WorkOrderExcelService {
 
     // 使用门店专属配置
     const config = await this.getTemplateConfig(shopId);
+    const aliasMap = await this.getCategoryAliasMap(shopId);
 
     const categories = await this.prisma.paintItemCategory.findMany();
-    const categoryMap = new Map(categories.map(c => [c.name, c]));
+    const categoryMap = new Map(categories.map(c => [c.id, c]));
+    const categoryNameMap = new Map(categories.map(c => [c.name, c]));
 
     const range = XLSX.utils.decode_range(ws['!ref'] || 'A1');
     const results = { success: 0, failed: 0, errors: [] as string[] };
@@ -219,20 +239,40 @@ export class WorkOrderExcelService {
           }
         }
 
-        const items: { categoryId: string; quantity: number; newPartQuantity: number }[] = [];
+        const itemMap = new Map<string, number>();
+        const unmappedNames: string[] = [];
         for (const mapping of config.items) {
           const colIndex = XLSX.utils.decode_col(mapping.col);
           const cell = ws[XLSX.utils.encode_cell({ r, c: colIndex })];
-          if (cell && cell.v) {
-            const category = categoryMap.get(mapping.categoryName);
-            if (!category) {
-              results.errors.push(`行${r + 1}: 项目"${mapping.categoryName}"在系统中不存在`);
-              continue;
+          if (!cell || !cell.v) continue;
+
+          const quantity = Math.round(Number(cell.v)) || 1;
+          const mappedCategoryIds = aliasMap[mapping.categoryName];
+
+          if (mappedCategoryIds && mappedCategoryIds.length > 0) {
+            for (const categoryId of mappedCategoryIds) {
+              if (!categoryMap.has(categoryId)) continue;
+              itemMap.set(categoryId, (itemMap.get(categoryId) || 0) + quantity);
             }
-            const quantity = Math.round(Number(cell.v)) || 1;
-            items.push({ categoryId: category.id, quantity, newPartQuantity: 0 });
+            continue;
+          }
+
+          const category = categoryNameMap.get(mapping.categoryName);
+          if (category) {
+            itemMap.set(category.id, (itemMap.get(category.id) || 0) + quantity);
+          } else {
+            unmappedNames.push(mapping.categoryName);
           }
         }
+
+        const items = Array.from(itemMap.entries()).map(([categoryId, quantity]) => ({
+          categoryId,
+          quantity,
+          newPartQuantity: 0,
+        }));
+
+        const extraRemark = unmappedNames.length > 0 ? `未识别部位：${unmappedNames.join('、')}` : '';
+        const finalRemark = remark && extraRemark ? `${remark}；${extraRemark}` : remark || extraRemark;
 
         if (orderNo) {
           const existing = await this.prisma.paintWorkOrder.findFirst({
@@ -267,14 +307,37 @@ export class WorkOrderExcelService {
     return results;
   }
 
+  /** 解析门店部位别名映射（兼容旧版单字符串格式） */
+  private async getCategoryAliasMap(shopId: string): Promise<Record<string, string[]>> {
+    const shop = await this.prisma.paintShop.findUnique({
+      where: { id: shopId },
+      select: { categoryAliasMap: true },
+    });
+    if (!shop?.categoryAliasMap) return {};
+    try {
+      const parsed = JSON.parse(shop.categoryAliasMap);
+      const normalized: Record<string, string[]> = {};
+      for (const [key, value] of Object.entries(parsed)) {
+        if (Array.isArray(value)) normalized[key] = value.filter((v): v is string => typeof v === 'string');
+        else if (typeof value === 'string' && value) normalized[key] = [value];
+      }
+      return normalized;
+    } catch {
+      return {};
+    }
+  }
+
   /**
    * 导出Excel台账（按门店专属模板格式）
+   * @param mode detail=明细（含各部位列），summary=汇总（只含总幅数）
    */
-  async exportExcel(shopId: string, settlementMonth?: string) {
+  async exportExcel(shopId: string, settlementMonth?: string, mode: 'detail' | 'summary' = 'detail') {
+    const isSummary = mode === 'summary';
     const shop = await this.prisma.paintShop.findUnique({ where: { id: shopId } });
     if (!shop) throw new BadRequestException('门店不存在');
 
     const config = await this.getTemplateConfig(shopId);
+    const aliasMap = await this.getCategoryAliasMap(shopId);
     const categories = await this.prisma.paintItemCategory.findMany();
     const categoryMap = new Map(categories.map(c => [c.id, c]));
 
@@ -286,67 +349,223 @@ export class WorkOrderExcelService {
       orderBy: { orderDate: 'asc' },
     });
 
-    const wb = XLSX.utils.book_new();
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = '喷漆幅数统计系统';
+    const ws = workbook.addWorksheet('Sheet1');
 
     // 表头
-    const headers = ['序号', '日期', '车型', '车牌', '工单号', '副数'];
-    const itemHeaders = config.items.map(m => m.categoryName);
+    const headers = ['序号', '日期', '车型', '车牌', '工单号', isSummary ? '总幅数' : '副数'];
+    const itemHeaders = isSummary ? [] : config.items.map(m => m.categoryName);
     const allHeaders = [...headers, ...itemHeaders, '备注'];
+    const totalColCount = allHeaders.length;
+    const remarkColNumber = totalColCount; // ExcelJS 列号从 1 开始
 
     // 系数行
-    const coeffRow = ['', '', '', '', '', ''];
-    const templateItems = shop.standardTemplateId
+    const coeffRowValues = ['', '', '', '', '', ''];
+    const templateItems = shop.standardTemplateId && !isSummary
       ? await this.prisma.paintStandardTemplateItem.findMany({
           where: { templateId: shop.standardTemplateId },
           include: { category: true },
         })
       : [];
     const templateMap = new Map(templateItems.map(t => [t.category.name, Number(t.coefficient)]));
-    for (const mapping of config.items) {
-      coeffRow.push(templateMap.get(mapping.categoryName)?.toString() || '');
+    if (!isSummary) {
+      for (const mapping of config.items) {
+        // 系数行优先使用别名映射对应的系统部位系数（取第一个映射）
+        const mappedCatIds = aliasMap[mapping.categoryName];
+        const mappedCatId = Array.isArray(mappedCatIds) && mappedCatIds.length > 0 ? mappedCatIds[0] : undefined;
+        const mappedCat = mappedCatId ? categoryMap.get(mappedCatId) : null;
+        const coeff = mappedCat
+          ? templateMap.get(mappedCat.name)
+          : templateMap.get(mapping.categoryName);
+        coeffRowValues.push(coeff?.toString() || '');
+      }
     }
-    coeffRow.push('其他/说明');
+    coeffRowValues.push('其他/说明');
+
+    // 标题行
+    const titleText = isSummary ? `${shop.name}·喷漆车辆汇总台账` : `${shop.name}·喷漆维修车辆台账`;
+    const titleRow = ws.addRow([titleText]);
+    ws.mergeCells(1, 1, 1, totalColCount);
+    titleRow.getCell(1).font = { size: 14, bold: true };
+    titleRow.getCell(1).alignment = { horizontal: 'center', vertical: 'middle' };
+
+    // 是否存在导出与实际不一致（未匹配部位），汇总模式下不显示该警告
+    const hasUnmatched = !isSummary && orders.some(order =>
+      order.items.some(item => {
+        const cat = categoryMap.get(item.categoryId);
+        if (!cat) return false;
+        const aliasMatched = config.items.some(m => aliasMap[m.categoryName]?.includes(cat.id));
+        const nameMatched = config.items.some(m => m.categoryName === cat.name);
+        return !aliasMatched && !nameMatched;
+      }),
+    );
+
+    // 副标题行
+    const subTitleText = hasUnmatched
+      ? `总件数：${orders.length}（注意：存在未匹配部位，导出合计与实际不一致）`
+      : `总件数：${orders.length}`;
+    const subTitleRow = ws.addRow([subTitleText, ...new Array(totalColCount - 1).fill('')]);
+    ws.mergeCells(2, 1, 2, totalColCount);
+    subTitleRow.getCell(1).alignment = { horizontal: 'left', vertical: 'middle' };
+
+    // 表头行
+    const headerRow = ws.addRow(allHeaders);
+    headerRow.eachCell(cell => {
+      cell.font = { bold: true };
+      cell.alignment = { horizontal: 'center', vertical: 'middle' };
+    });
+
+    // 系数行（汇总模式下不显示）
+    if (!isSummary) {
+      ws.addRow(coeffRowValues);
+    }
+
+    // 数据行起始/结束行号（ExcelJS 1-based）
+    const firstDataRow = isSummary ? 4 : 5;
+    const lastDataRow = firstDataRow + orders.length - 1;
+    let totalUnmatched = 0;
 
     // 数据行
-    const dataRows: (string | number)[][] = [];
     orders.forEach((order, index) => {
-      const row: (string | number)[] = [
-        index + 1,
-        this.formatDate(order.orderDate),
-        order.carModel || '',
-        order.plateNumber || '',
-        order.orderNo || '',
-        Number(order.totalPaintCount),
-      ];
       const itemValues: (string | number)[] = new Array(config.items.length).fill('');
+      const unmatchedItems: string[] = [];
+      let orderTotal = 0;
+
       for (const item of order.items) {
         const cat = categoryMap.get(item.categoryId);
         if (!cat) continue;
-        const colIndex = config.items.findIndex(m => m.categoryName === cat.name);
+
+        const qty = Number(item.paintCount);
+        orderTotal += qty;
+
+        // 汇总模式不需要填部位列
+        if (isSummary) continue;
+
+        // 优先按门店别名映射匹配模板列
+        let colIndex = -1;
+        for (let i = 0; i < config.items.length; i++) {
+          if (aliasMap[config.items[i].categoryName]?.includes(cat.id)) {
+            colIndex = i;
+            break;
+          }
+        }
+        // 未命中别名映射时按名称精确匹配
+        if (colIndex < 0) {
+          colIndex = config.items.findIndex(m => m.categoryName === cat.name);
+        }
+
         if (colIndex >= 0) {
-          itemValues[colIndex] = item.quantity;
+          itemValues[colIndex] = qty;
+        } else {
+          unmatchedItems.push(`${cat.name}${qty.toFixed(1)}幅`);
         }
       }
-      row.push(...itemValues);
-      row.push(order.remark || '');
-      dataRows.push(row);
+
+      // 备注显示未匹配部位的总幅数（表格中没有列的部位），0 幅时不填数字
+      const unmatchedTotal = isSummary
+        ? 0
+        : order.items
+            .filter(item => {
+              const cat = categoryMap.get(item.categoryId);
+              if (!cat) return false;
+              const aliasMatched = config.items.some(m => aliasMap[m.categoryName]?.includes(cat.id));
+              const nameMatched = config.items.some(m => m.categoryName === cat.name);
+              return !aliasMatched && !nameMatched;
+            })
+            .reduce((sum, item) => sum + Number(item.paintCount), 0);
+
+      // 统计全部未匹配幅数，用于合计行
+      totalUnmatched += unmatchedTotal;
+
+      const remark = unmatchedTotal > 0 ? unmatchedTotal : '';
+
+      const rowValues = [
+        index + 1,
+        order.orderDate ? this.formatDate(order.orderDate) : '',
+        order.carModel || '',
+        order.plateNumber || '',
+        order.orderNo || '',
+        isSummary ? orderTotal : '',
+        ...itemValues,
+        remark,
+      ];
+
+      const row = ws.addRow(rowValues);
+      row.alignment = { vertical: 'middle' };
+
+      if (!isSummary) {
+        // 每个工单幅数合计使用 SUM 公式（横向汇总部位列到备注列）
+        const firstItemCol = ws.getColumn(7).letter;
+        const remarkCol = ws.getColumn(remarkColNumber).letter;
+        const currentRow = firstDataRow + index;
+        row.getCell(6).value = { formula: `SUM(${firstItemCol}${currentRow}:${remarkCol}${currentRow})` };
+      }
+
+      // 备注列批注：未匹配项目明细 + 原始备注
+      const noteParts = [...unmatchedItems];
+      if (order.remark) {
+        noteParts.push(`备注：${order.remark}`);
+      }
+      if (noteParts.length > 0) {
+        row.getCell(remarkColNumber).note = noteParts.join('；');
+      }
     });
 
-    const titleRow = [`${shop.name}·喷漆维修车辆台账`];
-    const subTitleRow = ['总件数：', '', '', '', '', String(orders.length)];
+    // 合计行
+    const totalRow = ws.addRow(['合计', '', '', '', '', '', ...new Array(itemHeaders.length).fill(''), '']);
+    totalRow.alignment = { vertical: 'middle' };
+    totalRow.eachCell(cell => {
+      cell.font = { bold: true };
+    });
 
-    const wsData = [titleRow, subTitleRow, allHeaders, coeffRow, ...dataRows];
-    const ws = XLSX.utils.aoa_to_sheet(wsData);
+    // 总幅数合计：纵向汇总每个工单的总幅数
+    const totalCol = ws.getColumn(6).letter;
+    totalRow.getCell(6).value = { formula: `SUM(${totalCol}${firstDataRow}:${totalCol}${lastDataRow})` };
 
-    ws['!cols'] = [
-      { wch: 5 }, { wch: 10 }, { wch: 8 }, { wch: 12 }, { wch: 28 }, { wch: 6 },
-      ...new Array(config.items.length).fill(null).map(() => ({ wch: 8 })),
-      { wch: 15 },
-    ];
-    ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: allHeaders.length - 1 } }];
+    // 各部位列合计（明细模式）
+    if (!isSummary) {
+      for (let i = 0; i < config.items.length; i++) {
+        const itemCol = ws.getColumn(7 + i).letter;
+        totalRow.getCell(7 + i).value = { formula: `SUM(${itemCol}${firstDataRow}:${itemCol}${lastDataRow})` };
+      }
+    }
 
-    XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
-    return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    // 备注列合计（未匹配部位总幅数，明细模式）
+    if (!isSummary) {
+      const remarkCol = ws.getColumn(remarkColNumber).letter;
+      totalRow.getCell(remarkColNumber).value = { formula: `SUM(${remarkCol}${firstDataRow}:${remarkCol}${lastDataRow})` };
+    }
+
+    // 列宽
+    ws.getColumn(1).width = 5;
+    ws.getColumn(2).width = 10;
+    ws.getColumn(3).width = 8;
+    ws.getColumn(4).width = 12;
+    ws.getColumn(5).width = 28;
+    ws.getColumn(6).width = 10;
+    ws.getColumn(6).numFmt = '0.0';
+    for (let i = 0; i < itemHeaders.length; i++) {
+      ws.getColumn(7 + i).width = 8;
+      ws.getColumn(7 + i).numFmt = '0.0';
+    }
+    ws.getColumn(remarkColNumber).width = 15;
+    ws.getColumn(remarkColNumber).numFmt = '0.0';
+
+    // 表格区域加边框线
+    for (let r = 1; r <= ws.rowCount; r++) {
+      for (let c = 1; c <= totalColCount; c++) {
+        ws.getCell(r, c).border = {
+          top: { style: 'thin', color: { argb: 'FF000000' } },
+          bottom: { style: 'thin', color: { argb: 'FF000000' } },
+          left: { style: 'thin', color: { argb: 'FF000000' } },
+          right: { style: 'thin', color: { argb: 'FF000000' } },
+        };
+      }
+    }
+
+    const buffer = await workbook.xlsx.writeBuffer();
+    return buffer as unknown as Buffer;
   }
 
   /**

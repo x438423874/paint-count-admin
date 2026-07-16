@@ -22,6 +22,8 @@ export function useTable<A extends NaiveUI.TableApiFn>(config: NaiveUI.NaiveTabl
 
   const EXPAND_KEY = '__expand__';
 
+  const extra = ref<Record<string, any>>({});
+
   const {
     loading,
     empty,
@@ -39,6 +41,7 @@ export function useTable<A extends NaiveUI.TableApiFn>(config: NaiveUI.NaiveTabl
     columns: config.columns,
     transformer: res => {
       const { records = [], current = 1, size = 10, total = 0 } = res.data || {};
+      extra.value = { totalPaintCount: (res.data as any)?.totalPaintCount };
 
       // Ensure that the size is greater than 0, If it is less than 0, it will cause paging calculation errors.
       const pageSize = size <= 0 ? 10 : size;
@@ -209,7 +212,8 @@ export function useTable<A extends NaiveUI.TableApiFn>(config: NaiveUI.NaiveTabl
     getDataByPage,
     searchParams,
     updateSearchParams,
-    resetSearchParams
+    resetSearchParams,
+    extra
   };
 }
 

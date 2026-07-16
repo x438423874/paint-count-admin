@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { getMonthlyStatistics, getWorkOrderPage, getShopList } from '@/api/paint'
-import type { PaintShop, MonthlyStatistics, PaintWorkOrder, PageResult } from '@/api/types/paint'
+import { getStatisticsOverview, getWorkOrderPage, getShopList, getLatestSettlementMonth } from '@/api/paint'
+import type { PaintShop, StatisticsOverview, PaintWorkOrder, PageResult } from '@/api/types/paint'
 
 const currentMonth = computed(() => {
   const now = new Date()
@@ -11,18 +11,42 @@ const router = useRouter()
 const shops = ref<PaintShop[]>([])
 const selectedShopId = ref('')
 const shopName = ref('全部门店')
-const showShopPicker = ref(false)
 const recentOrders = ref<PaintWorkOrder[]>([])
-const monthlyStats = ref<MonthlyStatistics[]>([])
-const totalPaintCount = ref(0)
-const totalOrderCount = ref(0)
+const overview = ref<StatisticsOverview | null>(null)
 const loading = ref(false)
+const refreshing = ref(false)
 
 const shopColumns = computed(() => {
   const cols = [{ text: '全部门店', value: '' }]
   shops.value.forEach(s => cols.push({ text: s.name, value: s.id }))
   return cols
 })
+
+const monthColumns = computed(() => {
+  const list = []
+  const now = new Date()
+  for (let i = 0; i < 13; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
+    const value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+    list.push({ text: value, value })
+  }
+  return list
+})
+
+const selectedMonth = ref(currentMonth.value)
+const showShopPicker = ref(false)
+const showMonthPicker = ref(false)
+
+async function initDefaultMonth() {
+  try {
+    const latest = await getLatestSettlementMonth()
+    const latestMonth = (latest as any as string | null) || currentMonth.value
+    selectedMonth.value = latestMonth
+  }
+  catch {
+    selectedMonth.value = currentMonth.value
+  }
+}
 
 async function loadShops() {
   try {
@@ -37,20 +61,18 @@ async function loadShops() {
 async function loadData() {
   loading.value = true
   try {
-    const [orderRes, statsRes] = await Promise.all([
+    const [orderRes, overviewRes] = await Promise.all([
       getWorkOrderPage({
         current: 1,
         size: 5,
-        settlementMonth: currentMonth.value,
+        settlementMonth: selectedMonth.value,
         ...(selectedShopId.value ? { shopId: selectedShopId.value } : {}),
       }),
-      getMonthlyStatistics(currentMonth.value, selectedShopId.value || undefined),
+      getStatisticsOverview(selectedMonth.value, selectedShopId.value || undefined),
     ])
     const pageData = orderRes as any as PageResult<PaintWorkOrder>
     recentOrders.value = pageData.records || []
-    monthlyStats.value = statsRes as any as MonthlyStatistics[]
-    totalPaintCount.value = monthlyStats.value.reduce((sum, s) => sum + (s.totalPaintCount || 0), 0)
-    totalOrderCount.value = monthlyStats.value.reduce((sum, s) => sum + (s.totalOrders || 0), 0)
+    overview.value = (overviewRes as any as StatisticsOverview) || null
   }
   catch {
     // 加载失败保持默认空值
@@ -60,11 +82,23 @@ async function loadData() {
   }
 }
 
+async function onRefresh() {
+  refreshing.value = true
+  await loadData()
+  refreshing.value = false
+}
+
 function onShopConfirm({ selectedValues }: any) {
   selectedShopId.value = selectedValues[0]
   const shop = shops.value.find(s => s.id === selectedValues[0])
   shopName.value = shop?.name || '全部门店'
   showShopPicker.value = false
+  loadData()
+}
+
+function onMonthConfirm({ selectedValues }: any) {
+  selectedMonth.value = selectedValues[0]
+  showMonthPicker.value = false
   loadData()
 }
 
@@ -84,161 +118,292 @@ function goToStatistics() {
   router.push({ name: 'Statistics' })
 }
 
-function formatOrderDate(dateStr: string) {
-  if (!dateStr) return ''
+function formatOrderDate(dateStr?: string) {
+  if (!dateStr) return '-'
   return dateStr.slice(0, 10)
 }
 
-onMounted(() => {
-  loadShops()
+function formatCount(val?: number | string | null) {
+  if (val === undefined || val === null || val === '') return '0'
+  const num = Number(val)
+  if (Number.isNaN(num)) return '0'
+  if (Number.isInteger(num)) return String(num)
+  return num.toFixed(1).replace(/\.0$/, '')
+}
+
+function statusText(status?: string) {
+  const map: Record<string, string> = {
+    DRAFT: '草稿',
+    PENDING: '待审核',
+    AUDITED: '已审核',
+    SETTLED: '已结算',
+    ABNORMAL: '异常',
+  }
+  return map[status || ''] || status || '-'
+}
+
+function statusType(status?: string): any {
+  const map: Record<string, any> = {
+    DRAFT: 'default',
+    PENDING: 'warning',
+    AUDITED: 'primary',
+    SETTLED: 'success',
+    ABNORMAL: 'danger',
+  }
+  return map[status || ''] || 'default'
+}
+
+onMounted(async () => {
+  await loadShops()
+  await initDefaultMonth()
   loadData()
 })
 </script>
 
 <template>
   <div class="home-page">
-    <!-- 顶部区域 -->
-    <div class="header">
-      <div class="header-bg" />
-      <div class="header-content">
-        <div class="greeting">
-          <div class="greeting-text">
-            喷漆幅数管理
-          </div>
-          <div class="greeting-sub">
-            {{ currentMonth }} 月概览
-          </div>
-        </div>
-        <!-- 门店切换 -->
-        <div class="shop-switch" @click="showShopPicker = true">
-          <van-icon name="shop-o" color="#fff" size="16" />
-          <span class="shop-name">{{ shopName }}</span>
-          <van-icon name="arrow-down" color="#fff" size="14" />
-        </div>
-      </div>
-    </div>
-
-    <!-- 数据卡片 -->
-    <div class="stats-cards">
-      <div class="stat-card" @click="goToStatistics">
-        <div class="stat-icon-wrap blue">
-          <van-icon name="brush-o" size="24" color="#fff" />
-        </div>
-        <div class="stat-info">
-          <div class="stat-value">
-            {{ totalPaintCount % 1 === 0 ? totalPaintCount : totalPaintCount.toFixed(1) }}
-          </div>
-          <div class="stat-label">
-            本月总幅数
-          </div>
-        </div>
-      </div>
-      <div class="stat-card" @click="goToOrderList">
-        <div class="stat-icon-wrap green">
-          <van-icon name="orders-o" size="24" color="#fff" />
-        </div>
-        <div class="stat-info">
-          <div class="stat-value">
-            {{ totalOrderCount }}
-          </div>
-          <div class="stat-label">
-            本月工单数
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- 快捷操作 -->
-    <div class="quick-actions">
-      <div class="section-header">
-        <div class="section-title">
-          快捷操作
-        </div>
-      </div>
-      <div class="action-grid">
-        <div class="action-item" @click="goToCreate">
-          <div class="action-icon blue-bg">
-            <van-icon name="photograph" size="28" color="#fff" />
-          </div>
-          <span class="action-text">拍照建单</span>
-        </div>
-        <div class="action-item" @click="goToOrderList">
-          <div class="action-icon green-bg">
-            <van-icon name="orders-o" size="28" color="#fff" />
-          </div>
-          <span class="action-text">工单列表</span>
-        </div>
-        <div class="action-item" @click="goToStatistics">
-          <div class="action-icon orange-bg">
-            <van-icon name="chart-trending-o" size="28" color="#fff" />
-          </div>
-          <span class="action-text">数据统计</span>
-        </div>
-        <div class="action-item" @click="router.push({ name: 'WorkOrderCreate', query: { mode: 'manual' } })">
-          <div class="action-icon purple-bg">
-            <van-icon name="edit" size="28" color="#fff" />
-          </div>
-          <span class="action-text">手动建单</span>
-        </div>
-      </div>
-    </div>
-
-    <!-- 最近工单 -->
-    <div class="recent-orders">
-      <div class="section-header">
-        <div class="section-title">
-          最近工单
-        </div>
-        <div class="section-more" @click="goToOrderList">
-          查看全部
-        </div>
-      </div>
-
-      <div v-if="loading" class="loading-wrap">
-        <van-loading size="24px">加载中...</van-loading>
-      </div>
-
-      <van-empty v-else-if="recentOrders.length === 0" description="暂无工单数据" />
-
-      <div v-else class="order-list">
-        <div
-          v-for="order in recentOrders"
-          :key="order.id"
-          class="order-card"
-          @click="goToOrderDetail(order.id)"
-        >
-          <div class="order-top">
-            <span class="order-no">{{ order.orderNo }}</span>
-            <van-tag :type="order.isAudited ? 'success' : 'warning'" size="medium">
-              {{ order.isAudited ? '已审核' : '待审核' }}
-            </van-tag>
-          </div>
-          <div class="order-info">
-            <div class="info-row">
-              <van-icon name="car" size="14" color="#999" />
-              <span class="info-text">{{ order.plateNumber || '-' }}</span>
+    <van-pull-refresh v-model="refreshing" @refresh="onRefresh">
+      <!-- 顶部蓝色区域 -->
+      <div class="header">
+        <div class="header-content">
+          <div class="header-top">
+            <div class="greeting">
+              <div class="greeting-text">
+                喷漆幅数管理
+              </div>
+              <div class="greeting-sub">
+                {{ shopName }} · {{ selectedMonth }}
+              </div>
             </div>
-            <div class="info-row">
-              <van-icon name="calendar-o" size="14" color="#999" />
-              <span class="info-text">{{ formatOrderDate(order.orderDate) }}</span>
+            <div class="header-actions">
+              <div class="action-pill" @click="showShopPicker = true">
+                <van-icon name="shop-o" color="#fff" size="13" />
+                <span>{{ shopName }}</span>
+                <van-icon name="arrow-down" color="rgba(255,255,255,0.7)" size="10" />
+              </div>
+              <div class="action-pill" @click="showMonthPicker = true">
+                <van-icon name="calendar-o" color="#fff" size="13" />
+                <span>{{ selectedMonth }}</span>
+                <van-icon name="arrow-down" color="rgba(255,255,255,0.7)" size="10" />
+              </div>
             </div>
           </div>
-          <div class="order-bottom">
-            <span class="paint-count">{{ order.totalPaintCount }} 幅</span>
-            <van-icon name="arrow" color="#ccc" />
+
+          <!-- 核心数据横幅 -->
+          <div class="hero-stats">
+            <div class="hero-item">
+              <div class="hero-value">
+                {{ formatCount(overview?.totalPaintCount) }}
+              </div>
+              <div class="hero-label">
+                总幅数
+              </div>
+            </div>
+            <div class="hero-divider" />
+            <div class="hero-item">
+              <div class="hero-value">
+                {{ overview?.totalOrders || 0 }}
+              </div>
+              <div class="hero-label">
+                工单数
+              </div>
+            </div>
+            <div class="hero-divider" />
+            <div class="hero-item">
+              <div class="hero-value">
+                {{ overview?.pendingOrders || 0 }}
+              </div>
+              <div class="hero-label">
+                待审核
+              </div>
+            </div>
           </div>
         </div>
       </div>
-    </div>
 
-    <div style="height: 60px;" />
+      <!-- 快捷入口 -->
+      <div class="quick-actions">
+        <div class="quick-card create" @click="goToCreate">
+          <div class="quick-icon">
+            <van-icon name="photograph" size="26" color="#fff" />
+          </div>
+          <div class="quick-text">
+            <div class="quick-title">
+              拍照建单
+            </div>
+            <div class="quick-desc">
+              自动识别工单信息
+            </div>
+          </div>
+          <van-icon name="arrow" color="rgba(255,255,255,0.8)" size="18" />
+        </div>
+        <div class="quick-card stats" @click="goToStatistics">
+          <div class="quick-icon">
+            <van-icon name="chart-trending-o" size="26" color="#fff" />
+          </div>
+          <div class="quick-text">
+            <div class="quick-title">
+              数据统计
+            </div>
+            <div class="quick-desc">
+              查看月度分析
+            </div>
+          </div>
+          <van-icon name="arrow" color="rgba(255,255,255,0.8)" size="18" />
+        </div>
+      </div>
+
+      <!-- 状态概览 -->
+      <div class="section">
+        <div class="section-header">
+          <div class="section-title">
+            本月概览
+          </div>
+          <div class="section-more" @click="goToStatistics">
+            更多
+            <van-icon name="arrow" size="12" />
+          </div>
+        </div>
+        <div class="overview-grid">
+          <div class="overview-card" @click="goToOrderList">
+            <div class="overview-icon audited">
+              <van-icon name="passed" size="18" color="#1677ff" />
+            </div>
+            <div class="overview-info">
+              <div class="overview-value">
+                {{ overview?.auditedOrders || 0 }}
+              </div>
+              <div class="overview-label">
+                已审核
+              </div>
+            </div>
+          </div>
+          <div class="overview-card" @click="goToOrderList">
+            <div class="overview-icon settled">
+              <van-icon name="balance-pay" size="18" color="#52c41a" />
+            </div>
+            <div class="overview-info">
+              <div class="overview-value">
+                {{ overview?.settledOrders || 0 }}
+              </div>
+              <div class="overview-label">
+                已结算
+              </div>
+            </div>
+          </div>
+          <div class="overview-card" @click="goToOrderList">
+            <div class="overview-icon abnormal">
+              <van-icon name="warning-o" size="18" color="#ff4d4f" />
+            </div>
+            <div class="overview-info">
+              <div class="overview-value">
+                {{ overview?.abnormalOrders || 0 }}
+              </div>
+              <div class="overview-label">
+                异常
+              </div>
+            </div>
+          </div>
+          <div class="overview-card" @click="goToOrderList">
+            <div class="overview-icon rate">
+              <van-icon name="chart-o" size="18" color="#fa8c16" />
+            </div>
+            <div class="overview-info">
+              <div class="overview-value">
+                {{ overview?.settlementRate || 0 }}%
+              </div>
+              <div class="overview-label">
+                结算率
+              </div>
+            </div>
+          </div>
+          <div class="overview-card" @click="goToOrderList">
+            <div class="overview-icon rework">
+              <van-icon name="replay" size="18" color="#d03050" />
+            </div>
+            <div class="overview-info">
+              <div class="overview-value">
+                {{ overview?.reworkOrders || 0 }}
+              </div>
+              <div class="overview-label">
+                返工
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 最近工单 -->
+      <div class="section">
+        <div class="section-header">
+          <div class="section-title">
+            最近工单
+          </div>
+          <div class="section-more" @click="goToOrderList">
+            查看全部
+            <van-icon name="arrow" size="12" />
+          </div>
+        </div>
+
+        <div v-if="loading" class="loading-wrap">
+          <van-skeleton title :row="3" />
+        </div>
+
+        <van-empty v-else-if="recentOrders.length === 0" description="暂无工单数据" />
+
+        <div v-else class="order-list">
+          <div
+            v-for="order in recentOrders"
+            :key="order.id"
+            class="order-card"
+            @click="goToOrderDetail(order.id)"
+          >
+            <div class="order-left">
+              <div class="order-plate">
+                {{ order.plateNumber || '未识别' }}
+              </div>
+              <div class="order-no">
+                {{ order.orderNo || '-' }}
+              </div>
+              <div class="order-meta">
+                <span>{{ order.carModel || '-' }}</span>
+                <span class="meta-dot">·</span>
+                <span>{{ formatOrderDate(order.orderDate) }}</span>
+              </div>
+            </div>
+            <div class="order-right">
+              <van-tag :type="statusType(order.status)" size="medium" round>
+                {{ statusText(order.status) }}
+              </van-tag>
+              <div class="order-count">
+                <span class="count-value">{{ order.totalPaintCount }}</span>
+                <span class="count-unit">幅</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style="height: 80px;" />
+    </van-pull-refresh>
 
     <!-- 门店选择器 -->
     <van-popup v-model:show="showShopPicker" position="bottom" round>
       <van-picker
         :columns="shopColumns"
+        :model-value="[selectedShopId]"
         @confirm="onShopConfirm"
         @cancel="showShopPicker = false"
+      />
+    </van-popup>
+
+    <!-- 月份选择器 -->
+    <van-popup v-model:show="showMonthPicker" position="bottom" round>
+      <van-picker
+        :columns="monthColumns"
+        :model-value="[selectedMonth]"
+        @confirm="onMonthConfirm"
+        @cancel="showMonthPicker = false"
       />
     </van-popup>
   </div>
@@ -254,182 +419,230 @@ onMounted(() => {
 .home-page {
   min-height: 100vh;
   background: #f5f7fa;
+  padding-bottom: 80px;
 }
 
 .header {
-  position: relative;
-  height: 160px;
-}
-
-.header-bg {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
   background: linear-gradient(135deg, #1677ff 0%, #4096ff 100%);
-  border-radius: 0 0 20px 20px;
+  border-radius: 0 0 24px 24px;
+  padding: 44px 16px 24px;
+  color: #fff;
 }
 
-.header-content {
-  position: relative;
-  padding: 50px 20px 0;
+.header-top {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-}
-
-.greeting {
-  display: flex;
-  flex-direction: column;
+  margin-bottom: 24px;
 }
 
 .greeting-text {
-  font-size: 20px;
+  font-size: 22px;
   font-weight: 700;
-  color: #fff;
+  margin-bottom: 6px;
 }
 
 .greeting-sub {
-  font-size: 14px;
-  color: rgba(255, 255, 255, 0.8);
-  margin-top: 4px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.75);
 }
 
-.shop-switch {
+.header-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.action-pill {
   display: flex;
   align-items: center;
-  gap: 4px;
-  background: rgba(255, 255, 255, 0.2);
+  gap: 5px;
+  background: rgba(255, 255, 255, 0.15);
   border-radius: 16px;
-  padding: 6px 12px;
+  padding: 5px 10px;
+  font-size: 12px;
+  color: #fff;
   backdrop-filter: blur(10px);
 }
 
-.shop-name {
-  font-size: 13px;
-  color: #fff;
-  max-width: 100px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.stats-cards {
+.hero-stats {
   display: flex;
-  gap: 12px;
-  padding: 0 16px;
-  margin-top: -40px;
-  position: relative;
-  z-index: 10;
+  justify-content: space-around;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 16px;
+  padding: 18px 12px;
+  backdrop-filter: blur(10px);
 }
 
-.stat-card {
+.hero-item {
   flex: 1;
-  background: #fff;
-  border-radius: 10px;
-  padding: 14px 12px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.06);
+  text-align: center;
 }
 
-.stat-icon-wrap {
-  width: 40px;
-  height: 40px;
-  border-radius: 10px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  &.blue { background: linear-gradient(135deg, #1677ff, #4096ff); }
-  &.green { background: linear-gradient(135deg, #52c41a, #73d13d); }
-}
-
-.stat-info {
-  display: flex;
-  flex-direction: column;
-}
-
-.stat-value {
-  font-size: 20px;
+.hero-value {
+  font-size: 28px;
   font-weight: 700;
-  color: #1a1a1a;
+  margin-bottom: 4px;
 }
 
-.stat-label {
-  font-size: 12px;
-  color: #999;
-  margin-top: 2px;
+.hero-label {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.hero-divider {
+  width: 1px;
+  height: 32px;
+  background: rgba(255, 255, 255, 0.25);
 }
 
 .quick-actions {
-  padding: 20px 16px 0;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+  padding: 16px;
+  margin-top: -10px;
+}
+
+.quick-card {
+  border-radius: 16px;
+  padding: 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+}
+
+.quick-card.create {
+  background: linear-gradient(135deg, #52c41a 0%, #95de64 100%);
+}
+
+.quick-card.stats {
+  background: linear-gradient(135deg, #722ed1 0%, #b37feb 100%);
+}
+
+.quick-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.quick-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.quick-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #fff;
+  margin-bottom: 2px;
+}
+
+.quick-desc {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.section {
+  margin: 0 16px 16px;
+  background: #fff;
+  border-radius: 16px;
+  padding: 16px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.03);
 }
 
 .section-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 12px;
+  margin-bottom: 14px;
 }
 
 .section-title {
   font-size: 16px;
   font-weight: 600;
-  color: #1a1a1a;
+  color: #333;
 }
 
 .section-more {
+  display: flex;
+  align-items: center;
+  gap: 2px;
   font-size: 13px;
   color: #1677ff;
 }
 
-.action-grid {
-  display: flex;
+.overview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
   gap: 12px;
 }
 
-.action-item {
-  flex: 1;
+.overview-card {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  gap: 8px;
-  background: #fff;
-  border-radius: 10px;
-  padding: 14px 0;
-  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.04);
+  gap: 12px;
+  padding: 14px;
+  background: #f8fafc;
+  border-radius: 12px;
 }
 
-.action-icon {
-  width: 44px;
-  height: 44px;
-  border-radius: 12px;
+.overview-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
   display: flex;
   align-items: center;
   justify-content: center;
-
-  &.blue-bg { background: linear-gradient(135deg, #1677ff, #4096ff); }
-  &.green-bg { background: linear-gradient(135deg, #52c41a, #73d13d); }
-  &.orange-bg { background: linear-gradient(135deg, #fa8c16, #ffa940); }
-  &.purple-bg { background: linear-gradient(135deg, #722ed1, #9254de); }
+  flex-shrink: 0;
 }
 
-.action-text {
-  font-size: 13px;
+.overview-icon.audited {
+  background: #e6f4ff;
+}
+
+.overview-icon.settled {
+  background: #f6ffed;
+}
+
+.overview-icon.abnormal {
+  background: #fff1f0;
+}
+
+.overview-icon.rate {
+  background: #fff7e6;
+}
+
+.overview-icon.rework {
+  background: #fff1f3;
+}
+
+.overview-info {
+  flex: 1;
+}
+
+.overview-value {
+  font-size: 18px;
+  font-weight: 700;
   color: #333;
+  margin-bottom: 2px;
 }
 
-.recent-orders {
-  padding: 20px 16px 0;
+.overview-label {
+  font-size: 12px;
+  color: #999;
 }
 
 .loading-wrap {
-  display: flex;
-  justify-content: center;
-  padding: 40px 0;
+  padding: 10px 0;
 }
 
 .order-list {
@@ -439,53 +652,65 @@ onMounted(() => {
 }
 
 .order-card {
-  background: #fff;
-  border-radius: 10px;
-  padding: 14px;
-  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.04);
-}
-
-.order-top {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 8px;
+  padding: 14px;
+  background: #f8fafc;
+  border-radius: 12px;
+}
+
+.order-left {
+  flex: 1;
+  min-width: 0;
+}
+
+.order-plate {
+  font-size: 16px;
+  font-weight: 700;
+  color: #333;
+  margin-bottom: 4px;
 }
 
 .order-no {
-  font-size: 15px;
-  font-weight: 600;
-  color: #1a1a1a;
-}
-
-.order-info {
-  display: flex;
-  gap: 16px;
-  margin-bottom: 8px;
-}
-
-.info-row {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.info-text {
-  font-size: 13px;
+  font-size: 12px;
   color: #666;
+  margin-bottom: 6px;
 }
 
-.order-bottom {
+.order-meta {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  padding-top: 8px;
-  border-top: 1px solid #f5f5f5;
+  gap: 6px;
+  font-size: 12px;
+  color: #999;
 }
 
-.paint-count {
-  font-size: 15px;
-  font-weight: 600;
+.meta-dot {
+  color: #ccc;
+}
+
+.order-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.order-count {
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
+}
+
+.count-value {
+  font-size: 18px;
+  font-weight: 700;
   color: #1677ff;
+}
+
+.count-unit {
+  font-size: 11px;
+  color: #999;
 }
 </style>

@@ -12,10 +12,12 @@ import { PaintStandardTemplateService } from './service/paint-standard-template.
 import { PaintCategoryService } from './service/paint-category.service';
 import { PaintSpecialPaintService } from './service/paint-special-paint.service';
 import { OcrService } from './service/ocr.service';
-import { PaddleOcrService } from './service/paddle-ocr.service';
-import { OcrAnnotationService } from './service/ocr-annotation.service';
+import { LlmOcrService } from './service/llm-ocr.service';
 import { WorkOrderExcelService } from './service/work-order-excel.service';
+import { WorkOrderNoRuleService } from './service/work-order-no-rule.service';
+import { WorkOrderReconcileService } from './service/work-order-reconcile.service';
 import { PaintPdfExportService } from './service/paint-pdf-export.service';
+import { SettlementMonthService } from './service/settlement-month.service';
 import { UserShopService } from './service/user-shop.service';
 import { ScheduledTaskManager } from './scheduled/scheduled-task-manager.service';
 import { ScheduledTaskRegistrar } from './scheduled/scheduled-task-registrar.service';
@@ -25,6 +27,7 @@ import { WorkOrderController } from './work-order/rest/work-order.controller';
 import { PaintStatisticsController } from './statistics/rest/statistics.controller';
 import { PaintStandardController } from './standard/rest/standard.controller';
 import { PaintStandardTemplateController } from './standard/rest/standard-template.controller';
+import { SettlementMonthController } from './settlement-month/rest/settlement-month.controller';
 import { UserShopController } from './user-shop/rest/user-shop.controller';
 
 @Module({
@@ -35,6 +38,7 @@ import { UserShopController } from './user-shop/rest/user-shop.controller';
     PaintStatisticsController,
     PaintStandardController,
     PaintStandardTemplateController,
+    SettlementMonthController,
     ScheduledTaskController,
     UserShopController,
   ],
@@ -53,10 +57,12 @@ import { UserShopController } from './user-shop/rest/user-shop.controller';
     PaintCategoryService,
     PaintSpecialPaintService,
     OcrService,
-    PaddleOcrService,
-    OcrAnnotationService,
+    LlmOcrService,
     WorkOrderExcelService,
+    WorkOrderNoRuleService,
+    WorkOrderReconcileService,
     PaintPdfExportService,
+    SettlementMonthService,
     UserShopService,
   ],
   exports: [
@@ -72,10 +78,12 @@ import { UserShopController } from './user-shop/rest/user-shop.controller';
     PaintCategoryService,
     PaintSpecialPaintService,
     OcrService,
-    PaddleOcrService,
-    OcrAnnotationService,
+    LlmOcrService,
     WorkOrderExcelService,
+    WorkOrderNoRuleService,
+    WorkOrderReconcileService,
     PaintPdfExportService,
+    SettlementMonthService,
     UserShopService,
   ],
 })

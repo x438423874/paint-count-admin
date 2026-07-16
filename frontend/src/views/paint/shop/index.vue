@@ -4,13 +4,13 @@ import { ref } from 'vue';
 import { fetchPaintShopPage, deletePaintShop, fetchStandardTemplateList, applyTemplateToShop } from '@/service/api';
 import { useTable, useTableOperate } from '@/hooks/common/table';
 import ShopOperateDrawer from './modules/shop-operate-drawer.vue';
-import OcrTemplateEditor from './modules/ocr-template-editor.vue';
-import OcrFieldLabelsEditor from './modules/ocr-field-labels-editor.vue';
+import OrderNoRulesModal from '../components/order-no-rules-modal.vue';
+import ExcelConfigModal from '../components/excel-config-modal.vue';
 import { canManageShop, canEdit } from '@/utils/permission';
 
 // 权限控制：门店的创建/编辑/删除仅超管可操作
 const allowManageShop = canManageShop();
-// OCR 模板/字段别名配置：除只读/财务外都可
+// Excel配置/工单号规则等：除只读/财务外都可
 const allowEditShop = canEdit();
 
 const {
@@ -119,7 +119,7 @@ const {
       key: 'operate',
       title: '操作',
       align: 'center',
-      width: 300,
+      width: 420,
       render: (row: any) => (
         <div class="flex-center gap-8px">
           {allowManageShop && (
@@ -128,13 +128,13 @@ const {
             </NButton>
           )}
           {allowEditShop && (
-            <NButton type="warning" ghost size="small" onClick={() => openOcrTemplateEditor(row)}>
-              OCR模板
+            <NButton type="success" ghost size="small" onClick={() => openExcelConfigEditor(row)}>
+              Excel配置
             </NButton>
           )}
           {allowEditShop && (
-            <NButton type="info" ghost size="small" onClick={() => openFieldLabelsEditor(row)}>
-              字段别名
+            <NButton type="default" ghost size="small" onClick={() => openOrderNoRulesEditor(row)}>
+              工单号规则
             </NButton>
           )}
           {allowManageShop && (
@@ -169,26 +169,26 @@ function edit(id: string) {
   handleEdit(id);
 }
 
-// OCR 模板编辑器
-const ocrTemplateVisible = ref(false);
-const ocrTemplateShopId = ref('');
-const ocrTemplateShopName = ref('');
+// 工单号规则弹窗
+const orderNoRulesVisible = ref(false);
+const orderNoRulesShopId = ref('');
+const orderNoRulesShopName = ref('');
 
-function openOcrTemplateEditor(row: any) {
-  ocrTemplateShopId.value = row.id;
-  ocrTemplateShopName.value = row.name;
-  ocrTemplateVisible.value = true;
+function openOrderNoRulesEditor(row: any) {
+  orderNoRulesShopId.value = row.id;
+  orderNoRulesShopName.value = row.name;
+  orderNoRulesVisible.value = true;
 }
 
-// OCR 字段别名编辑器
-const fieldLabelsVisible = ref(false);
-const fieldLabelsShopId = ref('');
-const fieldLabelsShopName = ref('');
+// Excel 配置弹窗
+const excelConfigVisible = ref(false);
+const excelConfigShopId = ref('');
+const excelConfigShopName = ref('');
 
-function openFieldLabelsEditor(row: any) {
-  fieldLabelsShopId.value = row.id;
-  fieldLabelsShopName.value = row.name;
-  fieldLabelsVisible.value = true;
+function openExcelConfigEditor(row: any) {
+  excelConfigShopId.value = row.id;
+  excelConfigShopName.value = row.name;
+  excelConfigVisible.value = true;
 }
 
 // 一键关联模板
@@ -271,16 +271,16 @@ async function handleDelete(id: string) {
         @submitted="getDataByPage"
       />
 
-      <OcrTemplateEditor
-        v-model:visible="ocrTemplateVisible"
-        :shop-id="ocrTemplateShopId"
-        :shop-name="ocrTemplateShopName"
+      <OrderNoRulesModal
+        v-model:show="orderNoRulesVisible"
+        :shop-id="orderNoRulesShopId"
+        :shop-name="orderNoRulesShopName"
       />
 
-      <OcrFieldLabelsEditor
-        v-model:visible="fieldLabelsVisible"
-        :shop-id="fieldLabelsShopId"
-        :shop-name="fieldLabelsShopName"
+      <ExcelConfigModal
+        v-model:show="excelConfigVisible"
+        :shop-id="excelConfigShopId"
+        :shop-name="excelConfigShopName"
       />
     </NCard>
   </div>

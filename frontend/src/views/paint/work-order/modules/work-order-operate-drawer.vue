@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, reactive, watch, ref, nextTick, h } from 'vue';
-import { NSelect, NInputNumber, NCheckbox, NButton, NText, NImage } from 'naive-ui';
-import { createWorkOrder, updateWorkOrder, fetchPaintShopList, fetchShopCategoriesWithStandard, fetchSpecialPaintList, uploadWorkOrderImage, removeWorkOrderImage, ocrRecognizeImage, getSettlementHistory, addSettlementRecord } from '@/service/api';
-import type { PaintOrderStatus } from '@/service/api/paint';
+import { NSelect, NInputNumber, NCheckbox, NButton, NText, NImage, NTag, NSpace } from 'naive-ui';
+import { createWorkOrder, updateWorkOrder, fetchPaintShopList, fetchShopCategoriesWithStandard, fetchSpecialPaintList, uploadWorkOrderImage, removeWorkOrderImage, ocrRecognizeImage, fetchOrderNoRules } from '@/service/api';
+import type { PaintOrderStatus, OrderNoRule } from '@/service/api/paint';
 import { useFormRules, useNaiveForm } from '@/hooks/common/form';
 import { $t } from '@/locales';
 import { compressDualImage } from '@/utils/image-compress';
@@ -36,9 +36,9 @@ const categories = ref<{ id: string; name: string; alias: string; paintCount: nu
 const specialPaints = ref<{ id: string; name: string; multiplier: number }[]>([]);
 const loadingCategories = ref(false);
 const shopHasTemplate = ref(true);
-
-// 结算历史
-const settlementRecords = ref<any[]>([]);
+const orderNoRules = ref<OrderNoRule[]>([]);
+const ocrOrderNoCandidates = ref<string[]>([]);
+const ocrOrderNoOriginal = ref('');
 
 const title = computed(() => {
   const titles: Record<NaiveUI.TableOperateType, string> = {
@@ -50,6 +50,7 @@ const title = computed(() => {
 
 interface OrderItem {
   categoryId: string;
+  categoryName?: string;
   quantity: number;
   newPartQuantity: number;
   specialPaintId: string;
@@ -62,6 +63,7 @@ interface FormModel {
   carModel: string;
   plateNumber: string;
   vin: string;
+  brand: string;
   customerName: string;
   phone: string;
   contactPerson: string;
@@ -78,28 +80,90 @@ function createDefaultModel(): FormModel {
   return {
     orderNo: '',
     shopId: '',
-    orderDate: new Date().toISOString().split('T')[0],
+    orderDate: '',
     carModel: '',
     plateNumber: '',
     vin: '',
+    brand: '',
     customerName: '',
     phone: '',
     contactPerson: '',
     description: '',
     remark: '',
-    status: 'PENDING',
+    status: 'DRAFT',
     settlementMonth: '',
     items: []
   };
 }
 
-type RuleKey = Extract<keyof FormModel, 'shopId' | 'orderDate' | 'plateNumber'>;
+type RuleKey = Extract<keyof FormModel, 'shopId' | 'plateNumber'>;
 
 const rules: Record<RuleKey, App.Global.FormRule> = {
   shopId: defaultRequiredRule,
-  orderDate: defaultRequiredRule,
   plateNumber: defaultRequiredRule
 };
+
+const orderNoValidation = computed(() => {
+  if (!model.orderNo || orderNoRules.value.length === 0) return { valid: true, message: '', candidates: [] as string[] };
+  const upper = model.orderNo.trim().toUpperCase();
+  for (const rule of orderNoRules.value) {
+    try {
+      const regex = new RegExp(`^${rule.pattern}$`);
+      if (regex.test(upper)) return { valid: true, message: '', candidates: [] as string[] };
+    } catch {
+      continue;
+    }
+  }
+  const candidates = generateOrderNoCandidates(upper, orderNoRules.value);
+  return {
+    valid: false,
+    message: `工单号不符合门店规则（长度应为 ${orderNoRules.value.map(r => r.length).join('/')}` +
+      (candidates.length > 0 ? '，点击候选值一键修正' : '）'),
+    candidates
+  };
+});
+
+function generateOrderNoCandidates(orderNo: string, rules: OrderNoRule[]): string[] {
+  const substitutions: Record<string, string[]> = {
+    '0': ['O'], 'O': ['0'], 'o': ['0'],
+    '1': ['I', 'l'], 'I': ['1', 'l'], 'i': ['1', 'l'], 'l': ['1', 'I'],
+    '2': ['Z'], 'Z': ['2'], 'z': ['2'],
+    '5': ['S'], 'S': ['5'], 's': ['5'],
+    '8': ['B'], 'B': ['8'], 'b': ['8'],
+    '6': ['G'], 'G': ['6'], 'g': ['6']
+  };
+  const positions: number[] = [];
+  for (let i = 0; i < orderNo.length; i++) {
+    if (substitutions[orderNo[i]]?.length) positions.push(i);
+  }
+  const limited = positions.slice(0, 5);
+  if (limited.length === 0) return [];
+  const results = new Set<string>();
+  const total = 1 << limited.length;
+  for (let mask = 1; mask < total; mask++) {
+    const chars = orderNo.split('');
+    for (let i = 0; i < limited.length; i++) {
+      if ((mask >> i) & 1) {
+        const pos = limited[i];
+        chars[pos] = substitutions[chars[pos]][0];
+      }
+    }
+    const candidate = chars.join('');
+    if (rules.some(r => new RegExp(`^${r.pattern}$`).test(candidate))) {
+      results.add(candidate);
+    }
+  }
+  return Array.from(results).slice(0, 5);
+}
+
+async function loadOrderNoRules(shopId: string) {
+  if (!shopId) {
+    orderNoRules.value = [];
+    return;
+  }
+  const { data } = await fetchOrderNoRules(shopId);
+  orderNoRules.value = data || [];
+}
 
 async function loadShops() {
   const { data, error } = await fetchPaintShopList();
@@ -129,6 +193,8 @@ async function onShopChange(shopId: string, isInit = false) {
 
   loadingCategories.value = true;
   const { data, error } = await fetchShopCategoriesWithStandard(shopId);
+  // eslint-disable-next-line no-console
+  console.log('[fetchShopCategoriesWithStandard] raw data:', JSON.parse(JSON.stringify(data)));
   if (!error && data) {
     const items = (data as any[]).filter((s: any) => Number(s.coefficient) > 0);
     if (items.length === 0 && (data as any[]).length === 0) {
@@ -137,12 +203,27 @@ async function onShopChange(shopId: string, isInit = false) {
       shopHasTemplate.value = true;
     }
     categories.value = items.map((s: any) => ({
-      id: s.categoryId || s.category?.id,
+      id: s.categoryId || s.category?.id || '',
       name: s.alias || s.category?.name || '',
       alias: s.alias || '',
-      paintCount: Number(s.coefficient),
+      paintCount: Number(s.coefficient) || 0,
       newPartAddition: Number(s.newPartAddition) || 0
     }));
+    // eslint-disable-next-line no-console
+    console.log('[fetchShopCategoriesWithStandard] mapped categories:', JSON.parse(JSON.stringify(categories.value)));
+
+    // 编辑初始化时：若 categoryId 找不到对应系统部位，但保存了名字，则按名字自动匹配
+    if (isInit) {
+      model.items.forEach(item => {
+        if (item.categoryId && categories.value.some(c => c.id === item.categoryId)) return;
+        const nameHint = item.categoryName;
+        if (!nameHint) return;
+        const match = categories.value.find(
+          c => c.name === nameHint || c.alias === nameHint
+        );
+        if (match) item.categoryId = match.id;
+      });
+    }
   } else {
     shopHasTemplate.value = false;
   }
@@ -159,7 +240,7 @@ function getAvailableCategories(currentCategoryId?: string) {
   const selectedIds = new Set(model.items.filter(i => i.categoryId && i.categoryId !== currentCategoryId).map(i => i.categoryId));
   return categories.value
     .filter(c => !selectedIds.has(c.id))
-    .map(c => ({ label: `${c.name} (${Number(c.paintCount).toFixed(1)}幅)`, value: c.id }));
+    .map(c => ({ label: `${c.name} (${(Number(c.paintCount) || 0).toFixed(1)}幅)`, value: c.id }));
 }
 
 const canAddItem = computed(() => {
@@ -170,10 +251,13 @@ function removeItem(index: number) {
   model.items.splice(index, 1);
 }
 
-const itemColumns = computed(() => [
-  {
-    key: 'categoryId',
-    title: '项目名称',
+const itemColumns = computed(() => {
+  // 显式依赖 items，让表格在增删行或切换项目时重新渲染列
+  const itemDependency = model.items.map(i => `${i.categoryId}:${i.quantity}:${i.newPartQuantity}:${i.specialPaintId}`).join('|');
+  return [
+    {
+      key: 'categoryId',
+      title: '项目名称',
     width: 200,
     render: (_row: any, index: number) => {
       const item = model.items[index];
@@ -262,7 +346,8 @@ const itemColumns = computed(() => [
       }, { icon: () => h('span', { class: 'i-ic-round-delete' }) });
     }
   }
-]);
+  ];
+});
 
 function getCategoryName(categoryId: string) {
   const cat = categories.value.find(c => c.id === categoryId);
@@ -272,8 +357,8 @@ function getCategoryName(categoryId: string) {
 function getCategoryPaintCount(categoryId: string, newPartQuantity: number, totalQuantity: number, specialPaintId?: string) {
   const cat = categories.value.find(c => c.id === categoryId);
   if (!cat) return 0;
-  const base = cat.paintCount;
-  const addition = cat.newPartAddition;
+  const base = Number.isNaN(cat.paintCount) ? 0 : cat.paintCount;
+  const addition = Number.isNaN(cat.newPartAddition) ? 0 : cat.newPartAddition;
   // 非新件幅数 + 新件幅数
   const oldCount = totalQuantity - newPartQuantity;
   let result = base * oldCount + (base + addition) * newPartQuantity;
@@ -308,6 +393,7 @@ const backendOrigin = ''; // 通过Vite代理访问，无需后端根地址
 
 // OCR 相关状态
 const ocrLoading = ref(false);
+const ocrMode = ref<'all' | 'basic' | 'items'>('all');
 const showOcrModal = ref(false);
 const ocrImageIndex = ref(-1);
 const ocrCanvasRef = ref<HTMLCanvasElement | null>(null);
@@ -316,6 +402,9 @@ const isDrawing = ref(false);
 const drawStart = ref({ x: 0, y: 0 });
 const drawEnd = ref({ x: 0, y: 0 });
 const hasCropRegion = ref(false);
+
+// OCR 可识别字段标签
+const ocrFieldLabels = ['工单号', '车牌号', '客户名称', '联系电话', '车型', '车架号', '品牌', '日期'];
 
 // OCR 冲突确认弹窗
 const showConflictModal = ref(false);
@@ -390,8 +479,8 @@ function drawOcrCanvas() {
   const imgEl = ocrImgRef.value;
   if (!canvas || !imgEl) return;
 
-  const maxW = 600;
-  const maxH = 450;
+  const maxW = 860;
+  const maxH = 640;
   const scale = Math.min(maxW / imgEl.naturalWidth, maxH / imgEl.naturalHeight, 1);
   const displayW = Math.round(imgEl.naturalWidth * scale);
   const displayH = Math.round(imgEl.naturalHeight * scale);
@@ -500,6 +589,7 @@ async function ocrRecognizeFull() {
     const formData = new FormData();
     formData.append('file', blob, 'ocr_image.png');
     if (model.shopId) formData.append('shopId', model.shopId);
+    formData.append('ocrMode', ocrMode.value);
     const { data, error } = await ocrRecognizeImage(formData);
     if (!error && data) {
       applyOcrResult(data);
@@ -511,24 +601,29 @@ async function ocrRecognizeFull() {
     }
   } catch {
     window.$message?.error('OCR识别失败，请确认 PaddleOCR 服务已启动（端口 8500）');
-  } finally {
-    ocrLoading.value = false;
+  } finally {    ocrLoading.value = false;
   }
 }
 
 // 将OCR识别结果应用到表单（空字段直接填充，冲突字段弹窗确认）
-function applyOcrResult(result: { plateNumber?: string; orderNo?: string; customerName?: string; phone?: string; carModel?: string; date?: string }) {
-  const fieldMap: Array<{ key: 'plateNumber' | 'orderNo' | 'customerName' | 'phone' | 'carModel' | 'orderDate'; label: string; ocrKey: string }> = [
+function applyOcrResult(result: { plateNumber?: string; orderNo?: string; orderNoValid?: boolean; orderNoCandidates?: string[]; customerName?: string; phone?: string; carModel?: string; vin?: string; brand?: string; date?: string }) {
+  const fieldMap: Array<{ key: 'plateNumber' | 'orderNo' | 'customerName' | 'phone' | 'carModel' | 'vin' | 'brand' | 'orderDate'; label: string; ocrKey: string }> = [
     { key: 'plateNumber', label: '车牌号', ocrKey: 'plateNumber' },
     { key: 'orderNo', label: '工单号', ocrKey: 'orderNo' },
     { key: 'customerName', label: '客户名称', ocrKey: 'customerName' },
     { key: 'phone', label: '联系电话', ocrKey: 'phone' },
     { key: 'carModel', label: '车型', ocrKey: 'carModel' },
+    { key: 'vin', label: '车架号', ocrKey: 'vin' },
+    { key: 'brand', label: '品牌', ocrKey: 'brand' },
     { key: 'orderDate', label: '日期', ocrKey: 'date' },
   ];
 
   const filledMessages: string[] = [];
   const conflicts: Array<{ key: string; label: string; oldValue: string; newValue: string; checked: boolean }> = [];
+
+  // 记录 OCR 工单号纠正信息
+  ocrOrderNoOriginal.value = result.orderNo || '';
+  ocrOrderNoCandidates.value = result.orderNoCandidates || [];
 
   for (const { key, label, ocrKey } of fieldMap) {
     const ocrValue = ((result as any)[ocrKey] || '').trim();
@@ -629,6 +724,7 @@ async function ocrRecognizeCrop() {
     const formData = new FormData();
     formData.append('file', blob, 'ocr_crop.png');
     if (model.shopId) formData.append('shopId', model.shopId);
+    formData.append('ocrMode', ocrMode.value);
     const { data, error } = await ocrRecognizeImage(formData);
     if (!error && data) {
       applyOcrResult(data);
@@ -656,6 +752,7 @@ function handleInitModel() {
       carModel: props.rowData.carModel || '',
       plateNumber: props.rowData.plateNumber || '',
       vin: props.rowData.vin || '',
+      brand: props.rowData.brand || '',
       customerName: props.rowData.customerName || '',
       phone: props.rowData.phone || '',
       contactPerson: props.rowData.contactPerson || '',
@@ -665,6 +762,7 @@ function handleInitModel() {
       settlementMonth: props.rowData.settlementMonth || '',
       items: (props.rowData.items || []).map((it: any) => ({
         categoryId: it.categoryId || it.category?.id || '',
+        categoryName: it.category?.name || it.categoryName || '',
         quantity: it.quantity || 1,
         newPartQuantity: it.newPartQuantity || 0,
         specialPaintId: it.specialPaintId || ''
@@ -735,6 +833,7 @@ async function handleSubmit() {
       carModel: model.carModel,
       plateNumber: model.plateNumber,
       vin: model.vin || undefined,
+      brand: model.brand || undefined,
       customerName: model.customerName,
       phone: model.phone || undefined,
       contactPerson: model.contactPerson || undefined,
@@ -764,16 +863,21 @@ async function handleSubmit() {
     const { error } = await updateWorkOrder({
       id: props.rowData.id,
       orderNo: model.orderNo || undefined,
+      orderDate: model.orderDate || undefined,
       carModel: model.carModel,
       plateNumber: model.plateNumber,
+      vin: model.vin || undefined,
+      brand: model.brand || undefined,
       customerName: model.customerName,
       phone: model.phone || undefined,
-      status: model.status,
       settlementMonth: model.settlementMonth || undefined,
       remark: model.remark || undefined,
       items: model.items.filter(it => it.categoryId).map(it => ({ categoryId: it.categoryId, quantity: it.quantity, newPartQuantity: it.newPartQuantity, specialPaintId: it.specialPaintId || undefined }))
     });
-    if (error) return;
+    if (error) {
+      window.$message?.error(error.message || '更新失败');
+      return;
+    }
     window.$message?.success($t('common.updateSuccess'));
   }
   closeDrawer();
@@ -784,27 +888,26 @@ watch(visible, () => {
   if (visible.value) {
     handleInitModel();
     restoreValidation();
-    // 编辑时加载结算历史
-    if (props.operateType === 'edit' && props.rowData?.id) {
-      loadSettlementHistory(props.rowData.id);
-    } else {
-      settlementRecords.value = [];
-    }
   }
 });
 
-async function loadSettlementHistory(orderId: string) {
-  const { data, error } = await getSettlementHistory(orderId);
-  if (!error && data) {
-    settlementRecords.value = data;
-  }
-}
+watch(() => model.shopId, (shopId) => {
+  if (shopId) loadOrderNoRules(shopId);
+  else orderNoRules.value = [];
+});
+
+// 用户手动修改工单号时，清空 OCR 纠正候选（避免与实时规则候选重复显示）
+watch(() => model.orderNo, () => {
+  ocrOrderNoCandidates.value = [];
+  ocrOrderNoOriginal.value = '';
+});
 </script>
 
 <template>
-  <NModal v-model:show="visible" preset="card" :title="title" style="width: 800px; max-height: 85vh;" :mask-closable="false">
-    <NScrollbar style="max-height: calc(85vh - 120px);">
-      <NForm ref="formRef" :model="model" :rules="rules" label-placement="left" :label-width="80" class="px-4px">
+  <NModal v-model:show="visible" preset="card" :title="title" style="width: 90vw; max-width: 1200px; max-height: 90vh;" :mask-closable="false">
+    <div class="operate-modal-body">
+      <NScrollbar class="form-panel">
+        <NForm ref="formRef" :model="model" :rules="rules" label-placement="left" :label-width="80" class="px-4px pr-12px">
         <NAlert v-if="operateType === 'edit' && images.length > 0 && !model.plateNumber" type="info" :bordered="false" class="mb-12px">
           此工单通过快速录入创建，请点击图片上的OCR识别按钮确认工单信息。
         </NAlert>
@@ -813,9 +916,26 @@ async function loadSettlementHistory(orderId: string) {
 
         <NGrid :cols="2" :x-gap="16">
           <NGridItem>
-            <NFormItem label="工单号">
+            <NFormItem
+              label="工单号"
+              :validation-status="model.orderNo && !orderNoValidation.valid ? 'warning' : undefined"
+              :feedback="orderNoValidation.message"
+            >
               <NInput v-model:value="model.orderNo" placeholder="不填则自动生成" />
             </NFormItem>
+            <NSpace v-if="orderNoValidation.candidates.length > 0 || ocrOrderNoCandidates.length > 0" class="mb-8px" :size="6">
+              <NText depth="3">候选修正：</NText>
+              <NTag
+                v-for="candidate in (ocrOrderNoCandidates.length > 0 ? ocrOrderNoCandidates : orderNoValidation.candidates)"
+                :key="candidate"
+                type="warning"
+                size="small"
+                style="cursor: pointer"
+                @click="model.orderNo = candidate"
+              >
+                {{ candidate }}
+              </NTag>
+            </NSpace>
           </NGridItem>
           <NGridItem>
             <NFormItem label="门店" path="shopId">
@@ -843,7 +963,7 @@ async function loadSettlementHistory(orderId: string) {
                 type="date"
                 value-format="yyyy-MM-dd"
                 style="width: 100%"
-                :disabled="operateType === 'edit'"
+                clearable
               />
             </NFormItem>
           </NGridItem>
@@ -859,22 +979,9 @@ async function loadSettlementHistory(orderId: string) {
               />
             </NFormItem>
           </NGridItem>
-          <NGridItem>
-            <NFormItem v-if="operateType === 'edit'" label="状态">
-              <NSelect
-                v-model:value="model.status"
-                :options="[
-                  { label: '待处理', value: 'PENDING' },
-                  { label: '进行中', value: 'IN_PROGRESS' },
-                  { label: '已完成', value: 'COMPLETED' },
-                  { label: '已取消', value: 'CANCELLED' }
-                ]"
-              />
-            </NFormItem>
-          </NGridItem>
         </NGrid>
 
-        <NGrid :cols="3" :x-gap="16">
+        <NGrid :cols="2" :x-gap="16">
           <NGridItem>
             <NFormItem label="车牌号" path="plateNumber">
               <NInput v-model:value="model.plateNumber" placeholder="请输入车牌号" />
@@ -885,9 +992,14 @@ async function loadSettlementHistory(orderId: string) {
               <NInput v-model:value="model.carModel" placeholder="请输入车型" />
             </NFormItem>
           </NGridItem>
-          <NGridItem>
+          <NGridItem span="2">
             <NFormItem label="车架号">
               <NInput v-model:value="model.vin" placeholder="请输入VIN" />
+            </NFormItem>
+          </NGridItem>
+          <NGridItem>
+            <NFormItem label="品牌">
+              <NInput v-model:value="model.brand" placeholder="请输入品牌" />
             </NFormItem>
           </NGridItem>
         </NGrid>
@@ -904,17 +1016,6 @@ async function loadSettlementHistory(orderId: string) {
             </NFormItem>
           </NGridItem>
         </NGrid>
-
-        <NAlert v-if="settlementRecords.length > 0" type="info" :bordered="false" class="mb-8px">
-          <template #header>此工单已有 {{ settlementRecords.length }} 次结算记录</template>
-          <NSpace vertical :size="4">
-            <NText v-for="record in settlementRecords" :key="record.id" depth="3">
-              {{ record.settlementMonth }} - 幅数: {{ Number(record.paintCount).toFixed(1) }}，项目数: {{ record.itemCount }}
-              <span v-if="record.remark">（{{ record.remark }}）</span>
-            </NText>
-            <NText depth="3" style="font-size: 12px;">如需分次结算，修改结算月份后保存即可自动新增结算记录</NText>
-          </NSpace>
-        </NAlert>
 
         <NFormItem label="备注">
           <NInput v-model:value="model.remark" type="textarea" placeholder="请输入备注" :rows="2" />
@@ -952,76 +1053,75 @@ async function loadSettlementHistory(orderId: string) {
           :row-key="(row: OrderItem) => row.categoryId"
         />
         <NEmpty v-else-if="model.shopId" description="暂未添加喷漆项目" />
-
-        <NDivider title-placement="left">
-          工单图片
-          <NButton
-            v-if="images.length > 0"
-            type="primary"
-            size="small"
-            dashed
-            :loading="ocrLoading"
-            class="ml-12px"
-            @click="ocrQuickRecognize"
-          >
-            <template #icon><icon-ic-round-search /></template>
-            OCR识别填充
-          </NButton>
-        </NDivider>
-
-        <NSpace :size="8" align="center">
-          <NUpload
-            :max="9"
-            accept="image/*"
-            :show-file-list="false"
-            :custom-request="({ file }) => handleUploadImage({ file: file.file as File })"
-          >
-            <NButton :loading="uploadingImage">
-              <template #icon><icon-ic-round-add-photo-alternate /></template>
-              选择图片
-            </NButton>
-          </NUpload>
-          <NText v-if="images.length > 0" depth="3" style="font-size: 12px;">
-            点击"OCR识别填充"一键识别第一张图，或点击图片左上角搜索图标进行框选识别
-          </NText>
-        </NSpace>
-
-        <NGrid :cols="3" :x-gap="8" :y-gap="8" class="mt-12px">
-          <NGridItem v-for="(img, index) in images" :key="index">
-            <NCard size="small" :bordered="true" style="position: relative; padding: 0;">
-              <NImage
-                :src="getImageDisplayUrl(img)"
-                :preview-src="getHdImageUrl(img)"
-                object-fit="cover"
-                style="width: 100%; height: 120px; border-radius: 4px;"
-                show-toolbar
-              />
-              <NButton
-                type="error"
-                quaternary
-                circle
-                size="tiny"
-                style="position: absolute; top: 4px; right: 4px;"
-                @click="handleRemoveImage(index)"
-              >
-                <template #icon><icon-ic-round-close /></template>
-              </NButton>
-              <NButton
-                type="primary"
-                quaternary
-                circle
-                size="tiny"
-                style="position: absolute; top: 4px; left: 4px;"
-                title="OCR识别此图片"
-                @click="openOcrModal(index)"
-              >
-                <template #icon><icon-ic-round-search /></template>
-              </NButton>
-            </NCard>
-          </NGridItem>
-        </NGrid>
       </NForm>
     </NScrollbar>
+
+    <NScrollbar class="image-panel">
+      <div class="image-panel-header">
+        <span class="image-panel-title">工单图片</span>
+        <NButton
+          v-if="images.length > 0"
+          type="primary"
+          size="small"
+          dashed
+          :loading="ocrLoading"
+          @click="ocrQuickRecognize"
+        >
+          <template #icon><icon-ic-round-search /></template>
+          OCR识别填充
+        </NButton>
+      </div>
+      <NSpace :size="8" align="center" class="image-upload-row">
+        <NUpload
+          :max="9"
+          accept="image/*"
+          :show-file-list="false"
+          :custom-request="({ file }) => handleUploadImage({ file: file.file as File })"
+        >
+          <NButton :loading="uploadingImage">
+            <template #icon><icon-ic-round-add-photo-alternate /></template>
+            选择图片
+          </NButton>
+        </NUpload>
+        <NText v-if="images.length > 0" depth="3" style="font-size: 12px;">
+          点击"OCR识别填充"一键识别第一张图，或点击图片左上角搜索图标进行框选识别
+        </NText>
+      </NSpace>
+
+      <div class="image-list">
+        <div v-for="(img, index) in images" :key="index" class="image-card">
+          <NImage
+            :src="getImageDisplayUrl(img)"
+            :preview-src="getHdImageUrl(img)"
+            object-fit="cover"
+            class="image-card-img"
+            show-toolbar
+          />
+          <NButton
+            type="error"
+            quaternary
+            circle
+            size="tiny"
+            class="image-remove-btn"
+            @click="handleRemoveImage(index)"
+          >
+            <template #icon><icon-ic-round-close /></template>
+          </NButton>
+          <NButton
+            type="primary"
+            quaternary
+            circle
+            size="tiny"
+            class="image-ocr-btn"
+            title="OCR识别此图片"
+            @click="openOcrModal(index)"
+          >
+            <template #icon><icon-ic-round-search /></template>
+          </NButton>
+        </div>
+      </div>
+    </NScrollbar>
+  </div>
 
     <template #footer>
       <NSpace justify="end" :size="16">
@@ -1032,12 +1132,29 @@ async function loadSettlementHistory(orderId: string) {
   </NModal>
 
   <!-- OCR 识别弹窗 -->
-  <NModal v-model:show="showOcrModal" preset="card" title="OCR识别" style="width: 640px" :mask-closable="false">
+  <NModal v-model:show="showOcrModal" preset="card" title="OCR识别" style="width: 900px" :mask-closable="false">
     <NSpace vertical :size="12">
       <NAlert type="info" :bordered="false">
-        全图识别：直接识别整张图片中的工单号、车牌号、客户名称、联系电话、车型<br />
-        标记识别：在图片上拖拽框选区域，精准识别指定位置的文字（推荐）
+        <template #header>操作说明</template>
+        <div><strong>全图识别：</strong>直接识别整张图片中的工单号、车牌号、客户名称、联系电话、车型、车架号、品牌、日期</div>
+        <div><strong>标记识别：</strong>在图片上拖拽框选区域，精准识别指定位置的文字（推荐）</div>
       </NAlert>
+
+      <div class="ocr-fields-row">
+        <NText depth="3" style="font-size: 12px; white-space: nowrap;">可识别字段：</NText>
+        <NSpace :size="8" wrap>
+          <NTag v-for="field in ocrFieldLabels" :key="field" size="small" type="info" round>{{ field }}</NTag>
+        </NSpace>
+      </div>
+
+      <NSpace align="center" :size="12">
+        <NText depth="3" style="font-size: 12px; white-space: nowrap;">识别模式：</NText>
+        <NRadioGroup v-model:value="ocrMode" size="small">
+          <NRadioButton value="all">全部识别</NRadioButton>
+          <NRadioButton value="basic">仅基础资料</NRadioButton>
+          <NRadioButton value="items">仅部位</NRadioButton>
+        </NRadioGroup>
+      </NSpace>
 
       <div style="position: relative; display: inline-block; cursor: crosshair;">
         <canvas
@@ -1050,9 +1167,15 @@ async function loadSettlementHistory(orderId: string) {
         />
       </div>
 
-      <NText v-if="hasCropRegion" type="success" style="font-size: 13px;">
-        已框选标记区域，点击"标记区域识别"进行精准识别
-      </NText>
+      <NAlert v-if="hasCropRegion" type="success" :bordered="false" style="padding: 8px 12px;">
+        <NSpace align="center" :size="8">
+          <NText type="success" style="font-size: 13px; font-weight: 500;">已框选标记区域</NText>
+          <NText depth="3" style="font-size: 12px;">点击"标记区域识别"进行精准识别</NText>
+        </NSpace>
+      </NAlert>
+      <NAlert v-else type="default" :bordered="false" style="padding: 8px 12px;">
+        <NText depth="3" style="font-size: 12px;">提示：按住鼠标左键在图片上拖拽，可框选需要识别的文字区域</NText>
+      </NAlert>
     </NSpace>
 
     <template #footer>
@@ -1096,4 +1219,105 @@ async function loadSettlementHistory(orderId: string) {
   </NModal>
 </template>
 
-<style scoped></style>
+<style scoped>
+.operate-modal-body {
+  display: flex;
+  height: calc(90vh - 130px);
+  gap: 16px;
+  overflow: hidden;
+}
+
+.form-panel {
+  flex: 1;
+  min-width: 520px;
+  padding-right: 8px;
+}
+
+.image-panel {
+  width: 520px;
+  flex-shrink: 0;
+  border-left: 1px solid #f0f0f0;
+  padding-left: 16px;
+  padding-right: 8px;
+}
+
+.image-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.image-panel-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #333;
+}
+
+.image-upload-row {
+  margin-bottom: 12px;
+}
+
+.image-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.image-card {
+  position: relative;
+  border: 1px solid #f0f0f0;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #fafafa;
+}
+
+.image-card-img {
+  width: 100%;
+  height: auto;
+  min-height: 120px;
+  display: block;
+  object-fit: contain;
+  background: #f5f5f5;
+}
+
+.image-remove-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+}
+
+.image-ocr-btn {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+}
+
+.ocr-fields-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 992px) {
+  .operate-modal-body {
+    flex-direction: column;
+    height: auto;
+    max-height: calc(90vh - 130px);
+  }
+
+  .image-panel {
+    width: 100%;
+    border-left: none;
+    border-top: 1px solid #f0f0f0;
+    padding-left: 0;
+    padding-top: 16px;
+    max-height: 40vh;
+  }
+
+  .form-panel {
+    max-height: 50vh;
+  }
+}
+</style>

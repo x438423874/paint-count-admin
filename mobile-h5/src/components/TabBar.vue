@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { rootRouteList } from '@/config/routes'
 
-const active = ref(0)
 const route = useRoute()
 
 const show = computed(() => {
@@ -9,10 +8,15 @@ const show = computed(() => {
     return true
   return false
 })
+
+const active = computed(() => {
+  const index = rootRouteList.indexOf(route.name as string)
+  return index >= 0 ? index : 0
+})
 </script>
 
 <template>
-  <van-tabbar v-if="show" v-model="active" route placeholder>
+  <van-tabbar v-if="show" v-model="active" route placeholder safe-area-inset-bottom>
     <van-tabbar-item replace to="/" icon="home-o">
       首页
     </van-tabbar-item>

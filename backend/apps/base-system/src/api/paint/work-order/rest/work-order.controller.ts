@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Put, Delete, Body, Query, Param, Req, Res, Request, BadRequestException, InternalServerErrorException } from '@nestjs/common';
+import { Controller, Get, Post, Put, Delete, Body, Query, Param, Req, Res, Request, BadRequestException, InternalServerErrorException, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { WorkOrderService } from '../../service/work-order.service';
@@ -6,10 +6,12 @@ import { WorkOrderAuditService } from '../../service/work-order-audit.service';
 import { WorkOrderMergeService } from '../../service/work-order-merge.service';
 import { WorkOrderSettlementService } from '../../service/work-order-settlement.service';
 import { WorkOrderExcelService } from '../../service/work-order-excel.service';
-import { OcrService, OcrTemplateConfig } from '../../service/ocr.service';
-import { OcrAnnotationService } from '../../service/ocr-annotation.service';
+import { OcrService } from '../../service/ocr.service';
+import { WorkOrderNoRuleService, OrderNoRule } from '../../service/work-order-no-rule.service';
+import { WorkOrderReconcileService } from '../../service/work-order-reconcile.service';
 import { UserShopService } from '../../service/user-shop.service';
 import { CreateWorkOrderDto, UpdateWorkOrderDto, PageWorkOrderDto, WorkOrderItemDto, AuditWorkOrderDto } from '../dto/work-order.dto';
+import { BatchOcrPreviewResponse, BatchCreateItem } from '../dto/batch-ocr.dto';
 import { ApiRes } from '@lib/infra/rest/res.response';
 import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
 import { PaintImageType } from '@prisma/client';
@@ -24,8 +26,9 @@ export class WorkOrderController {
     private readonly mergeService: WorkOrderMergeService,
     private readonly settlementService: WorkOrderSettlementService,
     private readonly ocrService: OcrService,
-    private readonly annotationService: OcrAnnotationService,
     private readonly excelService: WorkOrderExcelService,
+    private readonly noRuleService: WorkOrderNoRuleService,
+    private readonly reconcileService: WorkOrderReconcileService,
     private readonly userShopService: UserShopService,
   ) {}
 
@@ -82,6 +85,8 @@ export class WorkOrderController {
     const thumbnailBuffer = await getFieldBuffer('thumbnail');
     // 是否启用 OCR 识别（默认启用）。批量上传时可关闭以加速创建
     const enableOcr = getFieldValue('enableOcr') !== 'false';
+    // OCR 识别模式：basic（仅基础资料）/ items（仅部位）/ all（全部），默认 all
+    const ocrMode = (getFieldValue('ocrMode') as 'basic' | 'items' | 'all') || 'all';
 
     // 优先使用前端传入的值
     const plateNumber = getFieldValue('plateNumber') || undefined;
@@ -89,6 +94,9 @@ export class WorkOrderController {
     const customerName = getFieldValue('customerName') || undefined;
     const phone = getFieldValue('phone') || undefined;
     const carModel = getFieldValue('carModel') || undefined;
+    const vin = getFieldValue('vin') || undefined;
+    const brand = getFieldValue('brand') || undefined;
+    const orderDate = getFieldValue('orderDate') || undefined;
 
     // 后端 OCR 识别（仅当启用 OCR 且前端未提供完整字段时执行）
     let ocrPlateNumber = '';
@@ -96,14 +104,25 @@ export class WorkOrderController {
     let ocrCustomerName = '';
     let ocrPhone = '';
     let ocrCarModel = '';
+    let ocrVin = '';
+    let ocrBrand = '';
+    let ocrDate = '';
+    let ocrItems: { categoryId: string; quantity: number; newPartQuantity: number }[] | undefined;
     if (enableOcr) {
       try {
-        const ocrResult = await this.ocrService.recognizeWithTemplate(buffer, shopId);
+        const ocrResult = await this.ocrService.recognizeWithTemplate(buffer, shopId, ocrMode);
         ocrPlateNumber = ocrResult.plateNumber || '';
         ocrOrderNo = ocrResult.orderNo || '';
         ocrCustomerName = ocrResult.customerName || '';
         ocrPhone = ocrResult.phone || '';
         ocrCarModel = ocrResult.carModel || '';
+        ocrVin = ocrResult.vin || '';
+        ocrBrand = ocrResult.brand || '';
+        ocrDate = ocrResult.date || '';
+        // 提取匹配成功的部位项
+        ocrItems = (ocrResult.items || [])
+          .filter(it => it.matched && it.categoryId)
+          .map(it => ({ categoryId: it.categoryId!, quantity: it.quantity, newPartQuantity: it.newPartQuantity }));
       } catch {
         // OCR 失败不阻塞创建
       }
@@ -115,12 +134,160 @@ export class WorkOrderController {
     const finalCustomerName = customerName || ocrCustomerName || undefined;
     const finalPhone = phone || ocrPhone || undefined;
     const finalCarModel = carModel || ocrCarModel || undefined;
+    const finalVin = vin || ocrVin || undefined;
+    const finalBrand = brand || ocrBrand || undefined;
+    const finalOrderDate = orderDate || ocrDate || undefined;
 
-    const saved = await this.workOrderService.quickCreate(shopId, buffer, data.filename, data.mimetype, settlementMonth, finalPlateNumber, finalOrderNo, thumbnailBuffer, finalCustomerName, finalPhone, finalCarModel);
+    const saved = await this.workOrderService.quickCreate(shopId, buffer, data.filename, data.mimetype, settlementMonth, finalPlateNumber, finalOrderNo, thumbnailBuffer, finalCustomerName, finalPhone, finalCarModel, finalVin, finalBrand, finalOrderDate, ocrItems);
     return ApiRes.success(saved);
   }
 
+  @Post('batch-ocr-preview')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 30, ttl: 60000 } })
+  @ApiOperation({ summary: '批量OCR预览：上传多张图片，返回识别结果与校验警告' })
+  async batchOcrPreview(@Req() request: FastifyRequest) {
+    const parts = request.parts();
+    const files: { id: string; filename: string; buffer: Buffer }[] = [];
+    let shopId = '';
+    let ocrMode: 'basic' | 'items' | 'all' = 'all';
+
+    for await (const part of parts) {
+      if (part.type === 'file') {
+        const id = part.fieldname;
+        if (!id || id === 'shopId' || id === 'items' || id === 'ocrMode') continue;
+        const buffer = await part.toBuffer();
+        if (buffer.length <= 20 * 1024 * 1024) {
+          files.push({ id, filename: part.filename, buffer });
+        }
+      } else {
+        if (part.fieldname === 'shopId') shopId = part.value as string;
+        if (part.fieldname === 'ocrMode') {
+          const v = part.value as string;
+          if (v === 'basic' || v === 'items' || v === 'all') ocrMode = v;
+        }
+      }
+    }
+
+    if (!shopId) throw new BadRequestException('请选择门店');
+    if (files.length === 0) throw new BadRequestException('请选择图片');
+    await this.userShopService.assertShopAccess((request as any).user?.uid, shopId);
+
+    const rules = await this.noRuleService.getRules(shopId);
+    const items: BatchOcrPreviewResponse['items'] = [];
+
+    for (const file of files) {
+      try {
+        const result = await this.ocrService.recognizeWithTemplate(file.buffer, shopId, ocrMode);
+        const warnings: string[] = [];
+        if (!result.plateNumber) warnings.push('未识别到车牌号');
+        if (!result.orderNo) warnings.push('未识别到工单号');
+        if (result.orderNo && rules.length > 0 && !this.noRuleService.validate(result.orderNo, rules).valid) {
+          warnings.push(`工单号格式不符合规则`);
+        }
+        if (!result.date) warnings.push('未识别到日期');
+
+        // 生成缩略图 base64（200px 宽度）
+        const thumbnail = await this.workOrderService.generateThumbnailBase64(file.buffer, 200);
+
+        items.push({
+          id: file.id,
+          fileName: file.filename,
+          thumbnail,
+          result,
+          warnings,
+          valid: warnings.length === 0,
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : 'OCR识别失败';
+        items.push({
+          id: file.id,
+          fileName: file.filename,
+          thumbnail: '',
+          result: {
+            plateNumber: '', orderNo: '', customerName: '', phone: '', carModel: '', vin: '', brand: '', date: '', rawText: '', items: [],
+          },
+          warnings: [msg],
+          valid: false,
+        });
+      }
+    }
+
+    return ApiRes.success({ items });
+  }
+
+  @Post('batch-create')
+  @Throttle({ default: { limit: 30, ttl: 60000 } })
+  @ApiOperation({ summary: '批量创建工单：根据批量OCR预览结果创建多个工单' })
+  async batchCreate(@Req() request: FastifyRequest) {
+    const parts = request.parts();
+    const files = new Map<string, { filename: string; buffer: Buffer }>();
+    let shopId = '';
+    let itemsJson = '';
+
+    for await (const part of parts) {
+      if (part.type === 'file') {
+        const id = part.fieldname;
+        const buffer = await part.toBuffer();
+        if (buffer.length <= 20 * 1024 * 1024) {
+          files.set(id, { filename: part.filename, buffer });
+        }
+      } else {
+        if (part.fieldname === 'shopId') shopId = part.value as string;
+        if (part.fieldname === 'items') itemsJson = part.value as string;
+      }
+    }
+
+    if (!shopId) throw new BadRequestException('请选择门店');
+    if (!itemsJson) throw new BadRequestException('缺少创建数据');
+    await this.userShopService.assertShopAccess((request as any).user?.uid, shopId);
+
+    let items: BatchCreateItem[] = [];
+    try {
+      items = JSON.parse(itemsJson);
+    } catch {
+      throw new BadRequestException('创建数据格式错误');
+    }
+    if (!Array.isArray(items) || items.length === 0) throw new BadRequestException('创建数据为空');
+
+    const created: any[] = [];
+    const errors: { id: string; message: string }[] = [];
+
+    for (const item of items) {
+      const file = files.get(item.id);
+      if (!file) {
+        errors.push({ id: item.id, message: '未找到对应图片' });
+        continue;
+      }
+      try {
+        const saved = await this.workOrderService.quickCreate(
+          shopId,
+          file.buffer,
+          file.filename,
+          'image/jpeg',
+          item.settlementMonth,
+          item.plateNumber,
+          item.orderNo,
+          undefined,
+          item.customerName,
+          item.phone,
+          item.carModel,
+          item.vin,
+          item.brand,
+          item.orderDate,
+          item.items,
+        );
+        created.push(saved);
+      } catch (e: any) {
+        errors.push({ id: item.id, message: e.message || '创建失败' });
+      }
+    }
+
+    return ApiRes.success({ created, errors, total: items.length });
+  }
+
   @Post('ocr')
+  @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 20, ttl: 60000 } }) // 每分钟20次：纯OCR识别
   @ApiOperation({ summary: 'OCR识别图片中的工单信息（支持门店模板精准识别）' })
   async ocrRecognize(@Req() request: FastifyRequest) {
@@ -145,6 +312,8 @@ export class WorkOrderController {
       return field?.value?.toString() || '';
     };
     const shopId = getFieldValue('shopId') || undefined;
+    // OCR 识别模式：basic（仅基础资料）/ items（仅部位）/ all（全部），默认 all
+    const ocrMode = (getFieldValue('ocrMode') as 'basic' | 'items' | 'all') || 'all';
 
     // 数据权限：校验用户是否有权访问该门店
     if (shopId) {
@@ -152,142 +321,13 @@ export class WorkOrderController {
     }
 
     try {
-      const result = await this.ocrService.recognizeWithTemplate(buffer, shopId);
+      const result = await this.ocrService.recognizeWithTemplate(buffer, shopId, ocrMode);
       return ApiRes.success(result);
     } catch (e) {
       // 透传 PaddleOCR 不可用等明确错误信息，便于前端提示用户
       const msg = e instanceof Error ? e.message : 'OCR识别失败';
       throw new InternalServerErrorException(msg);
     }
-  }
-
-  @Post('ocr-smart-annotate')
-  @ApiOperation({ summary: '智能标注：自动识别字段区域坐标' })
-  async smartAnnotate(@Req() request: FastifyRequest) {
-    const data = await request.file();
-    if (!data) {
-      throw new BadRequestException('请选择图片文件');
-    }
-
-    const buffer = await data.toBuffer();
-    if (buffer.length > 20 * 1024 * 1024) {
-      throw new BadRequestException('图片大小不能超过20MB');
-    }
-
-    // 从表单字段获取 shopId，用于加载门店字段别名配置
-    const shopId = (data.fields as any)?.shopId?.value as string | undefined;
-
-    // 数据权限：校验用户是否有权访问该门店
-    if (shopId) {
-      await this.userShopService.assertShopAccess((request as any).user?.uid, shopId);
-    }
-
-    try {
-      const fieldLabelsConfig = shopId
-        ? await this.ocrService.getShopFieldLabels(shopId)
-        : undefined;
-      const regions = await this.ocrService.smartAnnotate(buffer, fieldLabelsConfig);
-      return ApiRes.success(regions);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : '智能标注失败';
-      throw new InternalServerErrorException(msg);
-    }
-  }
-
-  @Get('ocr-template')
-  @ApiOperation({ summary: '获取门店OCR模板配置' })
-  async getOcrTemplate(@Query('shopId') shopId: string, @Request() req: AuthenticatedRequest) {
-    if (!shopId) throw new BadRequestException('请指定门店');
-    // 数据权限：校验用户是否有权访问该门店
-    await this.userShopService.assertShopAccess(req.user.uid, shopId);
-    const config = await this.ocrService.getShopOcrTemplate(shopId);
-    return ApiRes.success(config);
-  }
-
-  @Post('ocr-template')
-  @ApiOperation({ summary: '保存门店OCR模板配置' })
-  async saveOcrTemplate(@Body() body: { shopId: string; config: OcrTemplateConfig }, @Request() req: AuthenticatedRequest) {
-    if (!body.shopId || !body.config) throw new BadRequestException('参数不完整');
-    // 数据权限：校验用户是否有权操作该门店
-    await this.userShopService.assertShopAccess(req.user.uid, body.shopId);
-    await this.ocrService.saveShopOcrTemplate(body.shopId, body.config);
-    return ApiRes.ok();
-  }
-
-  @Delete('ocr-template')
-  @ApiOperation({ summary: '删除门店OCR模板配置' })
-  async deleteOcrTemplate(@Query('shopId') shopId: string, @Request() req: AuthenticatedRequest) {
-    if (!shopId) throw new BadRequestException('请指定门店');
-    // 数据权限：校验用户是否有权操作该门店
-    await this.userShopService.assertShopAccess(req.user.uid, shopId);
-    await this.ocrService.deleteShopOcrTemplate(shopId);
-    return ApiRes.ok();
-  }
-
-  @Get('ocr-field-labels/default')
-  @ApiOperation({ summary: '获取默认字段别名配置' })
-  async getDefaultFieldLabels() {
-    const config = this.ocrService.getDefaultFieldLabels();
-    return ApiRes.success(config);
-  }
-
-  @Get('ocr-field-labels')
-  @ApiOperation({ summary: '获取门店字段别名配置' })
-  async getShopFieldLabels(@Query('shopId') shopId: string, @Request() req: AuthenticatedRequest) {
-    if (!shopId) throw new BadRequestException('请指定门店');
-    // 数据权限：校验用户是否有权访问该门店
-    await this.userShopService.assertShopAccess(req.user.uid, shopId);
-    const config = await this.ocrService.getShopFieldLabels(shopId);
-    return ApiRes.success(config);
-  }
-
-  @Post('ocr-field-labels')
-  @ApiOperation({ summary: '保存门店字段别名配置' })
-  async saveShopFieldLabels(@Body() body: { shopId: string; config: Record<string, string[]> }, @Request() req: AuthenticatedRequest) {
-    if (!body.shopId || !body.config) throw new BadRequestException('参数不完整');
-    // 数据权限：校验用户是否有权操作该门店
-    await this.userShopService.assertShopAccess(req.user.uid, body.shopId);
-    await this.ocrService.saveShopFieldLabels(body.shopId, body.config);
-    return ApiRes.ok();
-  }
-
-  @Post('ocr-diagnose')
-  @ApiOperation({ summary: 'OCR诊断：返回详细的识别过程信息，用于排查识别失败问题' })
-  async ocrDiagnose(@Req() request: FastifyRequest) {
-    const data = await request.file();
-    if (!data) {
-      throw new BadRequestException('请选择图片文件');
-    }
-
-    const buffer = await data.toBuffer();
-    if (buffer.length > 20 * 1024 * 1024) {
-      throw new BadRequestException('图片大小不能超过20MB');
-    }
-
-    const shopId = (data.fields as any)?.shopId?.value as string | undefined;
-
-    // 数据权限：校验用户是否有权访问该门店
-    if (shopId) {
-      await this.userShopService.assertShopAccess((request as any).user?.uid, shopId);
-    }
-
-    try {
-      const diagnosis = await this.ocrService.diagnoseRecognize(buffer, shopId);
-      return ApiRes.success(diagnosis);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : 'OCR诊断失败';
-      throw new InternalServerErrorException(msg);
-    }
-  }
-
-  @Post('ocr-batch-validate')
-  @ApiOperation({ summary: '批量验证OCR准确率（对比已录入数据与OCR识别结果）' })
-  async batchValidate(@Body() body: { shopId: string; limit?: number }, @Request() req: AuthenticatedRequest) {
-    if (!body.shopId) throw new BadRequestException('请指定门店');
-    // 数据权限：校验用户是否有权访问该门店
-    await this.userShopService.assertShopAccess(req.user.uid, body.shopId);
-    const result = await this.ocrService.batchValidate(body.shopId, body.limit || 20);
-    return ApiRes.success(result);
   }
 
   @Post()
@@ -350,6 +390,7 @@ export class WorkOrderController {
   }
 
   @Get('page')
+  @Throttle({ default: { limit: 120, ttl: 60000 } }) // 每分钟120次：列表页频繁刷新
   @ApiOperation({ summary: '分页查询工单（重复工单排前面，含结算历史）' })
   async page(@Query() dto: PageWorkOrderDto, @Request() req: AuthenticatedRequest) {
     // 数据权限：获取当前用户可访问的门店ID（null 表示不限制）
@@ -384,13 +425,18 @@ export class WorkOrderController {
   }
 
   @Post(':id/settlement')
-  @ApiOperation({ summary: '添加结算记录（结算工单）' })
-  async addSettlement(@Param('id') id: string, @Body() body: { settlementMonth: string; remark?: string }, @Request() req: AuthenticatedRequest) {
-    if (!body.settlementMonth) {
-      throw new BadRequestException('请指定结算月份');
-    }
+  @ApiOperation({ summary: '结算工单（只改状态）' })
+  async settle(@Param('id') id: string, @Body() body: { settlementMonth?: string }, @Request() req: AuthenticatedRequest) {
     await this.userShopService.assertWorkOrderAccess(req.user.uid, id);
-    const data = await this.settlementService.addSettlementRecord(id, body.settlementMonth, body.remark);
+    const data = await this.settlementService.settle(id, body.settlementMonth, req.user?.uid);
+    return ApiRes.success(data);
+  }
+
+  @Post(':id/unsettle')
+  @ApiOperation({ summary: '取消结算（只改状态）' })
+  async unsettle(@Param('id') id: string, @Request() req: AuthenticatedRequest) {
+    await this.userShopService.assertWorkOrderAccess(req.user.uid, id);
+    const data = await this.settlementService.unsettle(id);
     return ApiRes.success(data);
   }
 
@@ -402,21 +448,53 @@ export class WorkOrderController {
     return ApiRes.success(data);
   }
 
-  @Delete(':id/settlement/:recordId')
-  @ApiOperation({ summary: '取消结算（删除结算记录）' })
-  async removeSettlement(@Param('id') id: string, @Param('recordId') recordId: string, @Request() req: AuthenticatedRequest) {
-    await this.userShopService.assertWorkOrderAccess(req.user.uid, id);
-    const data = await this.settlementService.removeSettlementRecord(recordId);
-    return ApiRes.success(data);
-  }
+  @Post('reconcile')
+  @Throttle({ default: { limit: 30, ttl: 60000 } })
+  @ApiOperation({ summary: '工单对账：上传 Excel 与系统工单进行幅数对比' })
+  async reconcile(@Req() request: FastifyRequest, @Request() req: AuthenticatedRequest) {
+    const data = await request.file();
+    if (!data) {
+      throw new BadRequestException('请上传 Excel 文件');
+    }
 
-  @Get(':id/settlements')
-  @ApiOperation({ summary: '获取工单结算历史' })
-  async getSettlements(@Param('id') id: string, @Request() req: AuthenticatedRequest) {
-    // 数据权限：校验工单权限
-    await this.userShopService.assertWorkOrderAccess(req.user.uid, id);
-    const data = await this.settlementService.getSettlementHistory(id);
-    return ApiRes.success(data);
+    const allowedTypes = [
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/vnd.ms-excel',
+      'application/wps-office.xlsx',
+      'application/wps-office.xls',
+    ];
+    if (!allowedTypes.includes(data.mimetype)) {
+      throw new BadRequestException('仅支持 xlsx/xls 格式的 Excel 文件');
+    }
+
+    const buffer = await data.toBuffer();
+    if (buffer.length > 10 * 1024 * 1024) {
+      throw new BadRequestException('Excel 文件大小不能超过 10MB');
+    }
+
+    const fields = data.fields;
+    const getFieldValue = (fieldName: string): string => {
+      const field = (fields as any)?.[fieldName];
+      if (!field) return '';
+      if (Array.isArray(field)) {
+        return field[0]?.value?.toString() || '';
+      }
+      return field?.value?.toString() || '';
+    };
+
+    const shopId = getFieldValue('shopId');
+    const settlementMonth = getFieldValue('settlementMonth');
+
+    if (!shopId) {
+      throw new BadRequestException('请选择门店');
+    }
+    if (!settlementMonth) {
+      throw new BadRequestException('请选择结算月份');
+    }
+
+    await this.userShopService.assertShopAccess(req.user.uid, shopId);
+    const result = await this.reconcileService.reconcile(shopId, settlementMonth, buffer);
+    return ApiRes.success(result);
   }
 
   @Get(':id')
@@ -540,18 +618,22 @@ export class WorkOrderController {
   async exportExcel(
     @Query('shopId') shopId: string,
     @Query('settlementMonth') settlementMonth: string,
+    @Query('mode') mode: 'detail' | 'summary' = 'detail',
     @Res() reply: FastifyReply,
     @Request() req: AuthenticatedRequest,
   ) {
     if (!shopId) throw new BadRequestException('请指定门店');
+    if (!['detail', 'summary'].includes(mode)) {
+      throw new BadRequestException('mode 参数只能是 detail 或 summary');
+    }
 
     // 数据权限：校验用户是否有权导出该门店数据
     await this.userShopService.assertShopAccess(req.user.uid, shopId);
 
     const shopName = await this.workOrderService.getShopName(shopId);
-    const filename = `${shopName}_台账_${settlementMonth || '全部'}.xlsx`;
+    const filename = `${shopName}_${mode === 'summary' ? '汇总' : '台账'}_${settlementMonth || '全部'}.xlsx`;
 
-    const buf = await this.excelService.exportExcel(shopId, settlementMonth);
+    const buf = await this.excelService.exportExcel(shopId, settlementMonth, mode);
     reply.header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     reply.header('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
     reply.send(buf);
@@ -609,6 +691,18 @@ export class WorkOrderController {
     return ApiRes.success(shop);
   }
 
+  @Post('save-template-and-alias-map')
+  @ApiOperation({ summary: '统一保存门店Excel模板配置和部位别名映射' })
+  async saveTemplateAndAliasMap(
+    @Body() body: { shopId: string; config: any; aliasMap: Record<string, string[]> },
+    @Request() req: AuthenticatedRequest,
+  ) {
+    if (!body.shopId || !body.config) throw new BadRequestException('参数不完整');
+    await this.userShopService.assertShopAccess(req.user.uid, body.shopId);
+    const shop = await this.excelService.saveTemplateAndAliasMap(body.shopId, body.config, body.aliasMap || {});
+    return ApiRes.success(shop);
+  }
+
   @Get('template-config')
   @ApiOperation({ summary: '获取门店Excel模板配置' })
   async getTemplateConfig(@Query('shopId') shopId: string, @Request() req: AuthenticatedRequest) {
@@ -619,93 +713,34 @@ export class WorkOrderController {
     return ApiRes.success(config);
   }
 
-  // ========== OCR 标注学习相关 API ==========
-
-  @Post('ocr-annotation')
-  @ApiOperation({ summary: '保存OCR标注（用于训练学习）' })
-  async saveAnnotation(@Body() body: any, @Request() req: AuthenticatedRequest) {
-    if (!body.shopId || !body.imageUrl) throw new BadRequestException('请提供门店ID和图片URL');
-    // 数据权限：校验用户是否有权操作该门店
-    await this.userShopService.assertShopAccess(req.user.uid, body.shopId);
-    const annotation = await this.annotationService.createAnnotation(body);
-    return ApiRes.success(annotation);
+  @Get('order-no-rules')
+  @ApiOperation({ summary: '获取门店工单号规则' })
+  async getOrderNoRules(@Query('shopId') shopId: string, @Request() req: AuthenticatedRequest) {
+    if (!shopId) throw new BadRequestException('请指定门店');
+    await this.userShopService.assertShopAccess(req.user.uid, shopId);
+    const rules = await this.noRuleService.getRules(shopId);
+    return ApiRes.success(rules);
   }
 
-  @Get('ocr-annotations')
-  @ApiOperation({ summary: '查询门店OCR标注列表' })
-  async getAnnotations(
+  @Post('order-no-rules')
+  @ApiOperation({ summary: '保存门店工单号规则' })
+  async saveOrderNoRules(
+    @Body() body: { shopId: string; rules: OrderNoRule[] },
     @Request() req: AuthenticatedRequest,
-    @Query('shopId') shopId: string,
-    @Query('page') page?: number,
-    @Query('pageSize') pageSize?: number,
   ) {
-    if (!shopId) throw new BadRequestException('请指定门店');
-    // 数据权限：校验用户是否有权访问该门店
-    await this.userShopService.assertShopAccess(req.user.uid, shopId);
-    const result = await this.annotationService.getAnnotations(shopId, page, pageSize || 20);
-    return ApiRes.success(result);
-  }
-
-  @Delete('ocr-annotation/:id')
-  @ApiOperation({ summary: '删除OCR标注' })
-  async deleteAnnotation(@Param('id') id: string, @Query('shopId') shopId: string, @Request() req: AuthenticatedRequest) {
-    if (!shopId) throw new BadRequestException('请指定门店');
-    // 数据权限：校验用户是否有权操作该门店
-    await this.userShopService.assertShopAccess(req.user.uid, shopId);
-    await this.annotationService.deleteAnnotation(id, shopId);
+    if (!body.shopId) throw new BadRequestException('请指定门店');
+    if (!Array.isArray(body.rules)) throw new BadRequestException('rules 必须是数组');
+    await this.userShopService.assertShopAccess(req.user.uid, body.shopId);
+    await this.noRuleService.saveRules(body.shopId, body.rules);
     return ApiRes.ok();
   }
 
-  @Post('ocr-annotation/:id/verify')
-  @ApiOperation({ summary: '验证标注是否正确' })
-  async verifyAnnotation(@Param('id') id: string, @Body() body: { isCorrect: boolean }, @Request() req: AuthenticatedRequest) {
-    // 数据权限：通过标注ID查询所属门店并校验
-    const shopId = await this.annotationService.getAnnotationShopId(id);
-    if (shopId) {
-      await this.userShopService.assertShopAccess(req.user.uid, shopId);
-    }
-    await this.annotationService.verifyAnnotation(id, body.isCorrect);
-    return ApiRes.ok();
-  }
-
-  @Get('ocr-aggregated-template')
-  @ApiOperation({ summary: '获取聚合后的最优模板（从多张标注中计算）' })
-  async getAggregatedTemplate(@Query('shopId') shopId: string, @Request() req: AuthenticatedRequest) {
-    if (!shopId) throw new BadRequestException('请指定门店');
-    // 数据权限：校验用户是否有权访问该门店
-    await this.userShopService.assertShopAccess(req.user.uid, shopId);
-    const template = await this.annotationService.aggregateTemplate(shopId);
-    return ApiRes.success(template);
-  }
-
-  @Get('ocr-annotation-stats')
-  @ApiOperation({ summary: '获取门店标注统计（标注数量、字段覆盖率等）' })
-  async getAnnotationStats(@Query('shopId') shopId: string, @Request() req: AuthenticatedRequest) {
-    if (!shopId) throw new BadRequestException('请指定门店');
-    // 数据权限：校验用户是否有权访问该门店
-    await this.userShopService.assertShopAccess(req.user.uid, shopId);
-    const stats = await this.annotationService.getStats(shopId);
-    return ApiRes.success(stats);
-  }
-
-  @Get('ocr-annotated-order-ids')
-  @ApiOperation({ summary: '获取门店已标注的工单ID列表（用于区分已标注/未标注）' })
-  async getAnnotatedOrderIds(@Query('shopId') shopId: string, @Request() req: AuthenticatedRequest) {
-    if (!shopId) throw new BadRequestException('请指定门店');
-    // 数据权限：校验用户是否有权访问该门店
-    await this.userShopService.assertShopAccess(req.user.uid, shopId);
-    const orderIds = await this.annotationService.getAnnotatedOrderIds(shopId);
-    return ApiRes.success(orderIds);
-  }
-
-  @Post('ocr-fix-verified-status')
-  @ApiOperation({ summary: '修复脏数据：没有有效区域标注但标记为已验证的记录重置为待验证' })
-  async fixInvalidVerifiedStatus(@Body() body: { shopId?: string }, @Request() req: AuthenticatedRequest) {
-    // 数据权限：若指定 shopId 则校验用户是否有权操作该门店
-    if (body.shopId) {
-      await this.userShopService.assertShopAccess(req.user.uid, body.shopId);
-    }
-    const result = await this.annotationService.fixInvalidVerifiedStatus(body.shopId);
-    return ApiRes.success(result);
+  @Post('analyze-order-no-rules')
+  @ApiOperation({ summary: '分析已结算工单并自动生成/更新工单号规则' })
+  async analyzeOrderNoRules(@Body() body: { shopId: string }, @Request() req: AuthenticatedRequest) {
+    if (!body.shopId) throw new BadRequestException('请指定门店');
+    await this.userShopService.assertShopAccess(req.user.uid, body.shopId);
+    const rules = await this.noRuleService.analyzeAndSaveRules(body.shopId);
+    return ApiRes.success(rules);
   }
 }

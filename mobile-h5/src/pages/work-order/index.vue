@@ -5,22 +5,24 @@ import {
   getWorkOrderStatusCounts,
   ocrRecognizeImage,
   updateWorkOrder,
+  findDuplicateWorkOrders,
+  mergeWorkOrders,
 } from '@/api/paint'
-import type { PaintWorkOrder, PaintShop, PaintOrderStatus, PageResult } from '@/api/types/paint'
+import type { PaintWorkOrder, PaintShop, PageResult, PaintOrderStatus } from '@/api/types/paint'
 import { showNotify } from 'vant'
 import { compressImage } from '@/utils/image-compress'
 import { canBatchOcr as canBatchOcrRole, canEdit as canEditRole } from '@/utils/permission'
 
-// 权限标志
+const router = useRouter()
 const allowBatchOcr = canBatchOcrRole()
 const allowEdit = canEditRole()
 
-const router = useRouter()
 const searchForm = reactive({
   plateNumber: '',
   shopId: '',
   settlementMonth: '',
   status: '' as PaintOrderStatus | '',
+  isRework: undefined as boolean | undefined,
 })
 
 const shops = ref<PaintShop[]>([])
@@ -29,20 +31,33 @@ const loading = ref(false)
 const finished = ref(false)
 const current = ref(1)
 const size = 10
+const totalPaintCount = ref(0)
+const refreshing = ref(false)
 
 const statusCounts = reactive({
   total: 0,
+  draft: 0,
   pending: 0,
   audited: 0,
   settled: 0,
+  abnormal: 0,
 })
 
-const showShopPicker = ref(false)
-const showMonthPicker = ref(false)
+const statusOptions = [
+  { label: '全部', value: '', key: 'total' },
+  { label: '草稿', value: 'DRAFT', key: 'draft' },
+  { label: '待审核', value: 'PENDING', key: 'pending' },
+  { label: '已审核', value: 'AUDITED', key: 'audited' },
+  { label: '已结算', value: 'SETTLED', key: 'settled' },
+  { label: '异常', value: 'ABNORMAL', key: 'abnormal' },
+]
+
+const activeStatus = ref(0)
+const showFilterPopup = ref(false)
 
 const monthColumns = computed(() => {
-  const now = new Date()
   const list = [{ text: '全部月份', value: '' }]
+  const now = new Date()
   for (let i = 0; i < 12; i++) {
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
     const value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
@@ -57,25 +72,15 @@ const shopColumns = computed(() => {
 })
 
 function getShopName(shopId: string) {
-  if (!shopId) return '-'
+  if (!shopId) return '全部门店'
   const shop = shops.value.find(s => s.id === shopId)
   return shop?.name || shopId
 }
-
-const statusOptions = [
-  { label: '全部', value: '' },
-  { label: '待审核', value: 'PENDING' },
-  { label: '已审核', value: 'AUDITED' },
-  { label: '已结算', value: 'SETTLED' },
-]
-
-const activeStatus = ref(0)
 
 async function loadShops() {
   try {
     const res = await getShopList()
     shops.value = res as any as PaintShop[]
-    // 数据权限：若用户仅绑定 1 个门店，自动选中并锁定（不显示"全部门店"）
     if (shops.value.length === 1 && !searchForm.shopId) {
       searchForm.shopId = shops.value[0].id
     }
@@ -88,14 +93,11 @@ async function loadShops() {
 async function loadStatusCounts() {
   try {
     const res = await getWorkOrderStatusCounts(searchForm.shopId || undefined, searchForm.settlementMonth || undefined)
-    const data = res as any as { total: number; pending: number; audited: number; settled: number }
-    statusCounts.total = data.total
-    statusCounts.pending = data.pending
-    statusCounts.audited = data.audited
-    statusCounts.settled = data.settled
+    const data = res as any as typeof statusCounts
+    Object.assign(statusCounts, data)
   }
   catch {
-    // 加载失败保持默认值
+    // ignore
   }
 }
 
@@ -119,6 +121,7 @@ async function loadOrders(reset = false) {
     if (searchForm.shopId) params.shopId = searchForm.shopId
     if (searchForm.settlementMonth) params.settlementMonth = searchForm.settlementMonth
     if (searchForm.status) params.status = searchForm.status
+    if (searchForm.isRework !== undefined) params.isRework = searchForm.isRework
 
     const res = await getWorkOrderPage(params)
     const data = res as any as PageResult<PaintWorkOrder>
@@ -126,6 +129,7 @@ async function loadOrders(reset = false) {
 
     if (reset) {
       orders.value = list
+      totalPaintCount.value = data.totalPaintCount || 0
     }
     else {
       orders.value = [...orders.value, ...list]
@@ -146,6 +150,13 @@ async function loadOrders(reset = false) {
   }
 }
 
+async function onRefresh() {
+  refreshing.value = true
+  await loadOrders(true)
+  await loadStatusCounts()
+  refreshing.value = false
+}
+
 function onStatusChange(index: number) {
   activeStatus.value = index
   searchForm.status = statusOptions[index].value as any
@@ -157,7 +168,24 @@ function onSearch() {
   loadStatusCounts()
 }
 
+function resetFilter() {
+  searchForm.shopId = shops.value.length === 1 ? shops.value[0].id : ''
+  searchForm.settlementMonth = ''
+  searchForm.isRework = undefined
+  showFilterPopup.value = false
+  loadOrders(true)
+  loadStatusCounts()
+}
+
+function confirmFilter() {
+  showFilterPopup.value = false
+  loadOrders(true)
+  loadStatusCounts()
+}
+
 function goToDetail(id: string) {
+  saveListState()
+  sessionStorage.setItem('work-order-detail-from-list', '1')
   router.push({ name: 'WorkOrderDetail', query: { id } })
 }
 
@@ -165,26 +193,102 @@ function goToCreate() {
   router.push({ name: 'WorkOrderCreate' })
 }
 
-function onShopConfirm({ selectedValues }: any) {
-  searchForm.shopId = selectedValues[0]
-  showShopPicker.value = false
-  loadOrders(true)
-  loadStatusCounts()
-}
-
-function onMonthConfirm({ selectedValues }: any) {
-  searchForm.settlementMonth = selectedValues[0]
-  showMonthPicker.value = false
-  loadOrders(true)
-  loadStatusCounts()
-}
-
-function formatDate(dateStr: string) {
-  if (!dateStr) return ''
+function formatDate(dateStr?: string) {
+  if (!dateStr) return '-'
   return dateStr.slice(0, 10)
 }
 
-// ===== 一键 OCR 识别填充相关 =====
+function getStatusType(status?: string): any {
+  const map: Record<string, any> = {
+    DRAFT: 'default',
+    PENDING: 'warning',
+    AUDITED: 'primary',
+    SETTLED: 'success',
+    ABNORMAL: 'danger',
+  }
+  return map[status || ''] || 'default'
+}
+
+function getStatusLabel(status?: string): string {
+  const map: Record<string, string> = {
+    DRAFT: '草稿',
+    PENDING: '待审核',
+    AUDITED: '已审核',
+    SETTLED: '已结算',
+    ABNORMAL: '异常',
+  }
+  return map[status || ''] || status || '-'
+}
+
+// ===== 列表状态缓存 =====
+const LIST_STATE_KEY = 'work-order-list-state'
+const STATE_MAX_AGE = 5 * 60 * 1000
+const stateRestored = ref(false)
+
+function saveListState() {
+  sessionStorage.setItem(
+    LIST_STATE_KEY,
+    JSON.stringify({
+      searchForm: { ...searchForm },
+      activeStatus: activeStatus.value,
+      current: current.value,
+      orders: orders.value,
+      finished: finished.value,
+      totalPaintCount: totalPaintCount.value,
+      scrollTop: window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0,
+      timestamp: Date.now(),
+    }),
+  )
+}
+
+function restoreListState(): boolean {
+  const raw = sessionStorage.getItem(LIST_STATE_KEY)
+  if (!raw) return false
+  try {
+    const state = JSON.parse(raw)
+    if (!state.timestamp || Date.now() - state.timestamp > STATE_MAX_AGE) {
+      clearListState()
+      return false
+    }
+    Object.assign(searchForm, state.searchForm || {})
+    if (state.activeStatus !== undefined) activeStatus.value = state.activeStatus
+    if (state.current !== undefined) current.value = state.current
+    if (state.orders) orders.value = state.orders
+    if (state.finished !== undefined) finished.value = state.finished
+    if (state.totalPaintCount !== undefined) totalPaintCount.value = state.totalPaintCount
+    nextTick(() => {
+      window.scrollTo(0, state.scrollTop || 0)
+    })
+    return true
+  }
+  catch {
+    clearListState()
+    return false
+  }
+}
+
+function clearListState() {
+  sessionStorage.removeItem(LIST_STATE_KEY)
+}
+
+function tryRestoreAndLoad() {
+  if (stateRestored.value) return
+  stateRestored.value = true
+  const fromDetail = sessionStorage.getItem('work-order-detail-from-list') === '1'
+  if (fromDetail) {
+    sessionStorage.removeItem('work-order-detail-from-list')
+    const restored = restoreListState()
+    if (restored) {
+      loadStatusCounts()
+      return
+    }
+  }
+  clearListState()
+  loadOrders(true)
+  loadStatusCounts()
+}
+
+// ===== 批量 OCR =====
 const selectionMode = ref(false)
 const checkedOrderIds = ref<string[]>([])
 const showBatchOcr = ref(false)
@@ -194,46 +298,28 @@ const batchOcrCancelled = ref(false)
 const batchOcrProgress = ref({ current: 0, total: 0, success: 0, failed: 0, skipped: 0 })
 const batchOcrResult = ref<{ success: number; failed: number; skipped: number; details: string[] } | null>(null)
 
-// 检查工单是否有空白字段
 function hasEmptyFields(order: PaintWorkOrder): boolean {
-  return !order.plateNumber || !order.orderNo || !order.customerName || !order.phone || !order.carModel
+  return !order.plateNumber || !order.orderNo || !order.customerName || !order.phone || !order.carModel || !order.vin || !order.brand || !order.orderDate
 }
 
-// 判断工单是否可参与批量 OCR（未审核、有图片、有空白字段）
 function canBatchOcr(order: PaintWorkOrder): boolean {
-  return !order.isAudited && !!order.images && order.images.length > 0 && hasEmptyFields(order)
+  return (order.status === 'DRAFT' || order.status === 'PENDING') && !!order.images && order.images.length > 0 && hasEmptyFields(order)
 }
 
-// 选中工单中可 OCR 的数量
-const ocrPendingSelectedCount = computed(() => {
-  return orders.value.filter(o => checkedOrderIds.value.includes(o.id) && canBatchOcr(o)).length
-})
+const ocrPendingSelectedCount = computed(() => orders.value.filter(o => checkedOrderIds.value.includes(o.id) && canBatchOcr(o)).length)
+const ocrPendingAllCount = computed(() => orders.value.filter(o => canBatchOcr(o)).length)
 
-// 当前已加载工单中可 OCR 的数量（"全部"模式使用已加载列表）
-const ocrPendingAllCount = computed(() => {
-  return orders.value.filter(o => canBatchOcr(o)).length
-})
-
-// 进入/退出选择模式
 function toggleSelectionMode() {
   selectionMode.value = !selectionMode.value
-  if (!selectionMode.value) {
-    checkedOrderIds.value = []
-  }
+  if (!selectionMode.value) checkedOrderIds.value = []
 }
 
-// 切换单个工单的选中状态
 function toggleOrderChecked(id: string) {
   const idx = checkedOrderIds.value.indexOf(id)
-  if (idx >= 0) {
-    checkedOrderIds.value.splice(idx, 1)
-  }
-  else {
-    checkedOrderIds.value.push(id)
-  }
+  if (idx >= 0) checkedOrderIds.value.splice(idx, 1)
+  else checkedOrderIds.value.push(id)
 }
 
-// 全选/取消全选（仅可 OCR 的）
 const allChecked = computed(() => {
   const ocrable = orders.value.filter(o => canBatchOcr(o))
   return ocrable.length > 0 && ocrable.every(o => checkedOrderIds.value.includes(o.id))
@@ -251,29 +337,24 @@ function toggleSelectAll() {
   }
 }
 
-// 打开批量 OCR 弹窗（重置状态）
 function openBatchOcr() {
   batchOcrLoading.value = false
   batchOcrCancelled.value = false
   batchOcrResult.value = null
   batchOcrProgress.value = { current: 0, total: 0, success: 0, failed: 0, skipped: 0 }
-  // 如果有选中工单，默认选中模式；否则默认全部模式
   batchOcrMode.value = checkedOrderIds.value.length > 0 ? 'selected' : 'all'
   showBatchOcr.value = true
 }
 
-// 取消处理
 function cancelBatchOcr() {
   batchOcrCancelled.value = true
 }
 
-// 关闭弹窗
 function closeBatchOcr() {
   if (batchOcrLoading.value) return
   showBatchOcr.value = false
 }
 
-// 获取待 OCR 处理的工单列表
 function getOcrPendingOrders(): PaintWorkOrder[] {
   if (batchOcrMode.value === 'selected') {
     return orders.value.filter(o => checkedOrderIds.value.includes(o.id) && canBatchOcr(o))
@@ -281,11 +362,10 @@ function getOcrPendingOrders(): PaintWorkOrder[] {
   return orders.value.filter(o => canBatchOcr(o))
 }
 
-// 执行批量 OCR 填充
 async function handleBatchOcrFill() {
   const pendingOrders = getOcrPendingOrders()
   if (pendingOrders.length === 0) {
-    showNotify({ type: 'warning', message: '没有符合条件的工单（需未审核、有图片、有空白字段）' })
+    showNotify({ type: 'warning', message: '没有符合条件的工单' })
     return
   }
 
@@ -303,28 +383,26 @@ async function handleBatchOcrFill() {
     batchOcrProgress.value.current++
 
     try {
-      // 拉取图片并转 File
       const imageUrl = order.images![0].url
       const resp = await fetch(imageUrl)
       if (!resp.ok) throw new Error('获取图片失败')
       const blob = await resp.blob()
       const file = new File([blob], 'image.jpg', { type: blob.type || 'image/jpeg' })
-      // 压缩图片，降低 OCR 服务负担并避免超时
       const compressed = await compressImage(file)
-
-      // OCR 识别（使用工单自身 shopId）
       const ocrResult = await ocrRecognizeImage(compressed, order.shopId)
 
-      // 仅填充空白字段
       const updateData: any = { id: order.id }
       const filledFields: string[] = []
+
       if (!order.plateNumber && ocrResult.plateNumber) {
         updateData.plateNumber = ocrResult.plateNumber
         filledFields.push('车牌号')
       }
-      if (!order.orderNo && ocrResult.orderNo) {
-        updateData.orderNo = ocrResult.orderNo
-        filledFields.push('工单号')
+      if (ocrResult.orderNo) {
+        if (!order.orderNo || order.orderNo !== ocrResult.orderNo) {
+          updateData.orderNo = ocrResult.orderNo
+          filledFields.push(order.orderNo ? '工单号(覆盖)' : '工单号')
+        }
       }
       if (!order.customerName && ocrResult.customerName) {
         updateData.customerName = ocrResult.customerName
@@ -338,6 +416,25 @@ async function handleBatchOcrFill() {
         updateData.carModel = ocrResult.carModel
         filledFields.push('车型')
       }
+      if (ocrResult.vin) {
+        if (!order.vin || order.vin !== ocrResult.vin) {
+          updateData.vin = ocrResult.vin
+          filledFields.push(order.vin ? '车架号(覆盖)' : '车架号')
+        }
+      }
+      if (ocrResult.brand) {
+        if (!order.brand || order.brand !== ocrResult.brand) {
+          updateData.brand = ocrResult.brand
+          filledFields.push(order.brand ? '品牌(覆盖)' : '品牌')
+        }
+      }
+      if (ocrResult.date) {
+        const orderDateStr = order.orderDate ? order.orderDate.slice(0, 10) : ''
+        if (!orderDateStr || orderDateStr !== ocrResult.date) {
+          updateData.orderDate = ocrResult.date
+          filledFields.push(orderDateStr ? '工单日期(覆盖)' : '工单日期')
+        }
+      }
 
       if (filledFields.length === 0) {
         batchOcrProgress.value.skipped++
@@ -345,7 +442,6 @@ async function handleBatchOcrFill() {
         continue
       }
 
-      // 更新工单
       await updateWorkOrder(updateData)
       batchOcrProgress.value.success++
       details.push(`${order.orderNo || order.id}: 填充 ${filledFields.join('、')}`)
@@ -370,23 +466,77 @@ async function handleBatchOcrFill() {
     message: `OCR填充完成：成功 ${batchOcrProgress.value.success} 条，失败 ${batchOcrProgress.value.failed} 条，跳过 ${batchOcrProgress.value.skipped} 条`,
   })
 
-  // 处理完成后刷新列表并退出选择模式
   await loadOrders(true)
   selectionMode.value = false
   checkedOrderIds.value = []
 }
 
-// 处理卡片点击：选择模式下切换选中，否则跳转详情
 function onCardClick(order: PaintWorkOrder) {
-  if (selectionMode.value) {
-    toggleOrderChecked(order.id)
+  if (selectionMode.value) toggleOrderChecked(order.id)
+  else goToDetail(order.id)
+}
+
+// ===== 合并工单 =====
+const showMergePopup = ref(false)
+const mergeLoading = ref(false)
+const mergeTarget = ref<PaintWorkOrder | null>(null)
+const mergeCandidates = ref<PaintWorkOrder[]>([])
+const mergeSelectedIds = ref<string[]>([])
+
+function canMerge(order: PaintWorkOrder): boolean {
+  return !!order._isDuplicate && (order.status === 'DRAFT' || order.status === 'PENDING')
+}
+
+async function openMergePopup(order: PaintWorkOrder) {
+  if (!order.orderNo) {
+    showNotify({ type: 'warning', message: '该工单缺少工单号，无法查找重复工单' })
+    return
   }
-  else {
-    goToDetail(order.id)
+  mergeTarget.value = order
+  mergeSelectedIds.value = []
+  mergeLoading.value = true
+  showMergePopup.value = true
+  try {
+    const res = await findDuplicateWorkOrders(order.orderNo, order.id)
+    const list = (res as any as PaintWorkOrder[]) || []
+    mergeCandidates.value = list
+    mergeSelectedIds.value = list.map(o => o.id)
+  }
+  catch {
+    showNotify({ type: 'danger', message: '查找重复工单失败' })
+    mergeCandidates.value = []
+  }
+  finally {
+    mergeLoading.value = false
   }
 }
 
-// ===== 列表无限滚动加载 =====
+function toggleMergeSelect(orderId: string) {
+  const idx = mergeSelectedIds.value.indexOf(orderId)
+  if (idx >= 0) mergeSelectedIds.value.splice(idx, 1)
+  else mergeSelectedIds.value.push(orderId)
+}
+
+async function handleMerge() {
+  if (!mergeTarget.value || mergeSelectedIds.value.length === 0) return
+  mergeLoading.value = true
+  try {
+    await mergeWorkOrders(mergeTarget.value.id, mergeSelectedIds.value)
+    showNotify({ type: 'success', message: '工单合并成功' })
+    showMergePopup.value = false
+    mergeSelectedIds.value = []
+    await loadOrders(true)
+    await loadStatusCounts()
+  }
+  catch (e: any) {
+    showNotify({ type: 'danger', message: e?.message || '合并失败' })
+  }
+  finally {
+    mergeLoading.value = false
+  }
+}
+
+// ===== 无限滚动 =====
 const sentinelRef = ref<HTMLElement | null>(null)
 let scrollObserver: IntersectionObserver | null = null
 
@@ -403,22 +553,15 @@ function setupScrollObserver() {
         loadOrders()
       }
     },
-    {
-      root: null,
-      rootMargin: '200px',
-      threshold: 0,
-    },
+    { root: null, rootMargin: '200px', threshold: 0 },
   )
   scrollObserver.observe(sentinelRef.value)
 }
 
 onMounted(() => {
   loadShops()
-  loadOrders(true)
-  loadStatusCounts()
-  nextTick(() => {
-    setupScrollObserver()
-  })
+  tryRestoreAndLoad()
+  nextTick(() => setupScrollObserver())
 })
 
 onBeforeUnmount(() => {
@@ -428,180 +571,239 @@ onBeforeUnmount(() => {
   }
 })
 
-// 从详情页返回时刷新数据
 onActivated(() => {
-  loadOrders(true)
-  loadStatusCounts()
+  tryRestoreAndLoad()
 })
 </script>
 
 <template>
   <div class="order-page">
-    <!-- 搜索栏 -->
-    <div class="search-bar">
+    <!-- 顶部搜索 -->
+    <div class="search-header">
       <van-search
         v-model="searchForm.plateNumber"
-        placeholder="搜索车牌号"
+        placeholder="搜索车牌号 / 工单号"
         shape="round"
+        clearable
         @search="onSearch"
+        @clear="onSearch"
       />
-      <div v-if="allowBatchOcr" class="icon-btn ocr-btn" @click="openBatchOcr">
-        <van-icon name="scan" size="20" color="#fff" />
+      <div class="filter-trigger" @click="showFilterPopup = true">
+        <van-icon name="filter-o" size="20" color="#1677ff" />
+        <span class="filter-text">筛选</span>
       </div>
-      <div v-if="allowBatchOcr" class="icon-btn" :class="{ active: selectionMode }" @click="toggleSelectionMode">
-        <van-icon :name="selectionMode ? 'cross' : 'checked'" size="20" color="#fff" />
-      </div>
-      <div v-if="allowEdit" class="icon-btn add-btn" @click="goToCreate">
-        <van-icon name="plus" size="20" color="#fff" />
-      </div>
-    </div>
-
-    <!-- 筛选栏 -->
-    <div class="filter-bar">
-      <div class="filter-item" @click="showMonthPicker = true">
-        <van-icon name="calendar-o" size="16" color="#1677ff" />
-        <span class="filter-text">{{ searchForm.settlementMonth || '结算月份' }}</span>
-        <van-icon name="arrow" size="12" color="#ccc" />
-      </div>
-      <div class="filter-item" @click="showShopPicker = true">
-        <van-icon name="shop-o" size="16" color="#1677ff" />
-        <span class="filter-text">{{ searchForm.shopId ? getShopName(searchForm.shopId) : '全部门店' }}</span>
-        <van-icon name="arrow" size="12" color="#ccc" />
+      <div v-if="allowBatchOcr" class="filter-trigger" @click="toggleSelectionMode">
+        <van-icon name="checked" size="20" :color="selectionMode ? '#52c41a' : '#1677ff'" />
+        <span class="filter-text" :style="{ color: selectionMode ? '#52c41a' : '#1677ff' }">
+          {{ selectionMode ? '取消' : '选择' }}
+        </span>
       </div>
     </div>
 
-    <!-- 状态筛选 -->
-    <van-tabs v-model:active="activeStatus" @change="onStatusChange">
-      <van-tab>
-        <template #title>全部<span class="tab-count">{{ statusCounts.total }}</span></template>
-      </van-tab>
-      <van-tab>
-        <template #title>待审核<span class="tab-count">{{ statusCounts.pending }}</span></template>
-      </van-tab>
-      <van-tab>
-        <template #title>已审核<span class="tab-count">{{ statusCounts.audited }}</span></template>
-      </van-tab>
-      <van-tab>
-        <template #title>已结算<span class="tab-count">{{ statusCounts.settled }}</span></template>
-      </van-tab>
-    </van-tabs>
-
-    <!-- 工单列表 -->
-    <div class="order-list" :class="{ 'in-selection': selectionMode }">
-      <van-empty v-if="orders.length === 0 && !loading" description="暂无工单数据" />
-
-      <div
-        v-for="order in orders"
-        :key="order.id"
-        class="order-card"
-        :class="{ checked: selectionMode && checkedOrderIds.includes(order.id) }"
-        @click="onCardClick(order)"
+    <!-- 状态标签 -->
+    <div class="status-tabs-wrapper">
+      <van-tabs
+        v-model:active="activeStatus"
+        swipeable
+        sticky
+        offset-top="0"
+        @change="onStatusChange"
       >
-        <van-checkbox
-          v-if="selectionMode"
-          :model-value="checkedOrderIds.includes(order.id)"
-          shape="square"
-          class="card-checkbox"
-          @click.stop="toggleOrderChecked(order.id)"
-        />
-        <div class="order-top">
-          <span class="order-no">{{ order.orderNo }}</span>
-          <div class="order-tags">
-            <van-tag v-if="order.images && order.images.length > 0" type="primary" size="medium" class="img-tag">
-              <van-icon name="photo-o" size="12" />
-              <span>{{ order.images.length }}</span>
-            </van-tag>
-            <van-tag :type="order.isAudited ? 'success' : 'warning'" size="medium">
-              {{ order.isAudited ? '已审核' : '待审核' }}
-            </van-tag>
-          </div>
-        </div>
-
-        <div class="order-body">
-          <div class="info-row">
-            <van-icon name="car" size="14" color="#bbb" />
-            <span class="info-label">车牌号</span>
-            <span class="info-value">{{ order.plateNumber || '-' }}</span>
-          </div>
-          <div class="info-row">
-            <van-icon name="graphic" size="14" color="#bbb" />
-            <span class="info-label">车型</span>
-            <span class="info-value">{{ order.carModel || '-' }}</span>
-          </div>
-          <div class="info-row">
-            <van-icon name="shop-o" size="14" color="#bbb" />
-            <span class="info-label">门店</span>
-            <span class="info-value">{{ getShopName(order.shopId) }}</span>
-          </div>
-          <div class="info-row">
-            <van-icon name="calendar-o" size="14" color="#bbb" />
-            <span class="info-label">日期</span>
-            <span class="info-value">{{ formatDate(order.orderDate) }}</span>
-          </div>
-          <div class="info-row">
-            <van-icon name="label-o" size="14" color="#bbb" />
-            <span class="info-label">结算月份</span>
-            <span class="info-value">{{ order.settlementMonth || '-' }}</span>
-          </div>
-          <div class="info-row">
-            <van-icon name="user-o" size="14" color="#bbb" />
-            <span class="info-label">客户</span>
-            <span class="info-value">{{ order.customerName || '-' }}</span>
-          </div>
-        </div>
-
-        <div class="order-footer">
-          <div class="paint-count-wrap">
-            <span class="paint-count">{{ order.totalPaintCount }}</span>
-            <span class="paint-unit">幅</span>
-          </div>
-          <van-icon name="arrow" color="#ccc" />
-        </div>
-      </div>
-
-      <div v-if="loading" class="loading-wrap">
-        <van-loading size="24px">加载中...</van-loading>
-      </div>
-
-      <div v-if="finished && orders.length > 0" class="finished-text">
-        没有更多了
-      </div>
-
-      <!-- 无限滚动哨兵：滚动到此处自动加载下一页 -->
-      <div ref="sentinelRef" class="scroll-sentinel"></div>
+        <van-tab v-for="item in statusOptions" :key="item.value">
+          <template #title>
+            <span class="tab-label">{{ item.label }}</span>
+            <span class="tab-count">{{ statusCounts[item.key as keyof typeof statusCounts] || 0 }}</span>
+          </template>
+        </van-tab>
+      </van-tabs>
     </div>
 
-    <!-- 选择模式底部操作栏 -->
+    <!-- 汇总 -->
+    <div v-if="orders.length > 0" class="summary-bar">
+      <span class="summary-text">共 {{ statusCounts[statusOptions[activeStatus].key as keyof typeof statusCounts] || 0 }} 单</span>
+      <span class="summary-text">搜索总幅数 {{ Number(totalPaintCount).toFixed(1) }} 幅</span>
+    </div>
+
+    <!-- 列表 -->
+    <van-pull-refresh v-model="refreshing" @refresh="onRefresh">
+      <div class="order-list">
+        <van-empty v-if="orders.length === 0 && !loading" description="暂无工单数据" />
+
+        <div
+          v-for="order in orders"
+          :key="order.id"
+          class="order-card"
+          :class="{ checked: selectionMode && checkedOrderIds.includes(order.id) }"
+          @click="onCardClick(order)"
+        >
+          <van-checkbox
+            v-if="selectionMode"
+            :model-value="checkedOrderIds.includes(order.id)"
+            shape="square"
+            class="card-checkbox"
+            @click.stop="toggleOrderChecked(order.id)"
+          />
+          <div class="card-body">
+            <div class="card-top">
+              <div class="plate-wrap">
+                <van-icon name="car-o" size="16" color="#1677ff" />
+                <span class="plate-number">{{ order.plateNumber || '未识别车牌' }}</span>
+              </div>
+              <div class="card-tags">
+                <van-tag v-if="canMerge(order)" type="danger" size="medium" @click.stop="openMergePopup(order)">
+                  合并
+                </van-tag>
+                <van-tag v-if="order.images && order.images.length > 0" type="primary" size="medium">
+                  <van-icon name="photo-o" size="12" />
+                  <span>{{ order.images.length }}</span>
+                </van-tag>
+                <van-tag :type="getStatusType(order.status)" size="medium">
+                  {{ getStatusLabel(order.status) }}
+                </van-tag>
+                <van-tag v-if="order.isRework" type="danger" size="medium">
+                  返工
+                </van-tag>
+              </div>
+            </div>
+
+            <div class="card-info">
+              <div class="info-item">
+                <span class="info-label">工单号</span>
+                <span class="info-value">{{ order.orderNo || '-' }}</span>
+              </div>
+              <div class="info-item">
+                <span class="info-label">车型 / 品牌</span>
+                <span class="info-value">{{ order.carModel || '-' }} {{ order.brand ? `· ${order.brand}` : '' }}</span>
+              </div>
+              <div class="info-item">
+                <span class="info-label">门店</span>
+                <span class="info-value">{{ getShopName(order.shopId) }}</span>
+              </div>
+              <div class="info-item">
+                <span class="info-label">日期</span>
+                <span class="info-value">{{ formatDate(order.orderDate) }}</span>
+              </div>
+            </div>
+
+            <div class="card-bottom">
+              <div class="customer">
+                <van-icon name="user-o" size="12" color="#999" />
+                <span>{{ order.customerName || '-' }}</span>
+              </div>
+              <div class="paint-count">
+                <span class="count-value">{{ order.totalPaintCount }}</span>
+                <span class="count-unit">幅</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="loading" class="loading-wrap">
+          <van-loading size="24px">加载中...</van-loading>
+        </div>
+
+        <div v-if="finished && orders.length > 0" class="finished-text">
+          没有更多了
+        </div>
+
+        <div ref="sentinelRef" class="scroll-sentinel" />
+      </div>
+    </van-pull-refresh>
+
+    <!-- 悬浮建单按钮 -->
+    <div v-if="allowEdit && !selectionMode" class="fab-create" @click="goToCreate">
+      <van-icon name="plus" size="24" color="#fff" />
+    </div>
+
+    <!-- 选择模式底部栏 -->
     <div v-if="selectionMode" class="selection-bar">
-      <van-checkbox :model-value="allChecked" shape="square" @click="toggleSelectAll">全选</van-checkbox>
+      <div class="selection-left" @click="toggleSelectAll">
+        <van-checkbox :model-value="allChecked" shape="square" />
+        <span class="select-all-text">全选</span>
+      </div>
       <div class="selection-info">
         已选 <span class="count">{{ checkedOrderIds.length }}</span> 条
-        <span class="ocr-count">（可OCR {{ ocrPendingSelectedCount }} 条）</span>
       </div>
-      <van-button type="primary" size="small" round @click="openBatchOcr">
-        一键OCR
+      <van-button type="primary" size="small" round :disabled="ocrPendingSelectedCount === 0" @click="openBatchOcr">
+        一键OCR ({{ ocrPendingSelectedCount }})
       </van-button>
     </div>
 
-    <!-- 门店选择器 -->
-    <van-popup v-model:show="showShopPicker" position="bottom" round>
-      <van-picker
-        :columns="shopColumns"
-        @confirm="onShopConfirm"
-        @cancel="showShopPicker = false"
-      />
+    <!-- 筛选弹窗 -->
+    <van-popup v-model:show="showFilterPopup" position="right" :style="{ width: '80%', height: '100%' }">
+      <div class="filter-popup">
+        <div class="filter-popup-header">
+          <span class="filter-popup-title">筛选条件</span>
+          <van-icon name="cross" size="20" color="#999" @click="showFilterPopup = false" />
+        </div>
+        <div class="filter-popup-body">
+          <div class="filter-group">
+            <div class="filter-group-title">结算月份</div>
+            <div class="filter-options">
+              <div
+                v-for="m in monthColumns"
+                :key="m.value"
+                class="filter-option"
+                :class="{ active: searchForm.settlementMonth === m.value }"
+                @click="searchForm.settlementMonth = m.value"
+              >
+                {{ m.text }}
+              </div>
+            </div>
+          </div>
+          <div class="filter-group">
+            <div class="filter-group-title">所属门店</div>
+            <div class="filter-options">
+              <div
+                v-for="s in shopColumns"
+                :key="s.value"
+                class="filter-option"
+                :class="{ active: searchForm.shopId === s.value }"
+                @click="searchForm.shopId = s.value"
+              >
+                {{ s.text }}
+              </div>
+            </div>
+          </div>
+          <div class="filter-group">
+            <div class="filter-group-title">返工标记</div>
+            <div class="filter-options">
+              <div
+                class="filter-option"
+                :class="{ active: searchForm.isRework === undefined }"
+                @click="searchForm.isRework = undefined"
+              >
+                全部
+              </div>
+              <div
+                class="filter-option"
+                :class="{ active: searchForm.isRework === true }"
+                @click="searchForm.isRework = true"
+              >
+                是
+              </div>
+              <div
+                class="filter-option"
+                :class="{ active: searchForm.isRework === false }"
+                @click="searchForm.isRework = false"
+              >
+                否
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="filter-popup-footer">
+          <van-button block round @click="resetFilter">
+            重置
+          </van-button>
+          <van-button type="primary" block round @click="confirmFilter">
+            确定
+          </van-button>
+        </div>
+      </div>
     </van-popup>
 
-    <!-- 月份选择器 -->
-    <van-popup v-model:show="showMonthPicker" position="bottom" round>
-      <van-picker
-        :columns="monthColumns"
-        @confirm="onMonthConfirm"
-        @cancel="showMonthPicker = false"
-      />
-    </van-popup>
-
-    <!-- 一键 OCR 识别填充弹窗 -->
+    <!-- 批量 OCR 弹窗 -->
     <van-popup
       v-model:show="showBatchOcr"
       position="center"
@@ -611,33 +813,23 @@ onActivated(() => {
       class="batch-ocr-popup"
     >
       <div class="batch-ocr-content">
-        <div class="batch-ocr-title">一键OCR识别填充</div>
-        <div class="batch-ocr-desc">
-          仅处理<strong>待审核</strong>状态、含图片且存在空白字段（车牌号、工单号、客户名、电话、车型）的工单，识别结果只填充空白字段。
+        <div class="batch-ocr-title">
+          一键OCR识别填充
         </div>
-
-        <!-- 模式选择 -->
+        <div class="batch-ocr-desc">
+          仅处理待审核/草稿状态、含图片且存在空白字段的工单。
+        </div>
         <van-radio-group v-model="batchOcrMode" :disabled="batchOcrLoading" direction="horizontal" class="batch-ocr-mode">
           <van-radio name="selected" :disabled="checkedOrderIds.length === 0">
             选中工单
           </van-radio>
           <van-radio name="all">
-            已加载的全部待审核工单
+            已加载全部
           </van-radio>
         </van-radio-group>
-
-        <!-- 待处理数量 -->
         <div class="batch-ocr-pending">
-          <span>可处理数量：</span>
-          <van-tag type="success">
-            {{ batchOcrMode === 'selected' ? ocrPendingSelectedCount : ocrPendingAllCount }} 条
-          </van-tag>
-          <span v-if="batchOcrMode === 'selected' && checkedOrderIds.length === 0" class="batch-ocr-tip">
-            （未选择工单，请点击右上角"选择"按钮进行多选）
-          </span>
+          可处理数量：<van-tag type="success">{{ batchOcrMode === 'selected' ? ocrPendingSelectedCount : ocrPendingAllCount }} 条</van-tag>
         </div>
-
-        <!-- 进度 -->
         <div v-if="batchOcrLoading || batchOcrResult" class="batch-ocr-progress">
           <div class="progress-head">
             <span>{{ batchOcrProgress.current }} / {{ batchOcrProgress.total }}</span>
@@ -653,8 +845,6 @@ onActivated(() => {
             <van-tag type="warning" size="medium">跳过 {{ batchOcrProgress.skipped }}</van-tag>
           </div>
         </div>
-
-        <!-- 结果明细 -->
         <div v-if="batchOcrResult" class="batch-ocr-result">
           <div class="result-summary" :class="{ 'has-failed': batchOcrResult.failed > 0 }">
             OCR填充完成：成功 {{ batchOcrResult.success }} 条，失败 {{ batchOcrResult.failed }} 条，跳过 {{ batchOcrResult.skipped }} 条
@@ -665,8 +855,6 @@ onActivated(() => {
             </div>
           </div>
         </div>
-
-        <!-- 操作按钮 -->
         <div class="batch-ocr-actions">
           <van-button v-if="batchOcrLoading" type="danger" block round @click="cancelBatchOcr">
             取消处理
@@ -688,6 +876,72 @@ onActivated(() => {
         </div>
       </div>
     </van-popup>
+
+    <!-- 合并工单弹窗 -->
+    <van-popup v-model:show="showMergePopup" position="bottom" round :style="{ maxHeight: '80%' }">
+      <div class="merge-popup">
+        <div class="merge-popup-header">
+          <span class="merge-popup-title">合并重复工单</span>
+          <van-icon name="cross" size="20" color="#999" @click="showMergePopup = false" />
+        </div>
+        <div v-if="mergeLoading && mergeCandidates.length === 0" class="merge-loading">
+          <van-loading size="24px">加载中...</van-loading>
+        </div>
+        <div v-else-if="mergeCandidates.length === 0" class="merge-empty">
+          未找到重复工单
+        </div>
+        <div v-else class="merge-body">
+          <div class="merge-tip">
+            仅合并图片；若当前工单缺少车牌号、车型等基础信息会自动补齐；当前工单幅数明细保持不变。
+          </div>
+          <div class="merge-target">
+            <div class="merge-target-title">
+              当前工单
+            </div>
+            <div class="merge-target-info">
+              <div class="merge-target-plate">
+                {{ mergeTarget?.plateNumber || '未识别车牌' }}
+              </div>
+              <div class="merge-target-no">
+                {{ mergeTarget?.orderNo || '-' }}
+              </div>
+            </div>
+          </div>
+          <div class="merge-candidates">
+            <div class="merge-candidates-title">
+              选择要合并的工单（已选 {{ mergeSelectedIds.length }} 条）
+            </div>
+            <div
+              v-for="order in mergeCandidates"
+              :key="order.id"
+              class="merge-candidate"
+              :class="{ selected: mergeSelectedIds.includes(order.id) }"
+              @click="toggleMergeSelect(order.id)"
+            >
+              <van-checkbox
+                :model-value="mergeSelectedIds.includes(order.id)"
+                shape="square"
+                class="merge-candidate-checkbox"
+                @click.stop
+              />
+              <div class="merge-candidate-main">
+                <div class="merge-candidate-plate">
+                  {{ order.plateNumber || '未识别车牌' }}
+                </div>
+                <div class="merge-candidate-meta">
+                  {{ order.shop?.name || getShopName(order.shopId) }} · {{ order.images?.length || 0 }} 张图片 · {{ formatDate(order.orderDate) }}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="merge-actions">
+          <van-button block round :disabled="mergeSelectedIds.length === 0" :loading="mergeLoading" type="danger" @click="handleMerge">
+            合并选中的 {{ mergeSelectedIds.length }} 条工单
+          </van-button>
+        </div>
+      </div>
+    </van-popup>
   </div>
 </template>
 
@@ -704,66 +958,51 @@ onActivated(() => {
 .order-page {
   min-height: 100vh;
   background: #f5f7fa;
+  padding-bottom: 80px;
 }
 
-.search-bar {
+.search-header {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 16px;
+  gap: 8px;
+  padding: 8px 12px;
   background: #fff;
 
   :deep(.van-search) {
     flex: 1;
     padding: 0;
+    background: transparent;
   }
 }
 
-.add-btn {
-  background: linear-gradient(135deg, #1677ff, #4096ff);
-}
-
-.icon-btn {
-  width: 36px;
-  height: 36px;
-  border-radius: 18px;
+.filter-trigger {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #1677ff, #4096ff);
-  box-shadow: 0 2px 6px rgba(22, 119, 255, 0.3);
-  flex-shrink: 0;
-
-  &.ocr-btn {
-    background: linear-gradient(135deg, #ff7a45, #ff9c6e);
-    box-shadow: 0 2px 6px rgba(255, 122, 69, 0.3);
-  }
-
-  &.active {
-    background: linear-gradient(135deg, #52c41a, #95de64);
-    box-shadow: 0 2px 6px rgba(82, 196, 26, 0.3);
-  }
-}
-
-.filter-bar {
-  display: flex;
-  gap: 10px;
-  padding: 10px 16px;
-  background: #fff;
-}
-
-.filter-item {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 6px 12px;
-  background: #f5f7fa;
-  border-radius: 16px;
+  padding: 0 8px;
+  gap: 2px;
 }
 
 .filter-text {
-  font-size: 13px;
-  color: #333;
+  font-size: 11px;
+  color: #1677ff;
+}
+
+.status-tabs-wrapper {
+  background: #fff;
+
+  :deep(.van-tabs__wrap) {
+    border-bottom: 1px solid #f0f0f0;
+  }
+
+  :deep(.van-tab) {
+    padding: 0 12px;
+  }
+}
+
+.tab-label {
+  font-size: 14px;
 }
 
 .tab-count {
@@ -771,102 +1010,115 @@ onActivated(() => {
   min-width: 16px;
   height: 16px;
   line-height: 16px;
-  padding: 0 4px;
+  padding: 0 5px;
   margin-left: 4px;
   font-size: 11px;
-  color: #fff;
-  background: #c0c4cc;
+  color: #999;
+  background: #f0f0f0;
   border-radius: 8px;
   text-align: center;
-  vertical-align: middle;
 }
 
 :deep(.van-tab--active) .tab-count {
+  color: #fff;
   background: #1677ff;
 }
 
-.order-list {
-  padding: 12px 16px 80px;
-
-  &.in-selection {
-    padding-left: 8px;
-    padding-right: 8px;
-  }
-}
-
-.order-card {
-  position: relative;
-  background: #fff;
-  border-radius: 10px;
-  padding: 14px;
-  margin-bottom: 10px;
-  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.04);
-  transition: background 0.2s;
-
-  &.checked {
-    background: #ecf5ff;
-    border: 1px solid #1677ff;
-    padding: 13px;
-  }
-}
-
-.card-checkbox {
-  position: absolute;
-  top: 12px;
-  right: 12px;
-  z-index: 2;
-}
-
-.order-top {
+.summary-bar {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  padding: 10px 16px;
+  background: #f5f7fa;
+  font-size: 13px;
+  color: #666;
+}
+
+.order-list {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.order-card {
+  background: #fff;
+  border-radius: 12px;
+  padding: 14px;
+  display: flex;
+  gap: 10px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.03);
+}
+
+.order-card.checked {
+  background: #e6f4ff;
+  border: 1px solid #1677ff;
+}
+
+.card-checkbox {
+  flex-shrink: 0;
+  align-self: center;
+}
+
+.card-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
   margin-bottom: 10px;
 }
 
-.order-no {
-  font-size: 15px;
-  font-weight: 600;
-  color: #1a1a1a;
-}
-
-.order-tags {
+.plate-wrap {
   display: flex;
   align-items: center;
   gap: 6px;
 }
 
-.img-tag {
+.plate-number {
+  font-size: 16px;
+  font-weight: 700;
+  color: #333;
+}
+
+.card-tags {
   display: flex;
   align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.card-info {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.info-item {
+  display: flex;
+  flex-direction: column;
   gap: 2px;
 }
 
-.order-body {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-bottom: 10px;
-}
-
-.info-row {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
 .info-label {
-  font-size: 13px;
+  font-size: 11px;
   color: #999;
-  min-width: 60px;
 }
 
 .info-value {
   font-size: 13px;
   color: #333;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.order-footer {
+.card-bottom {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -874,21 +1126,29 @@ onActivated(() => {
   border-top: 1px solid #f5f5f5;
 }
 
-.paint-count-wrap {
+.customer {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: #666;
+}
+
+.paint-count {
   display: flex;
   align-items: baseline;
   gap: 2px;
 }
 
-.paint-count {
+.count-value {
   font-size: 18px;
   font-weight: 700;
   color: #1677ff;
 }
 
-.paint-unit {
-  font-size: 12px;
-  color: #1677ff;
+.count-unit {
+  font-size: 11px;
+  color: #999;
 }
 
 .loading-wrap {
@@ -899,15 +1159,28 @@ onActivated(() => {
 
 .finished-text {
   text-align: center;
-  font-size: 13px;
-  color: #ccc;
   padding: 20px 0;
+  font-size: 12px;
+  color: #999;
 }
 
 .scroll-sentinel {
-  width: 100%;
   height: 1px;
-  margin-top: 8px;
+}
+
+.fab-create {
+  position: fixed;
+  right: 16px;
+  bottom: 80px;
+  width: 52px;
+  height: 52px;
+  border-radius: 26px;
+  background: linear-gradient(135deg, #1677ff, #4096ff);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 16px rgba(22, 119, 255, 0.35);
+  z-index: 100;
 }
 
 .selection-bar {
@@ -917,136 +1190,297 @@ onActivated(() => {
   bottom: 0;
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 12px;
   padding: 10px 16px;
   background: #fff;
-  box-shadow: 0 -2px 12px rgba(0, 0, 0, 0.06);
-  z-index: 100;
+  box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.05);
+  z-index: 101;
+}
+
+.selection-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.select-all-text {
+  font-size: 14px;
+  color: #333;
 }
 
 .selection-info {
-  flex: 1;
-  font-size: 13px;
-  color: #333;
+  font-size: 14px;
+  color: #666;
 
   .count {
     color: #1677ff;
     font-weight: 600;
   }
+}
 
-  .ocr-count {
-    color: #999;
-    font-size: 12px;
-  }
+.filter-popup {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: #f5f7fa;
+}
+
+.filter-popup-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px;
+  background: #fff;
+}
+
+.filter-popup-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #333;
+}
+
+.filter-popup-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.filter-group {
+  background: #fff;
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 12px;
+}
+
+.filter-group-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #333;
+  margin-bottom: 12px;
+}
+
+.filter-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.filter-option {
+  padding: 8px 14px;
+  background: #f5f7fa;
+  border-radius: 16px;
+  font-size: 13px;
+  color: #666;
+}
+
+.filter-option.active {
+  background: #e6f4ff;
+  color: #1677ff;
+}
+
+.filter-popup-footer {
+  display: flex;
+  gap: 12px;
+  padding: 12px 16px;
+  background: #fff;
+  border-top: 1px solid #f0f0f0;
 }
 
 .batch-ocr-popup {
-  width: 90%;
-  max-width: 360px;
+  width: 85%;
+  max-height: 80%;
 }
 
 .batch-ocr-content {
   padding: 20px;
-  max-height: 80vh;
-  overflow-y: auto;
 }
 
 .batch-ocr-title {
-  font-size: 16px;
+  font-size: 17px;
   font-weight: 600;
   text-align: center;
-  margin-bottom: 10px;
-  color: #1a1a1a;
-}
-
-.batch-ocr-desc {
-  font-size: 12px;
-  color: #999;
-  line-height: 1.6;
-  margin-bottom: 16px;
-  padding: 8px 10px;
-  background: #f5f7fa;
-  border-radius: 6px;
-
-  strong {
-    color: #ff7a45;
-  }
-}
-
-.batch-ocr-mode {
-  justify-content: space-around;
   margin-bottom: 12px;
 }
 
-.batch-ocr-pending {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+.batch-ocr-desc {
   font-size: 13px;
-  color: #333;
+  color: #666;
   margin-bottom: 16px;
-  flex-wrap: wrap;
 }
 
-.batch-ocr-tip {
-  color: #ff7a45;
-  font-size: 12px;
+.batch-ocr-mode {
+  margin-bottom: 16px;
+}
+
+.batch-ocr-pending {
+  font-size: 14px;
+  color: #333;
+  margin-bottom: 16px;
 }
 
 .batch-ocr-progress {
   margin-bottom: 16px;
+}
 
-  .progress-head {
-    text-align: center;
-    font-size: 12px;
-    color: #666;
-    margin-bottom: 6px;
-  }
+.progress-head {
+  display: flex;
+  justify-content: flex-end;
+  font-size: 12px;
+  color: #999;
+  margin-bottom: 6px;
+}
 
-  .progress-stats {
-    display: flex;
-    justify-content: space-around;
-    margin-top: 10px;
-  }
+.progress-stats {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
 }
 
 .batch-ocr-result {
-  margin-bottom: 16px;
-  padding: 10px;
+  max-height: 200px;
+  overflow-y: auto;
   background: #f5f7fa;
-  border-radius: 6px;
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 16px;
+}
 
-  .result-summary {
-    font-size: 13px;
-    color: #52c41a;
-    font-weight: 600;
-    margin-bottom: 8px;
+.result-summary {
+  font-size: 14px;
+  color: #52c41a;
+  margin-bottom: 8px;
+}
 
-    &.has-failed {
-      color: #ff7a45;
-    }
-  }
+.result-summary.has-failed {
+  color: #ff4d4f;
+}
 
-  .result-details {
-    max-height: 200px;
-    overflow-y: auto;
-  }
-
-  .detail-line {
-    font-size: 12px;
-    color: #666;
-    line-height: 1.6;
-    padding: 2px 0;
-    border-bottom: 1px dashed #eee;
-
-    &:last-child {
-      border-bottom: none;
-    }
-  }
+.detail-line {
+  font-size: 12px;
+  color: #666;
+  line-height: 1.6;
 }
 
 .batch-ocr-actions {
   display: flex;
-  gap: 8px;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.merge-popup {
+  display: flex;
+  flex-direction: column;
+  max-height: 70vh;
+}
+
+.merge-popup-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.merge-popup-title {
+  font-size: 17px;
+  font-weight: 600;
+  color: #333;
+}
+
+.merge-loading,
+.merge-empty {
+  padding: 40px 16px;
+  text-align: center;
+  font-size: 14px;
+  color: #999;
+}
+
+.merge-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+.merge-tip {
+  font-size: 12px;
+  color: #fa8c16;
+  background: #fff7e6;
+  border-radius: 8px;
+  padding: 10px 12px;
+  line-height: 1.5;
+  margin-bottom: 16px;
+}
+
+.merge-target {
+  background: #f5f7fa;
+  border-radius: 10px;
+  padding: 12px;
+  margin-bottom: 16px;
+}
+
+.merge-target-title {
+  font-size: 12px;
+  color: #999;
+  margin-bottom: 6px;
+}
+
+.merge-target-plate {
+  font-size: 16px;
+  font-weight: 700;
+  color: #333;
+  margin-bottom: 4px;
+}
+
+.merge-target-no {
+  font-size: 13px;
+  color: #666;
+}
+
+.merge-candidates-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #333;
+  margin-bottom: 10px;
+}
+
+.merge-candidate {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 10px;
+  background: #f8fafc;
+  margin-bottom: 8px;
+}
+
+.merge-candidate.selected {
+  background: #e6f7ff;
+}
+
+.merge-candidate-checkbox {
+  flex-shrink: 0;
+}
+
+.merge-candidate-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.merge-candidate-plate {
+  font-size: 15px;
+  font-weight: 600;
+  color: #333;
+  margin-bottom: 4px;
+}
+
+.merge-candidate-meta {
+  font-size: 12px;
+  color: #999;
+}
+
+.merge-actions {
+  padding: 12px 16px 24px;
+  border-top: 1px solid #f0f0f0;
 }
 </style>

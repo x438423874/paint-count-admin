@@ -184,7 +184,8 @@ const routeMap: RouteMap = {
   "paint_shop": "/paint/shop",
   "paint_standard-template": "/paint/standard-template",
   "paint_statistics": "/paint/statistics",
-  "paint_work-order": "/paint/work-order"
+  "paint_work-order": "/paint/work-order",
+  "paint_work-order_reconcile": "/paint/work-order/reconcile"
 };
 
 /**

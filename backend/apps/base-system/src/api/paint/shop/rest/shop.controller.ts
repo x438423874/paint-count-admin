@@ -2,7 +2,7 @@ import { Controller, Get, Post, Put, Delete, Body, Query, Param, Request, Forbid
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { PaintShopService } from '../../service/paint-shop.service';
 import { UserShopService } from '../../service/user-shop.service';
-import { CreateShopDto, UpdateShopDto, PageShopDto } from '../dto/shop.dto';
+import { CreateShopDto, UpdateShopDto, PageShopDto, UpdateCategoryAliasMapDto } from '../dto/shop.dto';
 import { ApiRes } from '@lib/infra/rest/res.response';
 import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
 
@@ -74,6 +74,26 @@ export class PaintShopController {
     // 数据权限：校验用户是否有权访问该门店
     await this.userShopService.assertShopAccess(req.user.uid, id);
     const data = await this.shopService.findById(id);
+    return ApiRes.success(data);
+  }
+
+  @Get(':id/category-alias-map')
+  @ApiOperation({ summary: '获取门店部位别名映射' })
+  async getCategoryAliasMap(@Param('id') id: string, @Request() req: AuthenticatedRequest) {
+    await this.userShopService.assertShopAccess(req.user.uid, id);
+    const data = await this.shopService.getCategoryAliasMap(id);
+    return ApiRes.success(data);
+  }
+
+  @Put(':id/category-alias-map')
+  @ApiOperation({ summary: '更新门店部位别名映射' })
+  async updateCategoryAliasMap(
+    @Param('id') id: string,
+    @Body() dto: UpdateCategoryAliasMapDto,
+    @Request() req: AuthenticatedRequest,
+  ) {
+    await this.userShopService.assertShopAccess(req.user.uid, id);
+    const data = await this.shopService.updateCategoryAliasMap(id, dto.aliasMap || {});
     return ApiRes.success(data);
   }
 }

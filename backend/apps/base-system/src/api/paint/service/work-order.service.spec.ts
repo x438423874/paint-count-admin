@@ -5,7 +5,6 @@ import { MetricsService } from '@lib/shared/metrics/metrics.service';
 import { WINSTON_MODULE_PROVIDER } from 'nest-winston';
 import { WorkOrderService } from './work-order.service';
 import { PaintImageService } from './paint-image.service';
-import { OcrAnnotationService } from './ocr-annotation.service';
 import { CreateWorkOrderDto } from '../work-order/dto/work-order.dto';
 
 // Mock RedisUtility（工单号生成依赖 Redis）
@@ -56,7 +55,6 @@ describe('WorkOrderService', () => {
         WorkOrderService,
         { provide: PrismaService, useValue: prisma },
         { provide: PaintImageService, useValue: {} },
-        { provide: OcrAnnotationService, useValue: {} },
         { provide: MetricsService, useValue: { recordWorkOrderCreation: jest.fn(), recordOcrRecognition: jest.fn(), recordExcelImport: jest.fn() } },
         { provide: WINSTON_MODULE_PROVIDER, useValue: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() } },
       ],
@@ -185,7 +183,7 @@ describe('WorkOrderService', () => {
     it('已审核工单不允许修改', async () => {
       prisma.paintWorkOrder.findUnique.mockResolvedValue({
         id: 'order-1',
-        isAudited: true,
+        status: 'AUDITED',
         shopId: 'shop-1',
         items: [],
       });

@@ -7,7 +7,6 @@ import { WINSTON_MODULE_PROVIDER } from 'nest-winston';
 import { Logger } from 'winston';
 import { MetricsService } from '@lib/shared/metrics/metrics.service';
 import { PaintImageService } from './paint-image.service';
-import { OcrAnnotationService } from './ocr-annotation.service';
 import {
   calculatePaintCount,
   findDuplicateCategoryIds,
@@ -16,6 +15,8 @@ import {
   shouldMigrateSettlementMonth,
 } from './paint-calculation';
 import { CreateWorkOrderDto, UpdateWorkOrderDto, PageWorkOrderDto, WorkOrderItemDto } from '../work-order/dto/work-order.dto';
+import { SettlementMonthService } from './settlement-month.service';
+import { Jimp } from 'jimp';
 
 interface OrderItemCreateData {
   categoryId: string;
@@ -35,9 +36,9 @@ export class WorkOrderService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly imageService: PaintImageService,
-    private readonly annotationService: OcrAnnotationService,
     private readonly metricsService: MetricsService,
     @Inject(WINSTON_MODULE_PROVIDER) private readonly logger: Logger,
+    private readonly settlementMonthService: SettlementMonthService,
   ) {}
 
   /** 一次性查询门店标准模板项目，避免 N+1 */
@@ -110,8 +111,8 @@ export class WorkOrderService {
     });
   }
 
-  async quickCreate(shopId: string, buffer: Buffer, filename: string, mimetype: string, settlementMonth?: string, plateNumber?: string, ocrOrderNo?: string, thumbnailBuffer?: Buffer | null, customerName?: string, phone?: string, carModel?: string) {
-    const orderDate = new Date();
+  async quickCreate(shopId: string, buffer: Buffer, filename: string, mimetype: string, settlementMonth?: string, plateNumber?: string, ocrOrderNo?: string, thumbnailBuffer?: Buffer | null, customerName?: string, phone?: string, carModel?: string, vin?: string, brand?: string, orderDate?: string, ocrItems?: { categoryId: string; quantity: number; newPartQuantity: number }[]) {
+    const finalOrderDate: Date | null = orderDate ? new Date(orderDate) : null;
 
     // 先保存图片文件（事务外操作，不涉及数据库一致性）
     const url = await this.imageService.saveImageFile(buffer, filename, shopId, settlementMonth);
@@ -120,19 +121,47 @@ export class WorkOrderService {
       thumbnailUrl = await this.imageService.saveImageFile(thumbnailBuffer, `thumb_${filename}`, shopId, settlementMonth);
     }
 
-    // 在事务内生成工单号并创建工单，避免并发冲突
+    // 预计算 OCR 部位项目的幅数（事务外查询模板）
+    let calculatedItems: OrderItemCreateData[] = [];
+    if (ocrItems && ocrItems.length > 0) {
+      const templateItemMap = await this.getShopTemplateItemMap(shopId);
+      calculatedItems = ocrItems.map(item => {
+        const templateItem = templateItemMap.get(item.categoryId);
+        const coefficient = templateItem?.coefficient ?? 0;
+        const newPartAddition = templateItem?.newPartAddition ?? 0;
+        const result = calculatePaintCount({
+          coefficient,
+          newPartAddition,
+          quantity: item.quantity || 1,
+          newPartQuantity: item.newPartQuantity || 0,
+          specialPaintMultiplier: null,
+        });
+        return {
+          categoryId: item.categoryId,
+          quantity: result.quantity,
+          paintCount: result.paintCount,
+          newPartQuantity: result.newPartQuantity,
+          specialPaintId: null,
+          specialPaintMultiplier: null,
+        };
+      });
+    }
+    const totalPaintCount = calculatedItems.reduce((sum, item) => sum + item.paintCount, 0);
+
+    // 在事务内创建工单（批量上传时不自动生成工单号，等OCR填充）
     const order = await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-      const orderNo = ocrOrderNo || await this.generateOrderNo(shopId, tx);
       const created = await tx.paintWorkOrder.create({
         data: {
-          orderNo,
+          orderNo: ocrOrderNo || null,
           shopId,
-          orderDate,
-          plateNumber: plateNumber || '',
+          orderDate: finalOrderDate,
+          plateNumber: (plateNumber || '').slice(0, 50),
           carModel: carModel || '',
+          vin: vin || '',
+          brand: brand || '',
           customerName: customerName || '',
           phone: phone || '',
-          totalPaintCount: 0,
+          totalPaintCount,
           status: 'PENDING',
           settlementMonth: settlementMonth || null,
         },
@@ -142,6 +171,13 @@ export class WorkOrderService {
       await tx.paintWorkOrderImage.create({
         data: { orderId: created.id, url, thumbnailUrl, imageType: PaintImageType.BEFORE, fileSize: buffer.length },
       });
+
+      // 创建 OCR 识别的部位项目
+      if (calculatedItems.length > 0) {
+        await tx.paintWorkOrderItem.createMany({
+          data: calculatedItems.map(item => ({ orderId: created.id, ...item })),
+        });
+      }
 
       return created;
     });
@@ -174,17 +210,19 @@ export class WorkOrderService {
         data: {
           orderNo,
           shopId: dto.shopId,
-          orderDate: new Date(dto.orderDate),
+          orderDate: dto.orderDate ? new Date(dto.orderDate) : new Date(),
           settlementMonth: dto.settlementMonth || null,
           carModel: dto.carModel,
-          plateNumber: dto.plateNumber,
+          plateNumber: dto.plateNumber ? dto.plateNumber.slice(0, 50) : dto.plateNumber,
           vin: dto.vin,
+          brand: dto.brand,
           customerName: dto.customerName,
           phone: dto.phone,
           contactPerson: dto.contactPerson,
           description: dto.description,
           totalPaintCount,
           remark: dto.remark,
+          status: 'DRAFT' as PaintOrderStatus,
           items: { create: itemsData },
         },
         include: { items: { include: { category: true, specialPaint: true } }, shop: true },
@@ -197,22 +235,40 @@ export class WorkOrderService {
   async update(dto: UpdateWorkOrderDto) {
     const existing = await this.prisma.paintWorkOrder.findUnique({
       where: { id: dto.id },
-      include: { items: true },
     });
     if (!existing) throw new NotFoundException('工单不存在');
 
-    // 已审核的工单不允许修改
-    if (existing.isAudited) {
-      throw new BadRequestException('已审核的工单不允许修改');
+    // 封单校验
+    const month = existing.settlementMonth || this.getMonthFromDate(existing.orderDate);
+    if (month) await this.settlementMonthService.assertNotSealed(existing.shopId, month);
+
+    const audited = existing.status === 'AUDITED' || existing.status === 'SETTLED' || existing.status === 'ABNORMAL';
+
+    // 已审核（含已结算、异常）的工单只允许修正 OCR 基础字段或返工标记，不能修改项目、门店、结算月份等
+    const safeOcrFields = ['orderNo', 'plateNumber', 'customerName', 'phone', 'carModel', 'vin', 'brand', 'orderDate'] as const;
+    const unsafeFields = ['shopId', 'settlementMonth', 'contactPerson', 'description', 'remark', 'items'] as const;
+    const hasUnsafeField = unsafeFields.some(field => dto[field] !== undefined);
+    const isOcrCorrection = safeOcrFields.some(field => dto[field] !== undefined);
+    const isReworkUpdate = dto.isRework !== undefined || dto.reworkRemark !== undefined;
+
+    if (audited && hasUnsafeField) {
+      throw new BadRequestException('已审核的工单只允许修正车牌号、工单号等基础信息');
+    }
+
+    if (audited && !isOcrCorrection && !isReworkUpdate) {
+      throw new BadRequestException('已审核的工单只允许修正车牌号、工单号等基础信息');
     }
 
     const updateData: Prisma.PaintWorkOrderUpdateInput = {
       carModel: dto.carModel,
-      plateNumber: dto.plateNumber,
+      plateNumber: dto.plateNumber ? dto.plateNumber.slice(0, 50) : dto.plateNumber,
       customerName: dto.customerName,
       phone: dto.phone,
-      status: dto.status,
+      contactPerson: dto.contactPerson,
+      description: dto.description,
       remark: dto.remark,
+      isRework: dto.isRework,
+      reworkRemark: dto.reworkRemark ? dto.reworkRemark.slice(0, 200) : dto.reworkRemark,
     };
 
     // 支持编辑工单号（OCR识别可能有误）
@@ -220,62 +276,65 @@ export class WorkOrderService {
       updateData.orderNo = dto.orderNo;
     }
 
-    // 如果更新项目，一次性查询模板和特殊车漆，避免 N+1
-    let calculatedItems: OrderItemCreateData[] | undefined;
-    if (dto.items?.length) {
-      const categoryIds = dto.items.map(i => i.categoryId);
-      const duplicates = findDuplicateCategoryIds(categoryIds);
-      if (duplicates.length > 0) {
-        throw new BadRequestException('不能重复选择同一部位');
-      }
-
-      const [templateItemMap, specialPaintMap] = await Promise.all([
-        this.getShopTemplateItemMap(existing.shopId),
-        this.getSpecialPaintMap(dto.items.map(i => i.specialPaintId).filter((id): id is string => Boolean(id))),
-      ]);
-      calculatedItems = this.calculateItemsPaintCount(dto.items, templateItemMap, specialPaintMap);
+    // 支持编辑工单日期
+    if (dto.orderDate !== undefined) {
+      updateData.orderDate = dto.orderDate ? new Date(dto.orderDate) : new Date();
     }
 
-    if (dto.settlementMonth !== undefined) {
-      const oldMonth = existing.settlementMonth;
-      const newMonth = dto.settlementMonth || null;
-      updateData.settlementMonth = newMonth;
-      // 结算月份变更时迁移图片文件
-      if (shouldMigrateSettlementMonth(oldMonth, newMonth)) {
-        const targetMonth = newMonth as string;
-        await this.imageService.migrateImages(dto.id, oldMonth, targetMonth);
-        // 如果新月份与之前不同，自动添加结算记录（分次结算支持）
-        const existingRecord = await this.prisma.paintSettlementRecord.findFirst({
-          where: { orderId: dto.id, settlementMonth: targetMonth },
-        });
-        if (!existingRecord) {
-          // 计算当前幅数
-          const currentPaintCount = calculatedItems
-            ? calculatedItems.reduce((sum, item) => sum + item.paintCount, 0)
-            : Number(existing.totalPaintCount);
-          const itemCount = dto.items?.length || existing.items.length;
-          await this.prisma.paintSettlementRecord.create({
-            data: {
-              orderId: dto.id,
-              settlementMonth: targetMonth,
-              paintCount: currentPaintCount,
-              itemCount,
-              remark: '修改结算月份自动记录',
-            },
-          });
+    // 支持编辑门店
+    if (dto.shopId !== undefined) {
+      updateData.shop = { connect: { id: dto.shopId } };
+    }
+
+    // 支持编辑车架号
+    if (dto.vin !== undefined) {
+      updateData.vin = dto.vin;
+    }
+
+    // 支持编辑品牌
+    if (dto.brand !== undefined) {
+      updateData.brand = dto.brand;
+    }
+
+    // 已审核的 OCR 修正不修改项目、结算月份和总幅数
+    if (!audited) {
+      // 如果更新项目，一次性查询模板和特殊车漆，避免 N+1
+      let calculatedItems: OrderItemCreateData[] | undefined;
+      if (dto.items?.length) {
+        const categoryIds = dto.items.map(i => i.categoryId);
+        const duplicates = findDuplicateCategoryIds(categoryIds);
+        if (duplicates.length > 0) {
+          throw new BadRequestException('不能重复选择同一部位');
+        }
+
+        const [templateItemMap, specialPaintMap] = await Promise.all([
+          this.getShopTemplateItemMap(existing.shopId),
+          this.getSpecialPaintMap(dto.items.map(i => i.specialPaintId).filter((id): id is string => Boolean(id))),
+        ]);
+        calculatedItems = this.calculateItemsPaintCount(dto.items, templateItemMap, specialPaintMap);
+      }
+
+      if (dto.settlementMonth !== undefined) {
+        const oldMonth = existing.settlementMonth;
+        const newMonth = dto.settlementMonth || null;
+        updateData.settlementMonth = newMonth;
+        // 结算月份变更时迁移图片文件
+        if (shouldMigrateSettlementMonth(oldMonth, newMonth)) {
+          const targetMonth = newMonth as string;
+          await this.imageService.migrateImages(dto.id, oldMonth, targetMonth);
         }
       }
-    }
 
-    if (calculatedItems) {
-      const totalPaintCount = calculatedItems.reduce((sum, item) => sum + item.paintCount, 0);
-      updateData.totalPaintCount = totalPaintCount;
-      updateData.items = {
-        deleteMany: {},
-        create: calculatedItems,
-      };
-    } else {
-      updateData.totalPaintCount = existing.totalPaintCount;
+      if (calculatedItems) {
+        const totalPaintCount = calculatedItems.reduce((sum, item) => sum + item.paintCount, 0);
+        updateData.totalPaintCount = totalPaintCount;
+        updateData.items = {
+          deleteMany: {},
+          create: calculatedItems,
+        };
+      } else {
+        updateData.totalPaintCount = existing.totalPaintCount;
+      }
     }
 
     const updated = await this.prisma.paintWorkOrder.update({
@@ -284,132 +343,42 @@ export class WorkOrderService {
       include: { items: { include: { category: true, specialPaint: true } }, shop: true },
     });
 
-    // 自主学习：工单编辑保存后，自动学习字段值作为 ground truth
-    // 当工单有图片时，将用户确认/修改的字段值保存为标注数据
-    // 这样系统会随着使用越来越准确
-    this.autoLearnFromWorkOrderUpdate(dto.id, existing, updated).catch((err) => {
-      // 自主学习失败不影响工单更新
-      this.logger.warn('自动学习标注失败', {
-        orderId: dto.id,
-        error: err?.message || String(err),
-        stack: err?.stack,
-      });
-    });
-
     return updated;
-  }
-
-  /**
-   * 自主学习：从工单更新中学习字段值作为 ground truth
-   * 原理：用户编辑工单时确认/修改的字段值是可信的正确数据
-   * 将这些数据保存为标注数据，用于后续 OCR 识别的纠错和模板聚合
-   *
-   * 重要：自主学习只保存 ground truth（字段值），不保存区域坐标
-   * 区域坐标必须由用户在 OCR 模板标注编辑器中手动标注（精确位置）
-   * 因此自主学习的标注数据 isVerified=false，不参与聚合模板的坐标计算
-   * 但 ground truth 会参与 correctWithAnnotations 的智能纠错
-   *
-   * 触发条件：
-   * 1. 工单有图片（OCR 识别的来源）
-   * 2. 至少有一个关键字段（车牌号、工单号）有值
-   * 3. 字段值与更新前不同（避免重复学习未修改的数据）
-   */
-  private async autoLearnFromWorkOrderUpdate(
-    orderId: string,
-    existing: any,
-    updated: any,
-  ): Promise<void> {
-    // 收集更新后的字段值
-    const groundTruth: Record<string, string> = {};
-    const fields = ['plateNumber', 'orderNo', 'customerName', 'phone', 'carModel'] as const;
-
-    const toString = (value: unknown): string => {
-      if (value === null || value === undefined) return '';
-      if (value instanceof Date) return value.toISOString();
-      return String(value);
-    };
-
-    let hasChange = false;
-    for (const field of fields) {
-      const oldValue = toString(existing[field]).trim();
-      const newValue = toString(updated[field]).trim();
-      if (newValue && newValue !== oldValue) {
-        groundTruth[field] = newValue;
-        hasChange = true;
-      }
-    }
-
-    // 日期字段：从 orderDate 学习
-    const oldDate = toString(existing.orderDate).trim();
-    const newDate = toString(updated.orderDate).trim();
-    if (newDate && newDate !== oldDate) {
-      // 标准化为 YYYY-MM-DD
-      const dateMatch = newDate.match(/(\d{4})[-./](\d{1,2})[-./](\d{1,2})/);
-      if (dateMatch) {
-        groundTruth.date = `${dateMatch[1]}-${dateMatch[2].padStart(2, '0')}-${dateMatch[3].padStart(2, '0')}`;
-        hasChange = true;
-      }
-    }
-
-    // 没有字段变更，不需要学习
-    if (!hasChange) return;
-
-    // 至少需要车牌号或工单号（关键字段）才学习
-    if (!groundTruth.plateNumber && !groundTruth.orderNo) return;
-
-    // 获取工单的第一张图片（OCR 识别的来源）
-    const images = await this.prisma.paintWorkOrderImage.findMany({
-      where: { orderId },
-      orderBy: { createdAt: 'asc' },
-      take: 1,
-    });
-
-    if (images.length === 0) return;
-
-    const image = images[0];
-    const shopId = updated.shopId || existing.shopId;
-    if (!shopId) return;
-
-    // 自主学习只保存 ground truth，不保存区域坐标
-    // regions 设为空对象，isVerified=false
-    // 这样不会污染聚合模板的坐标计算，但 ground truth 可用于纠错
-    await this.annotationService.createAnnotation({
-      shopId,
-      orderId,
-      imageUrl: image.url,
-      imageWidth: 1, // 占位值，避免 image_width=0 被误判
-      imageHeight: 1,
-      regions: {},
-      groundTruth,
-      isVerified: false, // 待验证，不自动设为已验证
-    });
   }
 
   /** 设置/取消异常标注 */
   async setAbnormal(id: string, isAbnormal: boolean, abnormalRemark?: string) {
-    const existing = await this.prisma.paintWorkOrder.findUnique({ where: { id } });
+    const existing = await this.prisma.paintWorkOrder.findUnique({
+      where: { id },
+    });
     if (!existing) throw new NotFoundException('工单不存在');
 
     // 必须已审核才能标记异常
-    if (!existing.isAudited) {
+    if (existing.status !== 'AUDITED' && existing.status !== 'ABNORMAL') {
       throw new BadRequestException('工单未审核，不能标记异常');
     }
 
     return this.prisma.paintWorkOrder.update({
       where: { id },
       data: {
-        isAbnormal,
         abnormalRemark: isAbnormal ? (abnormalRemark || null) : null,
+        status: isAbnormal ? ('ABNORMAL' as any) : ('AUDITED' as any),
       },
     });
   }
 
   async delete(id: string) {
-    const existing = await this.prisma.paintWorkOrder.findUnique({ where: { id } });
+    const existing = await this.prisma.paintWorkOrder.findUnique({
+      where: { id },
+    });
     if (!existing) throw new NotFoundException('工单不存在');
 
-    // 已审核的工单不允许删除
-    if (existing.isAudited) {
+    // 封单校验
+    const delMonth = existing.settlementMonth || this.getMonthFromDate(existing.orderDate);
+    if (delMonth) await this.settlementMonthService.assertNotSealed(existing.shopId, delMonth);
+
+    // 已审核（含已结算、异常）的工单不允许删除
+    if (existing.status === 'AUDITED' || existing.status === 'SETTLED' || existing.status === 'ABNORMAL') {
       throw new BadRequestException('已审核的工单不允许删除');
     }
 
@@ -426,8 +395,13 @@ export class WorkOrderService {
     });
   }
 
+  /** 补充展示状态（status 已由各操作直接写入数据库，此处不再覆盖） */
+  private applyDerivedStatus(record: any) {
+    return record;
+  }
+
   async findById(id: string) {
-    return this.prisma.paintWorkOrder.findUnique({
+    const record = await this.prisma.paintWorkOrder.findUnique({
       where: { id },
       include: {
         items: { include: { category: true, specialPaint: true } },
@@ -435,6 +409,7 @@ export class WorkOrderService {
         shop: true,
       },
     });
+    return this.applyDerivedStatus(record);
   }
 
   async page(
@@ -444,18 +419,11 @@ export class WorkOrderService {
     const current = dto.current ?? 1;
     const size = dto.size ?? 10;
 
-    // 处理业务状态筛选：AUDITED=已审核, SETTLED=已结算
-    // 这些不是数据库枚举值，需要转换为实际的查询条件
+    // 状态筛选：直接按 status 字段筛选
     let statusFilter: Prisma.PaintWorkOrderWhereInput = {};
     const bizStatus = dto.status;
-    if (bizStatus === 'AUDITED') {
-      statusFilter = { isAudited: true };
-    } else if (bizStatus === 'SETTLED') {
-      statusFilter = { isAudited: true, settlements: { some: {} } };
-    } else if (bizStatus === 'PENDING') {
-      statusFilter = { isAudited: false };
-    } else if (bizStatus) {
-      statusFilter = { status: bizStatus as PaintOrderStatus };
+    if (bizStatus) {
+      statusFilter = { status: bizStatus as any };
     }
 
     // 数据权限：accessibleShopIds 为 null 表示不限制（超管/财务），数组表示限制到这些门店
@@ -470,7 +438,8 @@ export class WorkOrderService {
       ...(dto.customerName && { customerName: { contains: dto.customerName } }),
       ...(dto.settlementMonth && { settlementMonth: dto.settlementMonth }),
       ...statusFilter,
-      ...(dto.isAudited !== undefined && { isAudited: dto.isAudited }),
+      ...(dto.isRework !== undefined && { isRework: dto.isRework }),
+      ...(dto.categoryId && { items: { some: { categoryId: dto.categoryId } } }),
       // 叠加数据权限过滤（与 dto.shopId 取交集）
       ...(shopIdFilter && shopIdFilter),
     };
@@ -484,45 +453,93 @@ export class WorkOrderService {
       return { current, size, total: 0, records: [] };
     }
 
-    const [records, total] = await Promise.all([
-      this.prisma.paintWorkOrder.findMany({
-        where,
-        skip: (current - 1) * size,
-        take: size,
-        orderBy: [
-          // 有重复的工单排在前面（按orderNo分组，同组连续）
-          { orderNo: 'asc' },
-          { createdAt: 'asc' },
-        ],
-        include: {
-          items: { include: { category: true, specialPaint: true } },
-          images: { orderBy: { createdAt: 'desc' } },
-          shop: { select: { id: true, name: true, code: true } },
-          settlements: { orderBy: { createdAt: 'desc' } },
-        },
-      }),
-      this.prisma.paintWorkOrder.count({ where }),
-    ]);
-
-    // 标记重复工单
-    const orderNos = records.map(r => r.orderNo);
-    const duplicateCounts = await this.prisma.paintWorkOrder.groupBy({
-      by: ['orderNo'],
-      where: {
-        orderNo: { in: orderNos },
-        status: { not: 'CANCELLED' },
-      },
-      _count: { id: true },
+    // 先查询所有满足条件的工单 id/orderNo/createdAt/totalPaintCount，用于全局识别重复工单、排序及统计总幅数
+    const allOrders = await this.prisma.paintWorkOrder.findMany({
+      where,
+      select: { id: true, orderNo: true, createdAt: true, totalPaintCount: true },
+      orderBy: [{ orderNo: 'asc' }, { createdAt: 'asc' }],
     });
-    const duplicateMap = new Map(duplicateCounts.map(d => [d.orderNo, d._count.id]));
 
-    const enrichedRecords = records.map(record => ({
-      ...record,
-      _duplicateCount: duplicateMap.get(record.orderNo) || 1,
-      _isDuplicate: (duplicateMap.get(record.orderNo) || 1) > 1,
-    }));
+    // 统计每个 orderNo 出现次数
+    const orderNoCount = new Map<string, number>();
+    allOrders.forEach(order => {
+      if (order.orderNo) {
+        orderNoCount.set(order.orderNo, (orderNoCount.get(order.orderNo) || 0) + 1);
+      }
+    });
 
-    return { current, size, total, records: enrichedRecords };
+    // 重复工单全局优先显示，同 orderNo 按创建时间排序
+    const sortedOrders = allOrders.sort((a, b) => {
+      const aDup = a.orderNo && (orderNoCount.get(a.orderNo) || 0) > 1 ? 0 : 1;
+      const bDup = b.orderNo && (orderNoCount.get(b.orderNo) || 0) > 1 ? 0 : 1;
+      if (aDup !== bDup) return aDup - bDup;
+      if (a.orderNo !== b.orderNo) return (a.orderNo || '').localeCompare(b.orderNo || '');
+      return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+    });
+
+    const total = sortedOrders.length;
+    const pageIds = sortedOrders
+      .slice((current - 1) * size, current * size)
+      .map(order => order.id);
+
+    const records = pageIds.length > 0
+      ? await this.prisma.paintWorkOrder.findMany({
+          where: { id: { in: pageIds } },
+          include: {
+            items: { include: { category: true, specialPaint: true } },
+            images: { orderBy: { createdAt: 'desc' } },
+            shop: { select: { id: true, name: true, code: true } },
+          },
+        })
+      : [];
+
+    // 按排序后的 id 顺序整理记录
+    const recordMap = new Map(records.map(record => [record.id, record]));
+    const orderedRecords = pageIds
+      .map(id => recordMap.get(id))
+      .filter((record): record is NonNullable<typeof record> => !!record);
+
+    const enrichedRecords = orderedRecords.map(record => {
+      const normalized = this.applyDerivedStatus(record);
+      return {
+        ...normalized,
+        _duplicateCount: orderNoCount.get(record.orderNo || '') || 1,
+        _isDuplicate: (orderNoCount.get(record.orderNo || '') || 1) > 1,
+      };
+    });
+
+    // 批量查询当前页涉及的所有门店+月份的封单状态
+    const shopMonthPairs = new Set<string>();
+    for (const record of enrichedRecords) {
+      const month = record.settlementMonth || this.getMonthFromDate(record.orderDate);
+      if (month && record.shopId) {
+        shopMonthPairs.add(`${record.shopId}|${month}`);
+      }
+    }
+    const sealedSet = new Set<string>();
+    if (shopMonthPairs.size > 0) {
+      const sealConditions = Array.from(shopMonthPairs).map(pair => {
+        const [shopId, month] = pair.split('|');
+        return { shopId, month };
+      });
+      const sealedRecords = await this.prisma.paintSettlementMonth.findMany({
+        where: {
+          OR: sealConditions.map(c => ({ shopId: c.shopId, month: c.month, isSealed: true })),
+        },
+        select: { shopId: true, month: true },
+      });
+      for (const sr of sealedRecords) {
+        sealedSet.add(`${sr.shopId}|${sr.month}`);
+      }
+    }
+    for (const record of enrichedRecords) {
+      const month = record.settlementMonth || this.getMonthFromDate(record.orderDate);
+      (record as any)._isSealed = !!(month && record.shopId && sealedSet.has(`${record.shopId}|${month}`));
+    }
+
+    const totalPaintCount = allOrders.reduce((sum, o) => sum + Number(o.totalPaintCount), 0);
+
+    return { current, size, total, totalPaintCount, records: enrichedRecords };
   }
 
   /** 统计各状态的工单数量 */
@@ -547,22 +564,29 @@ export class WorkOrderService {
       return { total: 0, pending: 0, audited: 0, settled: 0 };
     }
 
-    const [total, pending, audited, settled] = await Promise.all([
+    const [total, draft, pending, audited, settled, abnormal] = await Promise.all([
       this.prisma.paintWorkOrder.count({ where: baseWhere }),
-      this.prisma.paintWorkOrder.count({ where: { ...baseWhere, isAudited: false } }),
-      this.prisma.paintWorkOrder.count({ where: { ...baseWhere, isAudited: true } }),
-      this.prisma.paintWorkOrder.count({ where: { ...baseWhere, isAudited: true, settlements: { some: {} } } }),
+      this.prisma.paintWorkOrder.count({ where: { ...baseWhere, status: 'DRAFT' as any } }),
+      this.prisma.paintWorkOrder.count({ where: { ...baseWhere, status: 'PENDING' as any } }),
+      this.prisma.paintWorkOrder.count({ where: { ...baseWhere, status: 'AUDITED' as any } }),
+      this.prisma.paintWorkOrder.count({ where: { ...baseWhere, status: 'SETTLED' as any } }),
+      this.prisma.paintWorkOrder.count({ where: { ...baseWhere, status: 'ABNORMAL' as any } }),
     ]);
 
-    return { total, pending, audited, settled };
+    return { total, draft, pending, audited, settled, abnormal };
   }
 
   async addItems(orderId: string, items: WorkOrderItemDto[]) {
-    const order = await this.prisma.paintWorkOrder.findUnique({ where: { id: orderId } });
+    const order = await this.prisma.paintWorkOrder.findUnique({
+      where: { id: orderId },
+    });
     if (!order) throw new NotFoundException('工单不存在');
 
-    // 已审核的工单不允许添加项目
-    if (order.isAudited) {
+    // 封单校验
+    await this.settlementMonthService.assertOrderNotSealed(orderId);
+
+    // 已审核（含已结算、异常）的工单不允许添加项目
+    if (order.status === 'AUDITED' || order.status === 'SETTLED' || order.status === 'ABNORMAL') {
       throw new BadRequestException('已审核的工单不允许修改');
     }
 
@@ -602,11 +626,16 @@ export class WorkOrderService {
   }
 
   async removeItem(orderId: string, itemId: string) {
-    const order = await this.prisma.paintWorkOrder.findUnique({ where: { id: orderId } });
+    const order = await this.prisma.paintWorkOrder.findUnique({
+      where: { id: orderId },
+    });
     if (!order) throw new NotFoundException('工单不存在');
 
-    // 已审核的工单不允许删除项目
-    if (order.isAudited) {
+    // 封单校验
+    await this.settlementMonthService.assertOrderNotSealed(orderId);
+
+    // 已审核（含已结算、异常）的工单不允许删除项目
+    if (order.status === 'AUDITED' || order.status === 'SETTLED' || order.status === 'ABNORMAL') {
       throw new BadRequestException('已审核的工单不允许修改');
     }
 
@@ -710,5 +739,25 @@ export class WorkOrderService {
     await RedisUtility.instance.expire(seqKey, 2 * 24 * 60 * 60);
 
     return formatOrderNo(shopCode, date, seq);
+  }
+
+  /** 生成图片缩略图 base64 */
+  async generateThumbnailBase64(buffer: Buffer, maxWidth: number): Promise<string> {
+    try {
+      const image = await Jimp.read(buffer);
+      if (image.width > maxWidth) {
+        image.resize({ w: maxWidth });
+      }
+      const thumbBuffer = await image.getBuffer('image/jpeg');
+      return `data:image/jpeg;base64,${thumbBuffer.toString('base64')}`;
+    } catch {
+      return '';
+    }
+  }
+
+  private getMonthFromDate(date: Date | null | undefined): string | null {
+    if (!date) return null;
+    const d = new Date(date);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
   }
 }

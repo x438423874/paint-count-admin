@@ -1,7 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsNotEmpty, IsOptional, IsString, IsInt, IsDateString, IsEnum, IsIn, ValidateNested, IsArray, IsBoolean } from 'class-validator';
+import { IsNotEmpty, IsOptional, IsString, IsInt, IsDateString, IsIn, ValidateNested, IsArray, IsBoolean, MaxLength } from 'class-validator';
 import { Type } from 'class-transformer';
-import { PaintOrderStatus } from '@prisma/client';
 
 export class WorkOrderItemDto {
   @ApiProperty({ description: '项目类别ID' })
@@ -37,10 +36,10 @@ export class CreateWorkOrderDto {
   @IsNotEmpty()
   shopId: string;
 
-  @ApiProperty({ description: '工单日期' })
+  @ApiPropertyOptional({ description: '工单日期，批量上传时可为空，通过OCR识别填充' })
+  @IsOptional()
   @IsDateString()
-  @IsNotEmpty()
-  orderDate: string;
+  orderDate?: string;
 
   @ApiPropertyOptional({ description: '结算月份，格式yyyy-MM' })
   @IsOptional()
@@ -55,12 +54,18 @@ export class CreateWorkOrderDto {
   @ApiPropertyOptional({ description: '车牌号' })
   @IsOptional()
   @IsString()
+  @MaxLength(50)
   plateNumber?: string;
 
   @ApiPropertyOptional({ description: '车架号' })
   @IsOptional()
   @IsString()
   vin?: string;
+
+  @ApiPropertyOptional({ description: '品牌' })
+  @IsOptional()
+  @IsString()
+  brand?: string;
 
   @ApiPropertyOptional({ description: '客户名称' })
   @IsOptional()
@@ -101,10 +106,20 @@ export class UpdateWorkOrderDto {
   @IsNotEmpty()
   id: string;
 
+  @ApiPropertyOptional({ description: '门店ID' })
+  @IsOptional()
+  @IsString()
+  shopId?: string;
+
   @ApiPropertyOptional({ description: '工单号' })
   @IsOptional()
   @IsString()
   orderNo?: string;
+
+  @ApiPropertyOptional({ description: '工单日期' })
+  @IsOptional()
+  @IsDateString()
+  orderDate?: string;
 
   @ApiPropertyOptional({ description: '车型' })
   @IsOptional()
@@ -114,7 +129,18 @@ export class UpdateWorkOrderDto {
   @ApiPropertyOptional({ description: '车牌号' })
   @IsOptional()
   @IsString()
+  @MaxLength(50)
   plateNumber?: string;
+
+  @ApiPropertyOptional({ description: '车架号' })
+  @IsOptional()
+  @IsString()
+  vin?: string;
+
+  @ApiPropertyOptional({ description: '品牌' })
+  @IsOptional()
+  @IsString()
+  brand?: string;
 
   @ApiPropertyOptional({ description: '客户名称' })
   @IsOptional()
@@ -126,10 +152,15 @@ export class UpdateWorkOrderDto {
   @IsString()
   phone?: string;
 
-  @ApiPropertyOptional({ description: '状态：PENDING=待处理, IN_PROGRESS=进行中, COMPLETED=已完成, CANCELLED=已取消' })
+  @ApiPropertyOptional({ description: '联系人' })
   @IsOptional()
-  @IsEnum(PaintOrderStatus)
-  status?: PaintOrderStatus;
+  @IsString()
+  contactPerson?: string;
+
+  @ApiPropertyOptional({ description: '问题描述' })
+  @IsOptional()
+  @IsString()
+  description?: string;
 
   @ApiPropertyOptional({ description: '结算月份，格式yyyy-MM' })
   @IsOptional()
@@ -147,6 +178,17 @@ export class UpdateWorkOrderDto {
   @IsOptional()
   @IsString()
   remark?: string;
+
+  @ApiPropertyOptional({ description: '是否返工' })
+  @IsOptional()
+  @IsBoolean()
+  isRework?: boolean;
+
+  @ApiPropertyOptional({ description: '返工原因' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  reworkRemark?: string;
 }
 
 export class AuditWorkOrderDto {
@@ -160,6 +202,8 @@ export class AuditWorkOrderDto {
   @IsString()
   auditedBy?: string;
 }
+
+export class QueryWorkOrderDto {}
 
 export class PageWorkOrderDto {
   @ApiPropertyOptional({ description: '当前页' })
@@ -192,13 +236,18 @@ export class PageWorkOrderDto {
   @IsString()
   settlementMonth?: string;
 
-  @ApiPropertyOptional({ description: '状态：PENDING=待处理/待审核, IN_PROGRESS=进行中, COMPLETED=已完成, CANCELLED=已取消, AUDITED=已审核, SETTLED=已结算' })
+  @ApiPropertyOptional({ description: '状态：DRAFT=草稿,PENDING=待审核,AUDITED=已审核,SETTLED=已结算,ABNORMAL=异常' })
   @IsOptional()
-  @IsIn(['PENDING', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED', 'AUDITED', 'SETTLED'])
+  @IsIn(['DRAFT', 'PENDING', 'AUDITED', 'SETTLED', 'ABNORMAL'])
   status?: string;
 
-  @ApiPropertyOptional({ description: '是否已审核' })
+  @ApiPropertyOptional({ description: '是否返工' })
   @IsOptional()
   @IsBoolean()
-  isAudited?: boolean;
+  isRework?: boolean;
+
+  @ApiPropertyOptional({ description: '部位类别ID' })
+  @IsOptional()
+  @IsString()
+  categoryId?: string;
 }

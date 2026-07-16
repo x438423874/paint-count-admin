@@ -5,48 +5,74 @@ const router = useRouter()
 const userStore = useUserStore()
 const userInfo = computed(() => userStore.userInfo)
 
+const appVersion = ref('1.0.0')
+
 function handleLogout() {
   showDialog({
     title: '确认退出',
-    message: '确认退出登录？',
+    message: '退出后需要重新登录',
   }).then(async () => {
     await userStore.logout()
     router.replace({ name: 'Login' })
   }).catch(() => {})
 }
+
+function clearCache() {
+  sessionStorage.clear()
+  showNotify({ type: 'success', message: '缓存已清除' })
+}
 </script>
 
 <template>
-  <div class="me-page">
+  <div class="profile-page">
     <!-- 用户信息头部 -->
     <div class="user-header">
       <div class="header-bg" />
       <div class="user-info">
         <div class="avatar-wrap">
-          <van-icon name="user-o" size="40" color="#fff" />
+          <van-icon name="user-o" size="36" color="#fff" />
         </div>
         <div class="user-detail">
           <div class="user-name">
             {{ userInfo.nickname || userInfo.username || '未登录' }}
           </div>
           <div class="user-role">
-            {{ userInfo.roles?.join(', ') || '普通用户' }}
+            {{ userInfo.roles?.join('、') || '普通用户' }}
           </div>
         </div>
       </div>
     </div>
 
-    <!-- 功能列表 -->
-    <div class="menu-section">
-      <van-cell title="我的工单" icon="orders-o" is-link to="/work-order" />
-      <van-cell title="数据统计" icon="chart-trending-o" is-link to="/statistics" />
-      <van-cell title="拍照建单" icon="photograph" is-link :to="{ name: 'WorkOrderCreate' }" />
+    <!-- 快捷功能 -->
+    <div class="quick-grid">
+      <div class="quick-item" @click="router.push({ name: 'WorkOrder' })">
+        <div class="quick-icon blue">
+          <van-icon name="orders-o" size="22" color="#fff" />
+        </div>
+        <span class="quick-text">我的工单</span>
+      </div>
+      <div class="quick-item" @click="router.push({ name: 'WorkOrderCreate' })">
+        <div class="quick-icon green">
+          <van-icon name="photograph" size="22" color="#fff" />
+        </div>
+        <span class="quick-text">拍照建单</span>
+      </div>
+      <div class="quick-item" @click="router.push({ name: 'Statistics' })">
+        <div class="quick-icon orange">
+          <van-icon name="chart-trending-o" size="22" color="#fff" />
+        </div>
+        <span class="quick-text">数据统计</span>
+      </div>
     </div>
 
     <!-- 设置列表 -->
     <div class="menu-section">
-      <van-cell title="系统设置" icon="setting-o" />
-      <van-cell title="关于系统" icon="info-o" />
+      <van-cell title="清除缓存" icon="delete-o" is-link @click="clearCache" />
+      <van-cell title="关于系统" icon="info-o" is-link>
+        <template #right-icon>
+          <span class="version-text">v{{ appVersion }}</span>
+        </template>
+      </van-cell>
     </div>
 
     <!-- 退出登录 -->
@@ -55,6 +81,8 @@ function handleLogout() {
         退出登录
       </van-button>
     </div>
+
+    <div style="height: 80px;" />
   </div>
 </template>
 
@@ -65,14 +93,14 @@ function handleLogout() {
 </route>
 
 <style lang="less" scoped>
-.me-page {
+.profile-page {
   min-height: 100vh;
   background: #f5f7fa;
 }
 
 .user-header {
   position: relative;
-  height: 180px;
+  height: 170px;
 }
 
 .header-bg {
@@ -82,14 +110,14 @@ function handleLogout() {
   right: 0;
   bottom: 0;
   background: linear-gradient(135deg, #1677ff 0%, #4096ff 100%);
-  border-radius: 0 0 20px 20px;
+  border-radius: 0 0 24px 24px;
 }
 
 .user-info {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 16px;
   padding: 60px 20px 0;
 }
 
@@ -108,7 +136,7 @@ function handleLogout() {
 .user-detail {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
 }
 
 .user-name {
@@ -122,12 +150,64 @@ function handleLogout() {
   color: rgba(255, 255, 255, 0.8);
 }
 
-.menu-section {
-  margin: 12px 16px;
+.quick-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  padding: 0 16px;
+  margin-top: -30px;
+  position: relative;
+  z-index: 1;
+}
+
+.quick-item {
   background: #fff;
-  border-radius: 10px;
+  border-radius: 16px;
+  padding: 16px 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+}
+
+.quick-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.quick-icon.blue {
+  background: #1677ff;
+}
+
+.quick-icon.green {
+  background: #52c41a;
+}
+
+.quick-icon.orange {
+  background: #fa8c16;
+}
+
+.quick-text {
+  font-size: 13px;
+  color: #333;
+}
+
+.menu-section {
+  margin: 16px;
+  background: #fff;
+  border-radius: 16px;
   overflow: hidden;
-  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.04);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.03);
+}
+
+.version-text {
+  font-size: 13px;
+  color: #999;
 }
 
 .logout-section {

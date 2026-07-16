@@ -147,4 +147,27 @@ export class PaintShopService {
       include: { standardTemplate: { select: { id: true, name: true } } },
     });
   }
+
+  async getCategoryAliasMap(shopId: string) {
+    const shop = await this.prisma.paintShop.findUnique({
+      where: { id: shopId },
+      select: { categoryAliasMap: true },
+    });
+    if (!shop) throw new NotFoundException('店铺不存在');
+    try {
+      return shop.categoryAliasMap ? JSON.parse(shop.categoryAliasMap) : {};
+    } catch {
+      return {};
+    }
+  }
+
+  async updateCategoryAliasMap(shopId: string, aliasMap: Record<string, string>) {
+    const shop = await this.prisma.paintShop.findUnique({ where: { id: shopId } });
+    if (!shop) throw new NotFoundException('店铺不存在');
+
+    return this.prisma.paintShop.update({
+      where: { id: shopId },
+      data: { categoryAliasMap: JSON.stringify(aliasMap) },
+    });
+  }
 }

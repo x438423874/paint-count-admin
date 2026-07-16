@@ -1,7 +1,7 @@
 <script setup lang="tsx">
 import { ref, computed, onMounted, watch, nextTick } from 'vue';
 import { NCard, NGrid, NGi, NStatistic, NSelect, NSpace, NTag, NDataTable, NH3, NNumberAnimation, NDatePicker, NButton, NEmpty } from 'naive-ui';
-import { fetchMonthlyStatistics, fetchShopComparison, fetchYearOverview, fetchPaintShopList, fetchCategoryBreakdown, exportStatisticsCsv, exportStatisticsExcel, exportStatisticsPdf } from '@/service/api';
+import { fetchMonthlyStatistics, fetchShopComparison, fetchYearOverview, fetchCategoryBreakdown, fetchPaintShopList, fetchLatestSettlementMonth, fetchStatisticsOverview, exportStatisticsCsv, exportStatisticsExcel, exportStatisticsPdf } from '@/service/api';
 import { useEcharts } from '@/hooks/common/echarts';
 
 const shops = ref<{ id: string; name: string; code: string }[]>([]);
@@ -12,12 +12,13 @@ const monthlyData = ref<any[]>([]);
 const shopComparison = ref<any[]>([]);
 const yearOverview = ref<any[]>([]);
 const categoryBreakdown = ref<any[]>([]);
+const overview = ref<any>(null);
 const loading = ref(false);
 
 onMounted(async () => {
   await loadShops();
-  const now = new Date();
-  selectedSettlementMonth.value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const { data: latestMonth } = await fetchLatestSettlementMonth();
+  selectedSettlementMonth.value = latestMonth || `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
   await loadAllData();
 });
 
@@ -35,17 +36,19 @@ async function loadAllData() {
     if (selectedSettlementMonth.value) params.settlementMonth = selectedSettlementMonth.value;
     if (selectedShopId.value) params.shopId = selectedShopId.value;
 
-    const [monthlyRes, comparisonRes, yearRes, categoryRes] = await Promise.all([
+    const [monthlyRes, comparisonRes, yearRes, categoryRes, overviewRes] = await Promise.all([
       fetchMonthlyStatistics(params),
       fetchShopComparison(params),
       fetchYearOverview({ year: selectedSettlementMonth.value ? parseInt(selectedSettlementMonth.value.split('-')[0]) : new Date().getFullYear(), ...(selectedShopId.value && { shopId: selectedShopId.value }) }),
-      fetchCategoryBreakdown(params)
+      fetchCategoryBreakdown(params),
+      fetchStatisticsOverview(params)
     ]);
 
     if (!monthlyRes.error) monthlyData.value = monthlyRes.data || [];
     if (!comparisonRes.error) shopComparison.value = comparisonRes.data || [];
     if (!yearRes.error) yearOverview.value = yearRes.data || [];
     if (!categoryRes.error) categoryBreakdown.value = categoryRes.data || [];
+    if (!overviewRes.error) overview.value = overviewRes.data;
 
     // 更新图表
     await nextTick();
@@ -59,15 +62,18 @@ async function loadAllData() {
 }
 
 const totalStats = computed(() => {
-  const totalOrders = monthlyData.value.reduce((s, d) => s + (d.totalOrders || 0), 0);
+  const totalOrders = monthlyData.value.reduce((s, d) => s + Number(d.totalOrders || 0), 0);
   const totalPaintCount = monthlyData.value.reduce((s, d) => s + Number(d.totalPaintCount || 0), 0);
-  const totalVehicles = monthlyData.value.reduce((s, d) => s + (d.totalVehicles || 0), 0);
-  const pendingOrders = monthlyData.value.reduce((s, d) => s + (d.pendingOrders || 0), 0);
+  const totalVehicles = monthlyData.value.reduce((s, d) => s + Number(d.totalVehicles || 0), 0);
+  const pendingOrders = monthlyData.value.reduce((s, d) => s + Number(d.pendingOrders || 0), 0);
   const pendingPaintCount = monthlyData.value.reduce((s, d) => s + Number(d.pendingPaintCount || 0), 0);
-  const pendingVehicles = monthlyData.value.reduce((s, d) => s + (d.pendingVehicles || 0), 0);
-  const auditedOrders = monthlyData.value.reduce((s, d) => s + (d.auditedOrders || 0), 0);
+  const pendingVehicles = monthlyData.value.reduce((s, d) => s + Number(d.pendingVehicles || 0), 0);
+  const auditedOrders = monthlyData.value.reduce((s, d) => s + Number(d.auditedOrders || 0), 0);
   const auditedPaintCount = monthlyData.value.reduce((s, d) => s + Number(d.auditedPaintCount || 0), 0);
-  const auditedVehicles = monthlyData.value.reduce((s, d) => s + (d.auditedVehicles || 0), 0);
+  const auditedVehicles = monthlyData.value.reduce((s, d) => s + Number(d.auditedVehicles || 0), 0);
+  const reworkOrders = monthlyData.value.reduce((s, d) => s + Number(d.reworkOrders || 0), 0);
+  const reworkPaintCount = monthlyData.value.reduce((s, d) => s + Number(d.reworkPaintCount || 0), 0);
+  const reworkVehicles = monthlyData.value.reduce((s, d) => s + Number(d.reworkVehicles || 0), 0);
   return {
     totalOrders,
     totalPaintCount,
@@ -80,9 +86,22 @@ const totalStats = computed(() => {
     pendingVehicles,
     auditedOrders,
     auditedPaintCount,
-    auditedVehicles
+    auditedVehicles,
+    reworkOrders,
+    reworkPaintCount,
+    reworkVehicles
   };
 });
+
+// 调试：方便在浏览器控制台核对原始数据
+watch(
+  () => monthlyData.value,
+  val => {
+    console.log('[statistics] monthlyData', JSON.parse(JSON.stringify(val)));
+    console.log('[statistics] totalStats', JSON.parse(JSON.stringify(totalStats.value)));
+  },
+  { deep: true }
+);
 
 const dailyColumns = [
   { key: 'date', title: '日期', width: 110, align: 'center' as const },
@@ -107,6 +126,9 @@ const comparisonColumns = [
   { key: 'auditedOrders', title: '已审核工单', width: 100, align: 'center' as const, render: (row: any) => <NTag type="success">{row.auditedOrders || 0}</NTag> },
   { key: 'auditedVehicles', title: '已审核车牌', width: 100, align: 'center' as const },
   { key: 'auditedPaintCount', title: '已审核幅数', width: 100, align: 'center' as const, render: (row: any) => <NTag type="success">{(row.auditedPaintCount || 0).toFixed(1)}</NTag> },
+  { key: 'reworkOrders', title: '返工工单', width: 100, align: 'center' as const, render: (row: any) => <NTag type="error">{row.reworkOrders || 0}</NTag> },
+  { key: 'reworkVehicles', title: '返工车牌', width: 100, align: 'center' as const },
+  { key: 'reworkPaintCount', title: '返工幅数', width: 100, align: 'center' as const, render: (row: any) => <NTag type="error">{(row.reworkPaintCount || 0).toFixed(1)}</NTag> },
   { key: 'avgPaintPerVehicle', title: '台均幅数', width: 100, align: 'center' as const },
   { key: 'avgPaintPerOrder', title: '单均幅数', width: 100, align: 'center' as const }
 ];
@@ -120,7 +142,10 @@ const yearColumns = [
   { key: 'pendingPaintCount', title: '待审核幅数', width: 100, align: 'center' as const, render: (row: any) => <NTag type="warning">{(row.pendingPaintCount || 0).toFixed(1)}</NTag> },
   { key: 'auditedOrders', title: '已审核工单', width: 100, align: 'center' as const, render: (row: any) => <NTag type="success">{row.auditedOrders || 0}</NTag> },
   { key: 'auditedVehicles', title: '已审核车牌', width: 100, align: 'center' as const },
-  { key: 'auditedPaintCount', title: '已审核幅数', width: 100, align: 'center' as const, render: (row: any) => <NTag type="success">{(row.auditedPaintCount || 0).toFixed(1)}</NTag> }
+  { key: 'auditedPaintCount', title: '已审核幅数', width: 100, align: 'center' as const, render: (row: any) => <NTag type="success">{(row.auditedPaintCount || 0).toFixed(1)}</NTag> },
+  { key: 'reworkOrders', title: '返工工单', width: 100, align: 'center' as const, render: (row: any) => <NTag type="error">{row.reworkOrders || 0}</NTag> },
+  { key: 'reworkVehicles', title: '返工车牌', width: 100, align: 'center' as const },
+  { key: 'reworkPaintCount', title: '返工幅数', width: 100, align: 'center' as const, render: (row: any) => <NTag type="error">{(row.reworkPaintCount || 0).toFixed(1)}</NTag> }
 ];
 
 function getDailyStats(shopData: any) {
@@ -382,7 +407,7 @@ async function handleExportPdf() {
 </script>
 
 <template>
-  <div class="min-h-500px flex-col-stretch gap-16px overflow-hidden lt-sm:overflow-auto">
+  <div class="min-h-500px flex-col-stretch gap-16px overflow-auto">
     <NCard :bordered="false" size="small">
       <NSpace align="end" :wrap="true" :size="[16, 12]">
         <NSelect
@@ -428,8 +453,7 @@ async function handleExportPdf() {
       </NGi>
       <NGi>
         <NCard :bordered="true" size="small">
-          <NStatistic label="车辆总数">
-            <NNumberAnimation :value="totalStats.totalVehicles" />
+          <NStatistic label="车辆总数" :value="totalStats.totalVehicles">
             <template #prefix><icon-ic-outline-directions-car /></template>
             <template #suffix>台</template>
           </NStatistic>
@@ -437,16 +461,14 @@ async function handleExportPdf() {
       </NGi>
       <NGi>
         <NCard :bordered="true" size="small">
-          <NStatistic label="工单总数">
-            <NNumberAnimation :value="totalStats.totalOrders" />
+          <NStatistic label="工单总数" :value="totalStats.totalOrders">
             <template #prefix><icon-ic-baseline-description /></template>
           </NStatistic>
         </NCard>
       </NGi>
       <NGi>
         <NCard :bordered="true" size="small">
-          <NStatistic label="总喷漆幅数">
-            <NNumberAnimation :value="totalStats.totalPaintCount" :precision="1" />
+          <NStatistic label="总喷漆幅数" :value="totalStats.totalPaintCount" :precision="1">
             <template #prefix><icon-ic-outline-format-paint /></template>
             <template #suffix>幅</template>
           </NStatistic>
@@ -465,6 +487,33 @@ async function handleExportPdf() {
           <NStatistic label="单均幅数" :value="totalStats.avgPaintPerOrder" :precision="2">
             <template #prefix><icon-ic-outline-calculate /></template>
             <template #suffix>幅/单</template>
+          </NStatistic>
+        </NCard>
+      </NGi>
+    </NGrid>
+
+    <!-- 返工统计 -->
+    <NGrid :cols="3" :x-gap="16" :y-gap="16">
+      <NGi>
+        <NCard :bordered="true" size="small" style="border-left: 3px solid #d03050;">
+          <NStatistic label="返工工单数" :value="totalStats.reworkOrders">
+            <template #prefix><icon-ic-round-warning /></template>
+          </NStatistic>
+        </NCard>
+      </NGi>
+      <NGi>
+        <NCard :bordered="true" size="small" style="border-left: 3px solid #d03050;">
+          <NStatistic label="返工车辆数" :value="totalStats.reworkVehicles">
+            <template #prefix><icon-ic-outline-directions-car /></template>
+            <template #suffix>台</template>
+          </NStatistic>
+        </NCard>
+      </NGi>
+      <NGi>
+        <NCard :bordered="true" size="small" style="border-left: 3px solid #d03050;">
+          <NStatistic label="返工幅数" :value="totalStats.reworkPaintCount" :precision="1">
+            <template #prefix><icon-ic-outline-format-paint /></template>
+            <template #suffix>幅</template>
           </NStatistic>
         </NCard>
       </NGi>
@@ -516,6 +565,60 @@ async function handleExportPdf() {
               </NStatistic>
             </NGi>
           </NGrid>
+        </NCard>
+      </NGi>
+    </NGrid>
+
+    <!-- 异常 / 结算 / 审核率统计 -->
+    <NGrid v-if="overview" :cols="4" :x-gap="16">
+      <NGi>
+        <NCard title="异常工单" :bordered="true" size="small" style="border-left: 3px solid #d03050;">
+          <NGrid :cols="2" :x-gap="12">
+            <NGi>
+              <NStatistic label="工单数">
+                <NNumberAnimation :value="overview.abnormalOrders" />
+              </NStatistic>
+            </NGi>
+            <NGi>
+              <NStatistic label="幅数">
+                <NNumberAnimation :value="overview.abnormalPaintCount" :precision="1" />
+                <template #suffix>幅</template>
+              </NStatistic>
+            </NGi>
+          </NGrid>
+        </NCard>
+      </NGi>
+      <NGi>
+        <NCard title="已结算" :bordered="true" size="small" style="border-left: 3px solid #2080f0;">
+          <NGrid :cols="2" :x-gap="12">
+            <NGi>
+              <NStatistic label="工单数">
+                <NNumberAnimation :value="overview.settledOrders" />
+              </NStatistic>
+            </NGi>
+            <NGi>
+              <NStatistic label="幅数">
+                <NNumberAnimation :value="overview.settledPaintCount" :precision="1" />
+                <template #suffix>幅</template>
+              </NStatistic>
+            </NGi>
+          </NGrid>
+        </NCard>
+      </NGi>
+      <NGi>
+        <NCard title="审核率" :bordered="true" size="small" style="border-left: 3px solid #18a058;">
+          <NStatistic label="已审占比">
+            <NNumberAnimation :value="overview.auditRate" :precision="1" />
+            <template #suffix>%</template>
+          </NStatistic>
+        </NCard>
+      </NGi>
+      <NGi>
+        <NCard title="结算率" :bordered="true" size="small" style="border-left: 3px solid #2080f0;">
+          <NStatistic label="已结占比">
+            <NNumberAnimation :value="overview.settlementRate" :precision="1" />
+            <template #suffix>%</template>
+          </NStatistic>
         </NCard>
       </NGi>
     </NGrid>

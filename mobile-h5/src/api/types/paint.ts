@@ -1,9 +1,11 @@
 // ===== 工单相关类型 =====
 
 export enum PaintOrderStatus {
+  DRAFT = 'DRAFT',
   PENDING = 'PENDING',
   AUDITED = 'AUDITED',
   SETTLED = 'SETTLED',
+  ABNORMAL = 'ABNORMAL',
 }
 
 export enum PaintImageType {
@@ -48,42 +50,46 @@ export interface WorkOrderImage {
 
 export interface PaintWorkOrder {
   id: string
-  orderNo: string
+  orderNo?: string
   shopId: string
   shopName?: string
-  orderDate: string
+  orderDate?: string
   settlementMonth?: string
   carModel?: string
   plateNumber?: string
   vin?: string
+  brand?: string
   customerName?: string
   phone?: string
   contactPerson?: string
   description?: string
   status: PaintOrderStatus
-  isAudited: boolean
   auditedBy?: string
   auditedAt?: string
-  isAbnormal: boolean
   abnormalRemark?: string
+  isRework: boolean
+  reworkRemark?: string
   totalPaintCount: number
   remark?: string
   mergeGroupId?: string
   items?: WorkOrderItem[]
   images?: WorkOrderImage[]
-  settlements?: SettlementRecord[]
+  shop?: { id: string; name: string }
   createdAt: string
   updatedAt: string
+  _isDuplicate?: boolean
+  _duplicateCount?: number
 }
 
 export interface CreateWorkOrderDto {
   orderNo?: string
   shopId: string
-  orderDate: string
+  orderDate?: string
   settlementMonth?: string
   carModel?: string
   plateNumber?: string
   vin?: string
+  brand?: string
   customerName?: string
   phone?: string
   contactPerson?: string
@@ -102,14 +108,21 @@ export interface CreateWorkOrderItemDto {
 export interface UpdateWorkOrderDto {
   id: string
   orderNo?: string
+  orderDate?: string
   carModel?: string
   plateNumber?: string
+  vin?: string
+  brand?: string
   customerName?: string
   phone?: string
+  contactPerson?: string
+  description?: string
   status?: PaintOrderStatus
   settlementMonth?: string
   items?: CreateWorkOrderItemDto[]
   remark?: string
+  isRework?: boolean
+  reworkRemark?: string
 }
 
 export interface PageWorkOrderDto {
@@ -120,7 +133,7 @@ export interface PageWorkOrderDto {
   customerName?: string
   settlementMonth?: string
   status?: PaintOrderStatus
-  isAudited?: boolean
+  isRework?: boolean
 }
 
 export interface PageResult<T> {
@@ -128,6 +141,7 @@ export interface PageResult<T> {
   total: number
   current: number
   size: number
+  totalPaintCount?: number
 }
 
 // ===== 门店相关类型 =====
@@ -166,6 +180,13 @@ export interface MonthlyStatistics {
   auditedOrders: number
   auditedPaintCount: number
   auditedVehicles: number
+  abnormalOrders?: number
+  abnormalPaintCount?: number
+  settledOrders?: number
+  settledPaintCount?: number
+  reworkOrders?: number
+  reworkPaintCount?: number
+  reworkVehicles?: number
 }
 
 export interface DailyStat {
@@ -199,12 +220,37 @@ export interface ShopComparison {
   auditedOrders: number
   auditedPaintCount: number
   auditedVehicles: number
+  reworkOrders?: number
+  reworkPaintCount?: number
+  reworkVehicles?: number
 }
 
 export interface YearOverview {
   settlementMonth: string
   paintCount: number
   orderCount: number
+  reworkOrders?: number
+  reworkPaintCount?: number
+  reworkVehicles?: number
+}
+
+export interface StatisticsOverview {
+  totalOrders: number
+  totalPaintCount: number
+  auditedOrders: number
+  auditedPaintCount: number
+  auditRate: number
+  pendingOrders: number
+  pendingPaintCount: number
+  abnormalOrders: number
+  abnormalPaintCount: number
+  settledOrders: number
+  settledPaintCount: number
+  settlementRate: number
+  avgPaintPerOrder: number
+  reworkOrders?: number
+  reworkPaintCount?: number
+  reworkVehicles?: number
 }
 
 // ===== 幅数标准相关类型 =====

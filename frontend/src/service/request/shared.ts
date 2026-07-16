@@ -62,3 +62,33 @@ export function showErrorMsg(state: RequestInstanceState, message: string) {
     });
   }
 }
+
+/** 解析 token 剩余有效时间（秒） */
+function getTokenRemainingTime(): number {
+  const token = localStg.get('token');
+  if (!token) return -1;
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1]));
+    if (!payload.exp) return -1;
+    return payload.exp - Math.floor(Date.now() / 1000);
+  }
+  catch {
+    return -1;
+  }
+}
+
+let proactiveRefreshPromise: Promise<boolean> | null = null;
+
+/** token 即将过期时主动刷新 */
+export async function tryProactiveRefresh() {
+  const remaining = getTokenRemainingTime();
+  // 小于 120 秒则主动刷新
+  if (remaining < 0 || remaining > 120) return true;
+
+  if (!proactiveRefreshPromise) {
+    proactiveRefreshPromise = handleRefreshToken();
+  }
+  const success = await proactiveRefreshPromise;
+  proactiveRefreshPromise = null;
+  return success;
+}

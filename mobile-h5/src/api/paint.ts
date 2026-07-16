@@ -13,7 +13,7 @@ import type {
   ShopComparison,
   UpdateWorkOrderDto,
   YearOverview,
-  SettlementRecord,
+  StatisticsOverview,
 } from './types/paint'
 
 // ===== 门店 API =====
@@ -52,6 +52,14 @@ export function deleteWorkOrder(id: string) {
   return request.delete(`/paint/work-order/${id}`)
 }
 
+export function findDuplicateWorkOrders(orderNo: string, excludeId?: string) {
+  return request.get<PaintWorkOrder[]>('/paint/work-order/duplicate', { params: { orderNo, excludeId } })
+}
+
+export function mergeWorkOrders(targetId: string, sourceIds: string[]) {
+  return request.post<PaintWorkOrder>('/paint/work-order/merge', { targetId, sourceIds })
+}
+
 export function auditWorkOrder(id: string, auditedBy?: string) {
   return request.post<PaintWorkOrder>('/paint/work-order/audit', { id, auditedBy })
 }
@@ -60,11 +68,15 @@ export function unauditWorkOrder(id: string) {
   return request.post<PaintWorkOrder>(`/paint/work-order/unaudit/${id}`)
 }
 
-export function quickCreateWorkOrder(file: File, shopId: string, settlementMonth?: string, enableOcr = true) {
+/** OCR 识别模式：basic 仅基础资料 / items 仅部位 / all 全部 */
+export type OcrMode = 'basic' | 'items' | 'all'
+
+export function quickCreateWorkOrder(file: File, shopId: string, settlementMonth?: string, enableOcr = true, ocrMode: OcrMode = 'all') {
   const formData = new FormData()
   formData.append('file', file)
   formData.append('shopId', shopId)
   formData.append('enableOcr', enableOcr ? 'true' : 'false')
+  formData.append('ocrMode', ocrMode)
   if (settlementMonth)
     formData.append('settlementMonth', settlementMonth)
 
@@ -75,13 +87,32 @@ export function quickCreateWorkOrder(file: File, shopId: string, settlementMonth
 }
 
 // OCR 识别（不创建工单，仅返回识别结果）
-export function ocrRecognizeImage(file: File, shopId?: string) {
+export function ocrRecognizeImage(file: File, shopId?: string, ocrMode: OcrMode = 'all') {
   const formData = new FormData()
   formData.append('file', file)
   if (shopId)
     formData.append('shopId', shopId)
+  formData.append('ocrMode', ocrMode)
 
-  return request.post<{ plateNumber: string; orderNo: string; customerName: string; phone: string; carModel: string; date: string; rawText: string }>('/paint/work-order/ocr', formData, {
+  return request.post<{
+    plateNumber: string
+    orderNo: string
+    customerName: string
+    phone: string
+    carModel: string
+    vin: string
+    brand: string
+    date: string
+    rawText: string
+    items?: {
+      categoryId?: string
+      matchedName: string
+      rawText: string
+      quantity: number
+      newPartQuantity: number
+      matched: boolean
+    }[]
+  }>('/paint/work-order/ocr', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
     timeout: 120000,
   })
@@ -136,20 +167,24 @@ export function getYearOverview(year?: number, shopId?: string) {
   return request.get<YearOverview[]>('/paint/statistics/year-overview', { params: { year, shopId } })
 }
 
-// ===== 结算 API =====
-
-export function addSettlementRecord(orderId: string, settlementMonth: string, remark?: string) {
-  return request.post<SettlementRecord>(`/paint/work-order/${orderId}/settlement`, { settlementMonth, remark })
+export function getStatisticsOverview(settlementMonth?: string, shopId?: string) {
+  return request.get<StatisticsOverview>('/paint/statistics/overview', { params: { settlementMonth, shopId } })
 }
 
-export function removeSettlementRecord(orderId: string, recordId: string) {
-  return request.delete(`/paint/work-order/${orderId}/settlement/${recordId}`)
+export function getLatestSettlementMonth() {
+  return request.get<string | null>('/paint/statistics/latest-month')
+}
+
+// ===== 结算 API =====
+
+export function settleWorkOrder(orderId: string, settlementMonth?: string) {
+  return request.post<PaintWorkOrder>(`/paint/work-order/${orderId}/settlement`, { settlementMonth })
+}
+
+export function unsettleWorkOrder(orderId: string) {
+  return request.post<PaintWorkOrder>(`/paint/work-order/${orderId}/unsettle`)
 }
 
 export function setAbnormal(orderId: string, isAbnormal: boolean, abnormalRemark?: string) {
   return request.post(`/paint/work-order/${orderId}/abnormal`, { isAbnormal, abnormalRemark })
-}
-
-export function getSettlementHistory(orderId: string) {
-  return request.get<SettlementRecord[]>(`/paint/work-order/${orderId}/settlements`)
 }

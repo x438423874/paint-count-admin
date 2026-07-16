@@ -13,10 +13,13 @@ const submitting = ref(false)
 
 const form = reactive({
   shopId: '',
+  orderNo: '',
   orderDate: '',
   settlementMonth: '',
   plateNumber: '',
   carModel: '',
+  vin: '',
+  brand: '',
   customerName: '',
   phone: '',
   remark: '',
@@ -172,10 +175,6 @@ async function handleSubmit() {
     showNotify({ type: 'warning', message: '请选择门店' })
     return
   }
-  if (!form.orderDate) {
-    showNotify({ type: 'warning', message: '请选择工单日期' })
-    return
-  }
 
   const validItems = form.items.filter(item => item.quantity > 0)
   if (validItems.length === 0) {
@@ -187,10 +186,13 @@ async function handleSubmit() {
   try {
     await createWorkOrder({
       shopId: form.shopId,
-      orderDate: form.orderDate,
+      orderNo: form.orderNo || undefined,
+      orderDate: form.orderDate || undefined,
       settlementMonth: form.settlementMonth || undefined,
       plateNumber: form.plateNumber || undefined,
       carModel: form.carModel || undefined,
+      vin: form.vin || undefined,
+      brand: form.brand || undefined,
       customerName: form.customerName || undefined,
       phone: form.phone || undefined,
       remark: form.remark || undefined,
@@ -241,6 +243,13 @@ const batchResults = ref<Array<{ fileName: string; success: boolean; message: st
 const showBatchResult = ref(false)
 // 是否启用 OCR 识别（关闭时仅创建带图片的空工单，速度更快）
 const enableOcr = ref(true)
+// OCR 识别模式：basic 仅基础资料 / items 仅部位 / all 全部
+const ocrMode = ref<'basic' | 'items' | 'all'>('all')
+const ocrModeOptions = [
+  { label: '全部', value: 'all' },
+  { label: '仅基础资料', value: 'basic' },
+  { label: '仅部位', value: 'items' },
+]
 
 async function batchQuickCreate(files: File[]) {
   batchCreating.value = true
@@ -264,7 +273,7 @@ async function batchQuickCreate(files: File[]) {
     for (let attempt = 0; attempt <= MAX_RETRY; attempt++) {
       try {
         const compressed = await compressImage(file)
-        await quickCreateWorkOrder(compressed, form.shopId, form.settlementMonth || undefined, enableOcr.value)
+        await quickCreateWorkOrder(compressed, form.shopId, form.settlementMonth || undefined, enableOcr.value, ocrMode.value)
         success = true
         lastErr = null
         break
@@ -347,7 +356,7 @@ function handleOcrRecognize() {
     ocrLoading.value = true
     try {
       const compressed = await compressImage(file)
-      const result = await ocrRecognizeImage(compressed, form.shopId)
+      const result = await ocrRecognizeImage(compressed, form.shopId, ocrMode.value)
 
       const fieldMap = [
         { key: 'plateNumber', label: '车牌号', ocrKey: 'plateNumber' },
@@ -355,6 +364,9 @@ function handleOcrRecognize() {
         { key: 'customerName', label: '客户名称', ocrKey: 'customerName' },
         { key: 'phone', label: '联系电话', ocrKey: 'phone' },
         { key: 'carModel', label: '车型', ocrKey: 'carModel' },
+        { key: 'vin', label: '车架号', ocrKey: 'vin' },
+        { key: 'brand', label: '品牌', ocrKey: 'brand' },
+        { key: 'orderDate', label: '工单日期', ocrKey: 'date' },
       ]
 
       const filledMessages: string[] = []
@@ -371,6 +383,23 @@ function handleOcrRecognize() {
         }
         else if (currentValue !== ocrValue) {
           conflicts.push({ key, label, oldValue: currentValue, newValue: ocrValue, checked: false })
+        }
+      }
+
+      // 部位项目：用 OCR 识别到的部位填充（仅填充数量为0的部位）
+      if (result.items && result.items.length > 0) {
+        const matchedItems = result.items.filter(it => it.matched && it.categoryId)
+        let filledItemCount = 0
+        for (const ocrItem of matchedItems) {
+          const formItem = form.items.find(fi => fi.categoryId === ocrItem.categoryId)
+          if (formItem && (!formItem.quantity || formItem.quantity === 0)) {
+            formItem.quantity = ocrItem.quantity
+            formItem.newPartQuantity = ocrItem.newPartQuantity
+            filledItemCount++
+          }
+        }
+        if (filledItemCount > 0) {
+          filledMessages.push(`部位(${filledItemCount})`)
         }
       }
 
@@ -412,7 +441,7 @@ function confirmOcrConflict() {
 onMounted(() => {
   isManual.value = (route.query.mode as string) === 'manual'
   const today = new Date().toISOString().slice(0, 10)
-  form.orderDate = today
+  // 工单日期默认不填，可通过OCR识别填充
   form.settlementMonth = today.slice(0, 7)
   loadShops()
   loadSpecialPaints()
@@ -443,6 +472,12 @@ onMounted(() => {
         <van-switch v-model="enableOcr" size="20px" />
         <span class="ocr-switch-tip">{{ enableOcr ? '开启：自动识别车牌等信息' : '关闭：仅创建带图片的空工单（更快）' }}</span>
       </div>
+      <div v-if="enableOcr" class="ocr-mode-row">
+        <span class="ocr-mode-label">识别模式</span>
+        <van-radio-group v-model="ocrMode" direction="horizontal">
+          <van-radio v-for="opt in ocrModeOptions" :key="opt.value" :name="opt.value">{{ opt.label }}</van-radio>
+        </van-radio-group>
+      </div>
     </div>
 
     <div class="divider-text" @click="isManual = true">
@@ -459,9 +494,13 @@ onMounted(() => {
         </van-button>
       </div>
       <van-cell title="门店" :value="shopName || '请选择门店'" is-link @click="showShopPicker = true" />
-      <van-cell title="工单日期" :value="form.orderDate || '请选择日期'" is-link @click="showDatePicker = true" />
+      <van-field v-model="form.orderNo" label="工单号" placeholder="请输入工单号" />
+      <van-cell title="工单日期" :value="form.orderDate || '请选择日期（可选）'" is-link @click="showDatePicker = true" />
+      <van-cell title="结算月份" :value="form.settlementMonth || '请选择结算月份'" is-link @click="showMonthPicker = true" />
       <van-field v-model="form.plateNumber" label="车牌号" placeholder="请输入车牌号" />
       <van-field v-model="form.carModel" label="车型" placeholder="请输入车型" />
+      <van-field v-model="form.vin" label="车架号" placeholder="请输入车架号(VIN)" />
+      <van-field v-model="form.brand" label="品牌" placeholder="请输入品牌" />
       <van-field v-model="form.customerName" label="客户名称" placeholder="请输入客户名称" />
       <van-field v-model="form.phone" label="联系电话" placeholder="请输入电话" type="tel" />
       <van-field v-model="form.remark" label="备注" type="textarea" placeholder="请输入备注" rows="2" />
@@ -681,6 +720,24 @@ onMounted(() => {
   color: #969799;
   flex: 1;
   line-height: 1.4;
+}
+
+.ocr-mode-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+  padding: 10px 16px;
+  background: #f7f8fa;
+  border-radius: 8px;
+  width: 86%;
+}
+
+.ocr-mode-label {
+  font-size: 14px;
+  font-weight: 500;
+  color: #333;
+  white-space: nowrap;
 }
 
 .divider-text {

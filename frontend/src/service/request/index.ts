@@ -4,7 +4,7 @@ import { useAuthStore } from '@/store/modules/auth';
 import { localStg } from '@/utils/storage';
 import { getServiceBaseURL } from '@/utils/service';
 import { $t } from '@/locales';
-import { getAuthorization, handleExpiredRequest, showErrorMsg } from './shared';
+import { getAuthorization, handleExpiredRequest, showErrorMsg, tryProactiveRefresh } from './shared';
 import type { RequestInstanceState } from './type';
 
 const isHttpProxy = import.meta.env.DEV && import.meta.env.VITE_HTTP_PROXY === 'Y';
@@ -19,6 +19,7 @@ export const request = createFlatRequest<App.Service.Response, RequestInstanceSt
   },
   {
     async onRequest(config) {
+      await tryProactiveRefresh();
       const Authorization = getAuthorization();
       Object.assign(config.headers, { Authorization });
 
@@ -31,7 +32,8 @@ export const request = createFlatRequest<App.Service.Response, RequestInstanceSt
     },
     async onBackendFail(response, instance) {
       const authStore = useAuthStore();
-      const responseCode = String(response.data.code);
+      const responseCode = String(response.data.code ?? (response.data as any).statusCode);
+      const httpStatus = response.status;
 
       function handleLogout() {
         authStore.resetStore();
@@ -79,7 +81,7 @@ export const request = createFlatRequest<App.Service.Response, RequestInstanceSt
       // when the backend response code is in `expiredTokenCodes`, it means the token is expired, and refresh token
       // the api `refreshToken` can not return error code in `expiredTokenCodes`, otherwise it will be a dead loop, should return `logoutCodes` or `modalLogoutCodes`
       const expiredTokenCodes = import.meta.env.VITE_SERVICE_EXPIRED_TOKEN_CODES?.split(',') || [];
-      if (expiredTokenCodes.includes(responseCode)) {
+      if (expiredTokenCodes.includes(responseCode) || httpStatus === 401) {
         const success = await handleExpiredRequest(request.state);
         if (success) {
           const Authorization = getAuthorization();
@@ -103,8 +105,10 @@ export const request = createFlatRequest<App.Service.Response, RequestInstanceSt
       // get backend error message and code
       if (error.code === BACKEND_ERROR_CODE) {
         message = error.response?.data?.message ?? message;
-        backendErrorCode = String(error.response?.data?.code ?? '');
+        backendErrorCode = String(error.response?.data?.code ?? (error.response?.data as any)?.statusCode ?? '');
       }
+
+      const httpStatus = error.response?.status;
 
       // the error message is displayed in the modal
       const modalLogoutCodes = import.meta.env.VITE_SERVICE_MODAL_LOGOUT_CODES?.split(',') || [];
@@ -114,7 +118,7 @@ export const request = createFlatRequest<App.Service.Response, RequestInstanceSt
 
       // when the token is expired, refresh token and retry request, so no need to show error message
       const expiredTokenCodes = import.meta.env.VITE_SERVICE_EXPIRED_TOKEN_CODES?.split(',') || [];
-      if (expiredTokenCodes.includes(backendErrorCode)) {
+      if (expiredTokenCodes.includes(backendErrorCode) || httpStatus === 401) {
         return;
       }
 

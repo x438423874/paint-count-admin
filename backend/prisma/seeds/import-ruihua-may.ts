@@ -307,7 +307,7 @@ async function importRuihuaMay() {
         settlementMonth,
         carModel,
         plateNumber,
-        status: 'COMPLETED',
+        status: 'COMPLETED' as any,
         isAudited: true,
         auditedAt: new Date(),
         totalPaintCount,

@@ -44,11 +44,6 @@ export function canBatchOcr(): boolean {
   return hasRole('ROLE_SUPER', 'R_SUPER', 'ROLE_SHOP_ADMIN');
 }
 
-/** 是否可使用批量标注（超管/门店管理员） */
-export function canBatchAnnotate(): boolean {
-  return hasRole('ROLE_SUPER', 'R_SUPER', 'ROLE_SHOP_ADMIN');
-}
-
 /** 是否可合并工单（超管/门店管理员） */
 export function canMerge(): boolean {
   return hasRole('ROLE_SUPER', 'R_SUPER', 'ROLE_SHOP_ADMIN');

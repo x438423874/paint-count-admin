@@ -1,28 +1,35 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '@lib/shared/prisma/prisma.service';
-import { Prisma } from '@prisma/client';
 import { AuditWorkOrderDto } from '../work-order/dto/work-order.dto';
+import { SettlementMonthService } from './settlement-month.service';
 
 @Injectable()
 export class WorkOrderAuditService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly settlementMonthService: SettlementMonthService,
+  ) {}
 
   /** 审核工单 */
   async audit(dto: AuditWorkOrderDto) {
-    const existing = await this.prisma.paintWorkOrder.findUnique({ where: { id: dto.id } });
+    const existing = await this.prisma.paintWorkOrder.findUnique({
+      where: { id: dto.id },
+    });
     if (!existing) throw new NotFoundException('工单不存在');
 
-    if (existing.isAudited) {
+    // 封单校验
+    await this.settlementMonthService.assertOrderNotSealed(dto.id);
+
+    if (existing.status === 'AUDITED' || existing.status === 'SETTLED' || existing.status === 'ABNORMAL') {
       throw new BadRequestException('工单已审核，不能重复审核');
     }
 
     return this.prisma.paintWorkOrder.update({
       where: { id: dto.id },
       data: {
-        isAudited: true,
         auditedAt: new Date(),
         auditedBy: dto.auditedBy || null,
-        status: 'COMPLETED',
+        status: 'AUDITED' as any,
       },
       include: { items: { include: { category: true, specialPaint: true } }, shop: true },
     });
@@ -30,20 +37,24 @@ export class WorkOrderAuditService {
 
   /** 取消审核 */
   async unaudit(id: string) {
-    const existing = await this.prisma.paintWorkOrder.findUnique({ where: { id } });
+    const existing = await this.prisma.paintWorkOrder.findUnique({
+      where: { id },
+    });
     if (!existing) throw new NotFoundException('工单不存在');
 
-    if (!existing.isAudited) {
-      throw new BadRequestException('工单未审核，无需取消');
+    // 封单校验
+    await this.settlementMonthService.assertOrderNotSealed(id);
+
+    if (existing.status !== 'AUDITED') {
+      throw new BadRequestException('只有已审核且未结算、未异常的工单才能取消审核');
     }
 
     return this.prisma.paintWorkOrder.update({
       where: { id },
       data: {
-        isAudited: false,
         auditedAt: null,
         auditedBy: null,
-        status: 'PENDING',
+        status: 'PENDING' as any,
       },
       include: { items: { include: { category: true, specialPaint: true } }, shop: true },
     });

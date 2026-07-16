@@ -13,7 +13,7 @@ export class PaintStandardService {
     });
   }
 
-  /** 获取门店的可用类别及标准：优先从关联的标准模板获取，没有模板则返回空 */
+  /** 获取门店的可用类别及标准：优先从关联的标准模板获取，没有模板则返回空。按使用频次排序（使用越多的部位越靠前） */
   async findShopCategoriesWithStandard(shopId: string) {
     // 查找门店关联的标准模板
     const shop = await (this.prisma as any).paintShop.findUnique({
@@ -28,8 +28,21 @@ export class PaintStandardService {
       return [];
     }
 
-    // 从标准模板项目获取部位和系数
-    return shop.standardTemplate.items.map((item: any) => ({
+    // 统计每个部位的使用频次（该门店所有工单中该部位被使用的次数）
+    const usageCounts = await (this.prisma as any).paintWorkOrderItem.groupBy({
+      by: ['categoryId'],
+      where: {
+        order: { shopId },
+      },
+      _sum: { quantity: true },
+    });
+    const usageMap = new Map<string, number>();
+    for (const uc of usageCounts) {
+      usageMap.set(uc.categoryId, uc._sum.quantity || 0);
+    }
+
+    // 从标准模板项目获取部位和系数，按使用频次降序排序（使用多的在前），频次相同的按sortOrder排
+    const items = shop.standardTemplate.items.map((item: any) => ({
       categoryId: item.categoryId,
       category: item.category,
       coefficient: item.coefficient,
@@ -38,7 +51,17 @@ export class PaintStandardService {
       specialPaintId: item.specialPaintId || null,
       specialPaint: item.specialPaint || null,
       standardId: item.id,
+      _usageCount: usageMap.get(item.categoryId) || 0,
     }));
+
+    items.sort((a: any, b: any) => {
+      // 使用频次高的在前
+      if (b._usageCount !== a._usageCount) return b._usageCount - a._usageCount;
+      // 频次相同，按sortOrder排
+      return (a.category?.sortOrder || 0) - (b.category?.sortOrder || 0);
+    });
+
+    return items.map(({ _usageCount, ...rest }: any) => rest);
   }
 
   async setShopStandards(shopId: string, standards: { categoryId: string; coefficient: number; newPartAddition?: number; alias?: string }[]) {

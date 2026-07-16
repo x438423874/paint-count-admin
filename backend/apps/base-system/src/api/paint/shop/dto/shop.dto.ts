@@ -87,3 +87,14 @@ export class PageShopDto {
   @IsString()
   brand?: string;
 }
+
+export class UpdateCategoryAliasMapDto {
+  @ApiProperty({ description: '店铺ID' })
+  @IsString()
+  @IsNotEmpty()
+  shopId: string;
+
+  @ApiPropertyOptional({ description: '部位别名映射 JSON，键为模板部位名称，值为系统部位ID' })
+  @IsOptional()
+  aliasMap?: Record<string, string>;
+}

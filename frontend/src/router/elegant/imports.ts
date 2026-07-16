@@ -34,4 +34,5 @@ export const views: Record<LastLevelRouteKey, RouteComponent | (() => Promise<Ro
   "paint_standard-template": () => import("@/views/paint/standard-template/index.vue"),
   paint_statistics: () => import("@/views/paint/statistics/index.vue"),
   "paint_work-order": () => import("@/views/paint/work-order/index.vue"),
+  "paint_work-order_reconcile": () => import("@/views/paint/work-order_reconcile/index.vue"),
 };
