@@ -57,66 +57,24 @@ export class LlmOcrService {
       // 全部识别
       let categorySection = '';
       if (categories && categories.length > 0) {
-        const list = categories.map(c => c.alias ? `${c.name}（别名：${c.alias}）` : c.name).join('、');
-        categorySection = `\n6. 系统中的喷漆部位列表为：${list}。请将图片中识别到的部位匹配到上述列表中的名称，匹配不到的 matchedName 返回空字符串""`;
+        const list = categories.map(c => c.alias ? `${c.name}(${c.alias})` : c.name).join(',');
+        categorySection = `\n匹配部位到列表[${list}],未匹配则matchedName为空`;
       }
-      prompt = `你是一个工单信息提取助手。请仔细识别这张汽车维修/喷漆工单图片，提取以下字段并以JSON格式返回：
-{
-  "plateNumber": "车牌号（如粤E12345）",
-  "orderNo": "工单号/作业单号/单号",
-  "customerName": "客户名称/车主姓名",
-  "phone": "联系电话/手机号",
-  "carModel": "车型",
-  "vin": "车架号/VIN码（17位）",
-  "brand": "品牌",
-  "date": "日期（格式YYYY-MM-DD，取接车日期或开单日期）",
-  "items": [{"matchedName": "匹配的系统部位名", "rawText": "图片上的原始文字", "quantity": 1, "newPartQuantity": 0}]
-}
-要求：
-1. 只返回JSON，不要任何其他内容
-2. 识别不到的字段返回空字符串""，items 识别不到返回空数组[]
-3. 日期统一为YYYY-MM-DD格式
-4. 车牌号要包含省份简称
-5. 不要编造信息，只提取图片中实际存在的内容${categorySection}
-7. items 中 quantity 为喷漆幅数/数量，newPartQuantity 为新件数量（通常为0）`;
-      maxTokens = 2000;
+      prompt = `识别工单图片,返回JSON:\n{"plateNumber":"","orderNo":"","customerName":"","phone":"","carModel":"","vin":"","brand":"","date":"","items":[{"matchedName":"","quantity":1,"newPartQuantity":0}]}\n规则:只返回JSON|未识别字段返空串items返[]|日期YYYY-MM-DD|车牌含省份简称(旧车牌可能仅6位字母数字)勿编造=quantity为幅数newPartQuantity为新件数默认0${categorySection}`;
+      maxTokens = 800;
     } else if (wantBasic) {
       // 仅基础资料
-      prompt = `你是一个工单信息提取助手。请仔细识别这张汽车维修/喷漆工单图片，提取以下字段并以JSON格式返回：
-{
-  "plateNumber": "车牌号（如粤E12345）",
-  "orderNo": "工单号/作业单号/单号",
-  "customerName": "客户名称/车主姓名",
-  "phone": "联系电话/手机号",
-  "carModel": "车型",
-  "vin": "车架号/VIN码（17位）",
-  "brand": "品牌",
-  "date": "日期（格式YYYY-MM-DD，取接车日期或开单日期）"
-}
-要求：
-1. 只返回JSON，不要任何其他内容
-2. 识别不到的字段返回空字符串""
-3. 日期统一为YYYY-MM-DD格式
-4. 车牌号要包含省份简称
-5. 不要编造信息，只提取图片中实际存在的内容`;
-      maxTokens = 1000;
+      prompt = `识别工单图片,返回JSON:\n{"plateNumber":"","orderNo":"","customerName":"","phone":"","carModel":"","vin":"","brand":"","date":""}\n规则:只返回JSON|未识别字段返空串|日期YYYY-MM-DD|车牌含省份简称(旧车牌可能仅6位字母数字)|勿编造`;
+      maxTokens = 500;
     } else {
       // 仅部位
       let categorySection = '';
       if (categories && categories.length > 0) {
-        const list = categories.map(c => c.alias ? `${c.name}（别名：${c.alias}）` : c.name).join('、');
-        categorySection = `\n1. 系统中的喷漆部位列表为：${list}。请将图片中识别到的部位匹配到上述列表中的名称，匹配不到的 matchedName 返回空字符串""`;
+        const list = categories.map(c => c.alias ? `${c.name}(${c.alias})` : c.name).join(',');
+        categorySection = `\n匹配部位到列表[${list}],未匹配则matchedName为空`;
       }
-      prompt = `你是一个工单信息提取助手。请仔细识别这张汽车维修/喷漆工单图片中的喷漆部位信息，以JSON格式返回：
-{
-  "items": [{"matchedName": "匹配的系统部位名", "rawText": "图片上的原始文字", "quantity": 1, "newPartQuantity": 0}]
-}
-要求：
-1. 只返回JSON，不要任何其他内容
-2. items 识别不到返回空数组[]
-3. 不要编造信息，只提取图片中实际存在的内容${categorySection}
-4. items 中 quantity 为喷漆幅数/数量，newPartQuantity 为新件数量（通常为0）`;
-      maxTokens = 1500;
+      prompt = `识别工单图片喷漆部位,返回JSON:\n{"items":[{"matchedName":"","quantity":1,"newPartQuantity":0}]}\n规则:只返回JSON|未识别返[]|勿编造|quantity为幅数newPartQuantity为新件数默认0${categorySection}`;
+      maxTokens = 600;
     }
 
     const controller = new AbortController();
@@ -171,7 +129,7 @@ export class LlmOcrService {
         vin: wantBasic ? (parsed.vin || '') : '',
         brand: wantBasic ? (parsed.brand || '') : '',
         date: wantBasic ? (parsed.date || '') : '',
-        rawText: content,
+        rawText: '',  // 不再保存模型原始输出，节省输出 token
         items: wantItems ? (Array.isArray(parsed.items) ? parsed.items.map((item: any) => ({
           matchedName: item.matchedName || '',
           rawText: item.rawText || '',

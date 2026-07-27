@@ -48,6 +48,36 @@ export interface WorkOrderImage {
   description?: string
 }
 
+// ===== 车辆主数据 =====
+export interface PaintVehicle {
+  id: string
+  plateNumber: string
+  vin?: string | null
+  carModel?: string | null
+  brand?: string | null
+  customerName?: string | null
+  phone?: string | null
+  contactPerson?: string | null
+  remark?: string | null
+  lastOrderAt?: string | null
+  lastShopId?: string | null
+  lastShopName?: string | null
+  totalOrderCount: number
+  totalPaintCount: number | string
+  createdAt: string
+  updatedAt?: string | null
+}
+
+export interface VehicleHistorySummary {
+  totalOrders: number
+  totalPaintCount: number
+  firstOrderAt?: string | null
+  lastOrderAt?: string | null
+  shopCount: number
+  reworkCount: number
+  abnormalCount: number
+}
+
 export interface PaintWorkOrder {
   id: string
   orderNo?: string
@@ -103,6 +133,7 @@ export interface CreateWorkOrderItemDto {
   quantity?: number
   newPartQuantity?: number
   specialPaintId?: string
+  overridePaintCount?: number
 }
 
 export interface UpdateWorkOrderDto {
@@ -287,6 +318,41 @@ export interface PaintSpecialPaint {
   description?: string
   isActive?: boolean
   templateId?: string
+}
+
+// ===== 车辆 DTO =====
+
+export interface CreateVehicleDto {
+  plateNumber: string
+  vin?: string
+  carModel?: string
+  brand?: string
+  customerName?: string
+  phone?: string
+  contactPerson?: string
+  remark?: string
+}
+
+export interface UpdateVehicleDto {
+  id: string
+  plateNumber?: string
+  vin?: string
+  carModel?: string
+  brand?: string
+  customerName?: string
+  phone?: string
+  contactPerson?: string
+  remark?: string
+}
+
+export interface PageVehicleDto {
+  current?: number
+  size?: number
+  plateNumber?: string
+  customerName?: string
+  phone?: string
+  vin?: string
+  shopId?: string
 }
 
 // ===== 结算记录 =====

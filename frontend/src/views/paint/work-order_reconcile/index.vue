@@ -21,7 +21,8 @@ import {
   NDatePicker,
   NPopconfirm,
   NAlert,
-  useMessage
+  useMessage,
+  useDialog
 } from 'naive-ui';
 import {
   fetchPaintShopList,
@@ -40,22 +41,27 @@ import WorkOrderDetailModal from '../work-order/modules/work-order-detail-modal.
 
 const router = useRouter();
 const message = useMessage();
+const dialog = useDialog();
 const allowSettle = canSettle();
 
 // 封单状态
 const isSealed = ref(false);
 const sealLoading = ref(false);
+const sealStats = ref<{ orderCount: number; totalPaintCount: number; reworkCount: number } | null>(null);
 
 async function checkSealStatus() {
   if (!form.shopId || !form.settlementMonth) {
     isSealed.value = false;
+    sealStats.value = null;
     return;
   }
   try {
     const { data } = await getSealStatus(form.shopId, form.settlementMonth);
     isSealed.value = data?.isSealed || false;
+    sealStats.value = data?.stats || null;
   } catch {
     isSealed.value = false;
+    sealStats.value = null;
   }
 }
 
@@ -66,11 +72,27 @@ async function handleSeal() {
     await sealSettlementMonth(form.shopId, form.settlementMonth);
     isSealed.value = true;
     message.success('封单成功，该月工单已锁定');
+    await checkSealStatus();
   } catch (e: any) {
     message.error(e?.message || '封单失败');
   } finally {
     sealLoading.value = false;
   }
+}
+
+function confirmSeal() {
+  if (!form.shopId || !form.settlementMonth) return;
+  const stats = sealStats.value;
+  const statsText = stats
+    ? `\n\n该月共 ${stats.orderCount} 条工单（${Number(stats.totalPaintCount).toFixed(1)} 幅）${stats.reworkCount > 0 ? `，另有返工 ${stats.reworkCount} 条` : ''}`
+    : '';
+  dialog.warning({
+    title: '确认封单',
+    content: `确定封单 ${form.settlementMonth} 月份？封单后该月工单将不允许修改、删除和审核操作。${statsText}`,
+    positiveText: '确认封单',
+    negativeText: '取消',
+    onPositiveClick: handleSeal,
+  });
 }
 
 async function handleUnseal() {
@@ -265,7 +287,7 @@ const columns = [
   {
     title: '系统状态',
     key: 'status',
-    width: 100,
+    width: 120,
     render: (row: ReconcileItem) => {
       if (!row.status) return '-';
       const typeMap: Record<string, 'default' | 'warning' | 'success' | 'info' | 'error'> = {
@@ -276,7 +298,10 @@ const columns = [
         ABNORMAL: 'error',
         COMPLETED: 'success'
       };
-      return <NTag size="small" type={typeMap[row.status] || 'default'}>{getStatusLabel(row.status)}</NTag>;
+      return <NSpace size={4} align="center">
+        <NTag size="small" type={typeMap[row.status] || 'default'}>{getStatusLabel(row.status)}</NTag>
+        {row.isRework && <NTag size="small" type="error">返工</NTag>}
+      </NSpace>;
     }
   },
   {
@@ -426,12 +451,7 @@ loadShops();
         </NSpace>
       </NAlert>
       <NSpace v-else-if="form.shopId && form.settlementMonth" class="mb-12px" align="center">
-        <NPopconfirm @positive-click="handleSeal">
-          <template #trigger>
-            <NButton size="small" type="error" :loading="sealLoading">封单</NButton>
-          </template>
-          确定封单 {{ form.settlementMonth }} 月份？封单后该月工单将不允许修改、删除和审核操作。
-        </NPopconfirm>
+        <NButton size="small" type="error" :loading="sealLoading" @click="confirmSeal">封单</NButton>
         <span style="color: #999; font-size: 13px">对账完成后封单，锁定该月数据</span>
       </NSpace>
 
@@ -463,6 +483,13 @@ loadShops();
             </NCard>
             <NCard size="small" style="min-width: 140px">
               <NStatistic label="重复" :value="result.summary.duplicateCount" />
+            </NCard>
+            <NCard v-if="result.summary.reworkExcludedCount > 0" size="small" style="min-width: 200px">
+              <NStatistic label="已排除返工">
+                <template #default>
+                  {{ result.summary.reworkExcludedCount }} 条（{{ result.summary.reworkExcludedPaintCount.toFixed(1) }} 幅）
+                </template>
+              </NStatistic>
             </NCard>
           </NSpace>
 

@@ -17,11 +17,40 @@ export class SettlementMonthService {
       throw new BadRequestException(`${month} 已封单，请勿重复操作`);
     }
 
-    return this.prisma.paintSettlementMonth.upsert({
+    // 查询该月工单统计
+    const stats = await this.prisma.paintWorkOrder.aggregate({
+      where: {
+        shopId,
+        settlementMonth: month,
+        isRework: false,
+      },
+      _count: true,
+      _sum: { totalPaintCount: true },
+    });
+
+    const reworkStats = await this.prisma.paintWorkOrder.aggregate({
+      where: {
+        shopId,
+        settlementMonth: month,
+        isRework: true,
+      },
+      _count: true,
+    });
+
+    const result = await this.prisma.paintSettlementMonth.upsert({
       where: { shopId_month: { shopId, month } },
       update: { isSealed: true, sealedAt: new Date(), sealedBy: sealedBy || null },
       create: { shopId, month, isSealed: true, sealedAt: new Date(), sealedBy: sealedBy || null },
     });
+
+    return {
+      ...result,
+      stats: {
+        orderCount: stats._count,
+        totalPaintCount: stats._sum.totalPaintCount || 0,
+        reworkCount: reworkStats._count,
+      },
+    };
   }
 
   /** 解封：解除门店+月份的封单锁定 */
@@ -42,11 +71,40 @@ export class SettlementMonthService {
     });
   }
 
-  /** 查询门店某月的封单状态，不存在则返回 null */
+  /** 查询门店某月的封单状态（含该月工单统计） */
   async getSealStatus(shopId: string, month: string) {
-    return this.prisma.paintSettlementMonth.findUnique({
+    const record = await this.prisma.paintSettlementMonth.findUnique({
       where: { shopId_month: { shopId, month } },
     });
+
+    // 查询该月工单统计
+    const stats = await this.prisma.paintWorkOrder.aggregate({
+      where: {
+        shopId,
+        settlementMonth: month,
+        isRework: false,
+      },
+      _count: true,
+      _sum: { totalPaintCount: true },
+    });
+
+    const reworkStats = await this.prisma.paintWorkOrder.aggregate({
+      where: {
+        shopId,
+        settlementMonth: month,
+        isRework: true,
+      },
+      _count: true,
+    });
+
+    return {
+      ...(record || { id: null, shopId, month, isSealed: false, sealedAt: null, sealedBy: null, createdAt: null, updatedAt: null }),
+      stats: {
+        orderCount: stats._count,
+        totalPaintCount: stats._sum.totalPaintCount || 0,
+        reworkCount: reworkStats._count,
+      },
+    };
   }
 
   /** 批量查询门店多个月的封单状态 */

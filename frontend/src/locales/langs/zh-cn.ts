@@ -176,6 +176,7 @@ const local: App.I18n.Schema = {
     paint_category: '部位管理',
     paint_shop: '门店管理',
     'paint_standard-template': '标准模板',
+    paint_vehicle: '车辆管理',
     'paint_work-order': '工单管理',
     'paint_work-order_reconcile': '工单对账',
     paint_statistics: '幅数统计',

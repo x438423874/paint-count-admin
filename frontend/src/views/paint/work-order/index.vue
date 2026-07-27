@@ -1,8 +1,8 @@
 <script setup lang="tsx">
 import { NButton, NPopconfirm, NTag, NSpace, NImage, NCard, NStatistic, NProgress, NAlert, NDivider, NModal, NEmpty, NText, NRadioGroup, NRadio, NRadioButton, NDescriptions, NDescriptionsItem, NSelect, NForm, NFormItem, NSpin, NDropdown, NInput } from 'naive-ui';
 
-import { ref, computed, onMounted } from 'vue';
-import { useRoute } from 'vue-router';
+import { ref, computed, onMounted, h } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import {
   fetchWorkOrderPage,
   deleteWorkOrder,
@@ -16,6 +16,8 @@ import {
   mergeWorkOrders,
   settleWorkOrder,
   unsettleWorkOrder,
+  batchSettleWorkOrders,
+  batchUnsettleWorkOrders,
   setAbnormal,
   importWorkOrderExcel,
   exportWorkOrderExcel,
@@ -46,6 +48,7 @@ const currentOrder = ref<any>(null);
 const selectedShopId = ref<string | null>(null);
 
 const route = useRoute();
+const router = useRouter();
 onMounted(() => {
   const id = route.query.id as string;
   if (id) {
@@ -108,11 +111,11 @@ function toggleMergeSelect(orderId: string, checked: boolean) {
   }
 }
 
-async function openMergeModal(orderNo: string, currentId: string) {
+async function openMergeModal(orderNo: string, currentId: string, settlementMonth?: string) {
   mergeTargetId.value = currentId;
   mergeOrderNo.value = orderNo;
   mergeSelectedIds.value = [];
-  const { data, error } = await findDuplicateOrders(orderNo, currentId);
+  const { data, error } = await findDuplicateOrders(orderNo, currentId, settlementMonth);
   if (!error && data) {
     duplicateOrders.value = data;
     // 默认全选
@@ -216,22 +219,17 @@ const showQuickCreate = ref(false);
 const quickShopId = ref<string>('');
 const quickSettlementMonth = ref<string>(getCurrentMonth());
 // 快速录入 OCR 识别模式
-const quickOcrMode = ref<'basic' | 'items' | 'all'>('all');
+const quickOcrMode = ref<'basic' | 'items' | 'all'>('basic');
 
 // 批量 OCR 填充相关
 const showBatchOcrFill = ref(false);
 const batchOcrLoading = ref(false);
 const batchOcrMode = ref<'selected' | 'all'>('selected');
 // 批量 OCR 填充识别模式
-const batchOcrFillMode = ref<'basic' | 'items' | 'all'>('all');
+const batchOcrFillMode = ref<'basic' | 'items' | 'all'>('basic');
 const batchOcrProgress = ref({ current: 0, total: 0, success: 0, failed: 0, skipped: 0 });
 const batchOcrResult = ref<{ success: number; failed: number; skipped: number; details: string[] } | null>(null);
 const batchOcrCancelled = ref(false);
-
-// 检查工单是否有空白字段（车牌号、工单号、客户名称、电话、车型、车架号、工单日期）
-function hasEmptyFields(order: any): boolean {
-  return !order.plateNumber || !order.orderNo || !order.customerName || !order.phone || !order.carModel || !order.vin || !order.brand || !order.orderDate;
-}
 
 // 获取待 OCR 处理的工单列表
 function isUnauditedStatus(status?: string): boolean {
@@ -242,7 +240,7 @@ function getOcrPendingOrders(): any[] {
   const source = batchOcrMode.value === 'selected'
     ? data.value.filter((o: any) => checkedRowKeys.value.includes(o.id))
     : data.value;
-  return source.filter((o: any) => isUnauditedStatus(o.status) && o.images?.length > 0 && hasEmptyFields(o));
+  return source.filter((o: any) => isUnauditedStatus(o.status) && o.images?.length > 0);
 }
 
 // 批量 OCR 填充
@@ -279,7 +277,16 @@ async function handleBatchOcrFill() {
       const formData = new FormData();
       formData.append('file', blob, 'image.jpg');
       formData.append('shopId', order.shopId);
-      formData.append('ocrMode', batchOcrFillMode.value);
+      // 智能选择OCR模式：根据当前工单已填字段决定识别范围
+      const basicFields = [order.plateNumber, order.orderNo, order.customerName, order.phone, order.carModel, order.vin, order.brand, order.orderDate];
+      const basicFilled = basicFields.some((v: any) => v && String(v).trim());
+      const itemsFilled = (order.items || []).some((it: any) => it.quantity && it.quantity > 0);
+      let smartMode: 'basic' | 'items' | 'all' = 'all';
+      if (basicFilled && !itemsFilled) smartMode = 'items';
+      else if (!basicFilled && itemsFilled) smartMode = 'basic';
+      // 如果用户手动选了非all模式，优先用手动选择；否则用智能模式
+      const effectiveMode = batchOcrFillMode.value !== 'all' ? batchOcrFillMode.value : smartMode;
+      formData.append('ocrMode', effectiveMode);
 
       // OCR 识别
       const { data: ocrResult, error: ocrError } = await ocrRecognizeImage(formData);
@@ -287,7 +294,7 @@ async function handleBatchOcrFill() {
         throw new Error('OCR识别失败');
       }
 
-      // 空白字段直接填充，工单号/日期/车架号OCR值不同时覆盖
+      // 空白字段直接填充，已填字段不覆盖
       const updateData: any = { id: order.id };
       let filledFields: string[] = [];
       // 车牌号：仅填充空白
@@ -295,12 +302,10 @@ async function handleBatchOcrFill() {
         updateData.plateNumber = ocrResult.plateNumber;
         filledFields.push('车牌号');
       }
-      // 工单号：空白时填充，OCR值不同时覆盖
-      if (ocrResult.orderNo) {
-        if (!order.orderNo || order.orderNo !== ocrResult.orderNo) {
-          updateData.orderNo = ocrResult.orderNo;
-          filledFields.push(order.orderNo ? '工单号(覆盖)' : '工单号');
-        }
+      // 工单号：仅填充空白
+      if (!order.orderNo && ocrResult.orderNo) {
+        updateData.orderNo = ocrResult.orderNo;
+        filledFields.push('工单号');
       }
       if (!order.customerName && ocrResult.customerName) {
         updateData.customerName = ocrResult.customerName;
@@ -314,27 +319,20 @@ async function handleBatchOcrFill() {
         updateData.carModel = ocrResult.carModel;
         filledFields.push('车型');
       }
-      // 车架号：空白时填充，OCR值不同时覆盖
-      if ((ocrResult as any).vin) {
-        if (!order.vin || order.vin !== (ocrResult as any).vin) {
-          updateData.vin = (ocrResult as any).vin;
-          filledFields.push(order.vin ? '车架号(覆盖)' : '车架号');
-        }
+      // 车架号：仅填充空白
+      if ((ocrResult as any).vin && !order.vin) {
+        updateData.vin = (ocrResult as any).vin;
+        filledFields.push('车架号');
       }
-      // 品牌：空白时填充，OCR值不同时覆盖
-      if ((ocrResult as any).brand) {
-        if (!order.brand || order.brand !== (ocrResult as any).brand) {
-          updateData.brand = (ocrResult as any).brand;
-          filledFields.push(order.brand ? '品牌(覆盖)' : '品牌');
-        }
+      // 品牌：仅填充空白
+      if ((ocrResult as any).brand && !order.brand) {
+        updateData.brand = (ocrResult as any).brand;
+        filledFields.push('品牌');
       }
-      // 工单日期：空白时填充，OCR值不同时覆盖
-      if ((ocrResult as any).date) {
-        const orderDateStr = order.orderDate ? order.orderDate.slice(0, 10) : '';
-        if (!orderDateStr || orderDateStr !== (ocrResult as any).date) {
-          updateData.orderDate = (ocrResult as any).date;
-          filledFields.push(orderDateStr ? '工单日期(覆盖)' : '工单日期');
-        }
+      // 工单日期：仅填充空白
+      if ((ocrResult as any).date && !order.orderDate) {
+        updateData.orderDate = (ocrResult as any).date;
+        filledFields.push('工单日期');
       }
 
       // 部位项目：仅当工单无有效项目时，用 OCR 识别到的部位填充
@@ -408,13 +406,13 @@ function openBatchOcrFill() {
 // 计算选中工单中可 OCR 处理的数量
 const ocrPendingSelectedCount = computed(() => {
   return data.value.filter((o: any) =>
-    checkedRowKeys.value.includes(o.id) && !(o.status === 'AUDITED' || o.status === 'SETTLED' || o.status === 'ABNORMAL') && o.images?.length > 0 && hasEmptyFields(o)
+    checkedRowKeys.value.includes(o.id) && isUnauditedStatus(o.status) && o.images?.length > 0
   ).length;
 });
 
 const ocrPendingAllCount = computed(() => {
   return data.value.filter((o: any) =>
-    !(o.status === 'AUDITED' || o.status === 'SETTLED' || o.status === 'ABNORMAL') && o.images?.length > 0 && hasEmptyFields(o)
+    isUnauditedStatus(o.status) && o.images?.length > 0
   ).length;
 });
 
@@ -529,7 +527,16 @@ const {
       key: 'plateNumber',
       title: '车牌号',
       align: 'center',
-      width: 100
+      width: 110,
+      render: (row: any) => {
+        if (!row.plateNumber) return '-';
+        return h(NButton, {
+          text: true,
+          type: 'primary',
+          size: 'small',
+          onClick: () => router.push({ path: '/paint/vehicle', query: { plateNumber: row.plateNumber } }),
+        }, { default: () => row.plateNumber });
+      }
     },
     {
       key: 'carModel',
@@ -614,7 +621,7 @@ const {
               </NButton>
             )}
             {row._isDuplicate && isUnaudited && allowMerge && !sealed && (
-              <NButton type="warning" text size="small" onClick={() => openMergeModal(row.orderNo, row.id)}>
+              <NButton type="warning" text size="small" onClick={() => openMergeModal(row.orderNo, row.id, row.settlementMonth)}>
                 合并
               </NButton>
             )}
@@ -796,6 +803,66 @@ async function handleUnsettle(orderId: string) {
   const { error } = await unsettleWorkOrder(orderId);
   if (error) return;
   window.$message?.success('已取消结算');
+  await getData();
+}
+
+// 批量结算相关
+const batchSettleLoading = ref(false);
+const batchUnsettleLoading = ref(false);
+
+// 选中的工单中可结算的（已审核且非异常）
+const settleableIds = computed(() => {
+  return data.value
+    .filter((o: any) => checkedRowKeys.value.includes(o.id) && o.status === 'AUDITED' && !o.isRework)
+    .map((o: any) => o.id);
+});
+
+// 选中的工单中可取消结算的（已结算）
+const unsettleableIds = computed(() => {
+  return data.value
+    .filter((o: any) => checkedRowKeys.value.includes(o.id) && o.status === 'SETTLED')
+    .map((o: any) => o.id);
+});
+
+async function handleBatchSettle() {
+  const ids = settleableIds.value;
+  if (ids.length === 0) {
+    window.$message?.warning('选中的工单中没有可结算的（需为已审核状态）');
+    return;
+  }
+  batchSettleLoading.value = true;
+  const { data, error } = await batchSettleWorkOrders(ids);
+  batchSettleLoading.value = false;
+  if (error) return;
+  if (data) {
+    if (data.failed === 0) {
+      window.$message?.success(`批量结算成功：${data.success} 条`);
+    } else {
+      window.$message?.warning(`结算完成：成功 ${data.success} 条，失败 ${data.failed} 条`);
+    }
+  }
+  checkedRowKeys.value = [];
+  await getData();
+}
+
+async function handleBatchUnsettle() {
+  const ids = unsettleableIds.value;
+  if (ids.length === 0) {
+    window.$message?.warning('选中的工单中没有可取消结算的（需为已结算状态）');
+    return;
+  }
+  batchUnsettleLoading.value = true;
+  const { data, error } = await batchUnsettleWorkOrders(ids);
+  batchUnsettleLoading.value = false;
+  if (error) return;
+  if (data) {
+    if (data.failed === 0) {
+      window.$message?.success(`批量取消结算成功：${data.success} 条`);
+    } else {
+      window.$message?.warning(`取消结算完成：成功 ${data.success} 条，失败 ${data.failed} 条`);
+    }
+  }
+  checkedRowKeys.value = [];
   await getData();
 }
 
@@ -997,6 +1064,22 @@ async function handleBatchQuickUpload({ file }: { file: File }) {
         <NButton type="success" :disabled="!selectedShopId" @click="batchOcrVisible = true">
           批量OCR录入
         </NButton>
+        <NPopconfirm v-if="allowSettle && settleableIds.length > 0" @positive-click="handleBatchSettle">
+          <template #trigger>
+            <NButton type="info" :loading="batchSettleLoading">
+              批量结算（{{ settleableIds.length }} 条）
+            </NButton>
+          </template>
+          确认结算选中的 {{ settleableIds.length }} 条工单？
+        </NPopconfirm>
+        <NPopconfirm v-if="allowSettle && unsettleableIds.length > 0" @positive-click="handleBatchUnsettle">
+          <template #trigger>
+            <NButton type="warning" :loading="batchUnsettleLoading">
+              批量取消结算（{{ unsettleableIds.length }} 条）
+            </NButton>
+          </template>
+          确认取消结算选中的 {{ unsettleableIds.length }} 条工单？
+        </NPopconfirm>
         <input ref="fileInputRef" type="file" accept=".xlsx,.xls" style="display:none" @change="handleImportFile" />
       </NSpace>
     </NCard>
@@ -1095,9 +1178,9 @@ async function handleBatchQuickUpload({ file }: { file: File }) {
         <NFormItem label="识别模式" :show-feedback="false">
           <NRadioGroup v-model:value="quickOcrMode">
             <NSpace>
-              <NRadioButton value="all">全部</NRadioButton>
               <NRadioButton value="basic">仅基础资料</NRadioButton>
               <NRadioButton value="items">仅部位</NRadioButton>
+              <NRadioButton value="all">全部</NRadioButton>
             </NSpace>
           </NRadioGroup>
         </NFormItem>
@@ -1217,12 +1300,12 @@ async function handleBatchQuickUpload({ file }: { file: File }) {
     </NModal>
 
     <!-- 一键OCR填充弹窗 -->
-    <NModal v-model:show="showBatchOcrFill" preset="card" title="一键OCR识别填充" style="width: 600px" :mask-closable="false">
+    <NModal v-model:show="showBatchOcrFill" preset="card" title="一键 OCR 填充空白字段" style="width: 600px" :mask-closable="false">
       <NSpace vertical :size="16">
         <NAlert type="info" :bordered="false">
           <template #header>批量OCR识别填充空白字段</template>
           对未审核、有图片、有空白字段的工单进行OCR识别，<strong>只填充空白字段</strong>（已有值的不覆盖）。<br />
-          支持字段：车牌号、工单号、客户名、电话、车型。
+          支持填充字段：车牌号、工单号、客户名称、电话、车型、车架号、品牌、日期、部位项目。
         </NAlert>
 
         <NRadioGroup v-model:value="batchOcrMode" :disabled="batchOcrLoading">
@@ -1236,18 +1319,30 @@ async function handleBatchQuickUpload({ file }: { file: File }) {
           </NSpace>
         </NRadioGroup>
 
-        <NFormItem label="识别模式" :show-feedback="false">
-          <NRadioGroup v-model:value="batchOcrFillMode" :disabled="batchOcrLoading">
-            <NSpace>
-              <NRadioButton value="all">全部</NRadioButton>
-              <NRadioButton value="basic">仅基础资料</NRadioButton>
+        <NFormItem label="识别范围" :show-feedback="false">
+          <NSpace align="center" :size="8" wrap>
+            <NRadioGroup v-model:value="batchOcrFillMode" :disabled="batchOcrLoading">
+              <NSpace>
+                <NRadioButton value="basic">仅基础资料</NRadioButton>
               <NRadioButton value="items">仅部位</NRadioButton>
+              <NRadioButton value="all">全部识别</NRadioButton>
             </NSpace>
           </NRadioGroup>
-          <NText depth="3" style="margin-left:12px; font-size:12px">
-            填充空白字段建议选"仅基础资料"以节省 token
-          </NText>
+          <NButton
+            v-if="batchOcrFillMode !== 'all'"
+            type="primary"
+            size="small"
+            ghost
+            :disabled="batchOcrLoading"
+            @click="batchOcrFillMode = 'all'"
+          >
+            智能推荐
+          </NButton>
+          </NSpace>
         </NFormItem>
+        <NAlert v-if="batchOcrFillMode === 'basic'" type="success" :bordered="false" style="padding: 6px 12px;">
+          快速填充车牌号、工单号、客户名称等核心基础信息，推荐首次使用
+        </NAlert>
 
         <NDescriptions label-placement="left" bordered size="small" :column="1">
           <NDescriptionsItem label="处理范围">
@@ -1264,7 +1359,10 @@ async function handleBatchQuickUpload({ file }: { file: File }) {
           <NCard size="small" :bordered="true">
             <NSpace vertical :size="8">
               <NSpace justify="space-between">
-                <span>正在处理...</span>
+                <NSpace align="center" :size="6">
+                  <icon-ic-round-sync style="animation: spin 1s linear infinite;" />
+                  <span>正在处理...</span>
+                </NSpace>
                 <span>{{ batchOcrProgress.current }} / {{ batchOcrProgress.total }}</span>
               </NSpace>
               <NProgress
@@ -1273,9 +1371,9 @@ async function handleBatchQuickUpload({ file }: { file: File }) {
                 :show-indicator="false"
               />
               <NSpace :size="16">
-                <NTag type="success" size="small">成功 {{ batchOcrProgress.success }}</NTag>
-                <NTag type="error" size="small">失败 {{ batchOcrProgress.failed }}</NTag>
-                <NTag type="warning" size="small">跳过 {{ batchOcrProgress.skipped }}</NTag>
+                <NTag type="success" size="small">✓ 成功 {{ batchOcrProgress.success }}</NTag>
+                <NTag type="error" size="small">✗ 失败 {{ batchOcrProgress.failed }}</NTag>
+                <NTag type="warning" size="small">− 跳过 {{ batchOcrProgress.skipped }}</NTag>
               </NSpace>
             </NSpace>
           </NCard>
@@ -1284,12 +1382,18 @@ async function handleBatchQuickUpload({ file }: { file: File }) {
         <!-- 结果显示 -->
         <template v-if="batchOcrResult">
           <NAlert :type="batchOcrResult.failed > 0 ? 'warning' : 'success'" :bordered="false">
-            OCR填充完成：成功 {{ batchOcrResult.success }} 条，失败 {{ batchOcrResult.failed }} 条，跳过 {{ batchOcrResult.skipped }} 条
+            <NSpace :size="12">
+              <NTag type="success" size="small">✓ 成功 {{ batchOcrResult.success }}</NTag>
+              <NTag v-if="batchOcrResult.failed > 0" type="error" size="small">✗ 失败 {{ batchOcrResult.failed }}</NTag>
+              <NTag v-if="batchOcrResult.skipped > 0" type="warning" size="small">− 跳过 {{ batchOcrResult.skipped }}</NTag>
+            </NSpace>
           </NAlert>
           <NCard size="small" :bordered="true" title="处理详情" style="max-height: 200px; overflow-y: auto">
             <NSpace vertical :size="4">
               <div v-for="(detail, idx) in batchOcrResult.details" :key="idx" style="font-size: 12px; line-height: 1.6">
-                {{ detail }}
+                <NText v-if="detail.startsWith('✓') || detail.includes('成功')" type="success">{{ detail }}</NText>
+                <NText v-else-if="detail.startsWith('✗') || detail.includes('失败')" type="error">{{ detail }}</NText>
+                <NText v-else depth="3">{{ detail }}</NText>
               </div>
             </NSpace>
           </NCard>

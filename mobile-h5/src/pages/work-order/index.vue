@@ -7,6 +7,8 @@ import {
   updateWorkOrder,
   findDuplicateWorkOrders,
   mergeWorkOrders,
+  batchSettleWorkOrders,
+  batchUnsettleWorkOrders,
 } from '@/api/paint'
 import type { PaintWorkOrder, PaintShop, PageResult, PaintOrderStatus } from '@/api/types/paint'
 import { showNotify } from 'vant'
@@ -30,7 +32,8 @@ const orders = ref<PaintWorkOrder[]>([])
 const loading = ref(false)
 const finished = ref(false)
 const current = ref(1)
-const size = 10
+// 每页大小：平衡首屏速度和加载次数
+const size = 20
 const totalPaintCount = ref(0)
 const refreshing = ref(false)
 
@@ -193,6 +196,15 @@ function goToCreate() {
   router.push({ name: 'WorkOrderCreate' })
 }
 
+function goVehicleHistory(order: any) {
+  if (!order.plateNumber) return
+  if (order.vehicleId) {
+    router.push({ name: '/work-order/vehicle-history', query: { id: order.vehicleId, plate: order.plateNumber } })
+  } else {
+    router.push({ name: '/work-order/vehicle-history', query: { plate: order.plateNumber } })
+  }
+}
+
 function formatDate(dateStr?: string) {
   if (!dateStr) return '-'
   return dateStr.slice(0, 10)
@@ -223,7 +235,8 @@ function getStatusLabel(status?: string): string {
 // ===== 列表状态缓存 =====
 const LIST_STATE_KEY = 'work-order-list-state'
 const STATE_MAX_AGE = 5 * 60 * 1000
-const stateRestored = ref(false)
+// 标记是否已初始化（区分 onMounted 首次加载和 onActivated 重新激活）
+let hasInitialized = false
 
 function saveListState() {
   sessionStorage.setItem(
@@ -271,9 +284,10 @@ function clearListState() {
   sessionStorage.removeItem(LIST_STATE_KEY)
 }
 
-function tryRestoreAndLoad() {
-  if (stateRestored.value) return
-  stateRestored.value = true
+/**
+ * onMounted 首次加载：尝试从 sessionStorage 恢复（如页面刷新场景），否则全新加载
+ */
+function initOnMounted() {
   const fromDetail = sessionStorage.getItem('work-order-detail-from-list') === '1'
   if (fromDetail) {
     sessionStorage.removeItem('work-order-detail-from-list')
@@ -288,22 +302,48 @@ function tryRestoreAndLoad() {
   loadStatusCounts()
 }
 
+/**
+ * onActivated 重新激活（keepAlive 组件从详情页返回）
+ * - 不强制重新加载列表（依赖 keepAlive 内存缓存保留列表数据）
+ * - 但需刷新状态计数（详情页可能改了工单状态）
+ * - 恢复滚动位置
+ * - 重新设置 IntersectionObserver（防止组件被销毁重建后失效）
+ * @param fromDetailExit 是否从详情页返回
+ */
+function reactivateOnActivated(fromDetailExit: boolean) {
+  if (fromDetailExit) {
+    sessionStorage.removeItem('work-order-detail-from-list')
+    // 详情页可能修改了工单状态，刷新计数
+    loadStatusCounts()
+    // 恢复滚动位置（keepAlive 内存缓存保留了列表，但滚动位置可能丢失）
+    const raw = sessionStorage.getItem(LIST_STATE_KEY)
+    if (raw) {
+      try {
+        const state = JSON.parse(raw)
+        if (state.timestamp && Date.now() - state.timestamp <= STATE_MAX_AGE) {
+          nextTick(() => window.scrollTo(0, state.scrollTop || 0))
+        }
+      }
+      catch { /* ignore */ }
+    }
+  }
+  // 重新设置 IntersectionObserver（组件可能经历了 onDeactivate -> onActivate）
+  nextTick(() => setupScrollObserver())
+}
+
 // ===== 批量 OCR =====
 const selectionMode = ref(false)
 const checkedOrderIds = ref<string[]>([])
 const showBatchOcr = ref(false)
 const batchOcrLoading = ref(false)
 const batchOcrMode = ref<'selected' | 'all'>('selected')
+const batchOcrFillMode = ref<'basic' | 'items' | 'all'>('all')
 const batchOcrCancelled = ref(false)
 const batchOcrProgress = ref({ current: 0, total: 0, success: 0, failed: 0, skipped: 0 })
 const batchOcrResult = ref<{ success: number; failed: number; skipped: number; details: string[] } | null>(null)
 
-function hasEmptyFields(order: PaintWorkOrder): boolean {
-  return !order.plateNumber || !order.orderNo || !order.customerName || !order.phone || !order.carModel || !order.vin || !order.brand || !order.orderDate
-}
-
 function canBatchOcr(order: PaintWorkOrder): boolean {
-  return (order.status === 'DRAFT' || order.status === 'PENDING') && !!order.images && order.images.length > 0 && hasEmptyFields(order)
+  return (order.status === 'DRAFT' || order.status === 'PENDING') && !!order.images && order.images.length > 0
 }
 
 const ocrPendingSelectedCount = computed(() => orders.value.filter(o => checkedOrderIds.value.includes(o.id) && canBatchOcr(o)).length)
@@ -321,23 +361,27 @@ function toggleOrderChecked(id: string) {
 }
 
 const allChecked = computed(() => {
-  const ocrable = orders.value.filter(o => canBatchOcr(o))
-  return ocrable.length > 0 && ocrable.every(o => checkedOrderIds.value.includes(o.id))
+  return orders.value.length > 0 && orders.value.every(o => checkedOrderIds.value.includes(o.id))
 })
 
 function toggleSelectAll() {
-  const ocrable = orders.value.filter(o => canBatchOcr(o))
   if (allChecked.value) {
-    checkedOrderIds.value = checkedOrderIds.value.filter(id => !ocrable.some(o => o.id === id))
+    checkedOrderIds.value = []
   }
   else {
-    const set = new Set(checkedOrderIds.value)
-    ocrable.forEach(o => set.add(o.id))
-    checkedOrderIds.value = Array.from(set)
+    checkedOrderIds.value = orders.value.map(o => o.id)
   }
 }
 
 function openBatchOcr() {
+  // 先检查是否有可处理的工单
+  const pendingSelected = orders.value.filter(o => checkedOrderIds.value.includes(o.id) && canBatchOcr(o))
+  const pendingAll = orders.value.filter(o => canBatchOcr(o))
+  const pendingCount = checkedOrderIds.value.length > 0 ? pendingSelected.length : pendingAll.length
+  if (pendingCount === 0) {
+    showNotify({ type: 'warning', message: '没有可OCR处理的工单（需为草稿/待审核、有图片、有空白字段）' })
+    return
+  }
   batchOcrLoading.value = false
   batchOcrCancelled.value = false
   batchOcrResult.value = null
@@ -389,7 +433,7 @@ async function handleBatchOcrFill() {
       const blob = await resp.blob()
       const file = new File([blob], 'image.jpg', { type: blob.type || 'image/jpeg' })
       const compressed = await compressImage(file)
-      const ocrResult = await ocrRecognizeImage(compressed, order.shopId)
+      const ocrResult = await ocrRecognizeImage(compressed, order.shopId, batchOcrFillMode.value)
 
       const updateData: any = { id: order.id }
       const filledFields: string[] = []
@@ -420,6 +464,10 @@ async function handleBatchOcrFill() {
         if (!order.vin || order.vin !== ocrResult.vin) {
           updateData.vin = ocrResult.vin
           filledFields.push(order.vin ? '车架号(覆盖)' : '车架号')
+        }
+        // VIN 修正提示
+        if ((ocrResult as any).vinCorrected && (ocrResult as any).vinOriginal) {
+          details.push(`${order.orderNo || order.id}: 车架号自动修正「${(ocrResult as any).vinOriginal}」→「${ocrResult.vin}」`)
         }
       }
       if (ocrResult.brand) {
@@ -471,6 +519,68 @@ async function handleBatchOcrFill() {
   checkedOrderIds.value = []
 }
 
+// ===== 批量结算 =====
+const batchSettleLoading = ref(false)
+const batchUnsettleLoading = ref(false)
+
+const settleableIds = computed(() => {
+  return orders.value
+    .filter(o => checkedOrderIds.value.includes(o.id) && o.status === 'AUDITED')
+    .map(o => o.id)
+})
+
+const unsettleableIds = computed(() => {
+  return orders.value
+    .filter(o => checkedOrderIds.value.includes(o.id) && o.status === 'SETTLED')
+    .map(o => o.id)
+})
+
+async function handleBatchSettle() {
+  const ids = settleableIds.value
+  if (ids.length === 0) {
+    showNotify({ type: 'warning', message: '选中的工单中没有可结算的（需为已审核状态）' })
+    return
+  }
+  batchSettleLoading.value = true
+  try {
+    const res = await batchSettleWorkOrders(ids)
+    if (res.failed === 0) {
+      showNotify({ type: 'success', message: `批量结算成功：${res.success} 条` })
+    } else {
+      showNotify({ type: 'warning', message: `结算完成：成功 ${res.success} 条，失败 ${res.failed} 条` })
+    }
+    checkedOrderIds.value = []
+    await loadOrders(true)
+  } catch (e: any) {
+    showNotify({ type: 'danger', message: e?.message || '批量结算失败' })
+  } finally {
+    batchSettleLoading.value = false
+  }
+}
+
+async function handleBatchUnsettle() {
+  const ids = unsettleableIds.value
+  if (ids.length === 0) {
+    showNotify({ type: 'warning', message: '选中的工单中没有可取消结算的（需为已结算状态）' })
+    return
+  }
+  batchUnsettleLoading.value = true
+  try {
+    const res = await batchUnsettleWorkOrders(ids)
+    if (res.failed === 0) {
+      showNotify({ type: 'success', message: `批量取消结算成功：${res.success} 条` })
+    } else {
+      showNotify({ type: 'warning', message: `取消结算完成：成功 ${res.success} 条，失败 ${res.failed} 条` })
+    }
+    checkedOrderIds.value = []
+    await loadOrders(true)
+  } catch (e: any) {
+    showNotify({ type: 'danger', message: e?.message || '批量取消结算失败' })
+  } finally {
+    batchUnsettleLoading.value = false
+  }
+}
+
 function onCardClick(order: PaintWorkOrder) {
   if (selectionMode.value) toggleOrderChecked(order.id)
   else goToDetail(order.id)
@@ -497,7 +607,7 @@ async function openMergePopup(order: PaintWorkOrder) {
   mergeLoading.value = true
   showMergePopup.value = true
   try {
-    const res = await findDuplicateWorkOrders(order.orderNo, order.id)
+    const res = await findDuplicateWorkOrders(order.orderNo, order.id, order.settlementMonth)
     const list = (res as any as PaintWorkOrder[]) || []
     mergeCandidates.value = list
     mergeSelectedIds.value = list.map(o => o.id)
@@ -560,8 +670,9 @@ function setupScrollObserver() {
 
 onMounted(() => {
   loadShops()
-  tryRestoreAndLoad()
+  initOnMounted()
   nextTick(() => setupScrollObserver())
+  hasInitialized = true
 })
 
 onBeforeUnmount(() => {
@@ -569,10 +680,20 @@ onBeforeUnmount(() => {
     scrollObserver.disconnect()
     scrollObserver = null
   }
+  hasInitialized = false
 })
 
 onActivated(() => {
-  tryRestoreAndLoad()
+  // onMounted 之后会触发 onActivated，已初始化则跳过
+  if (!hasInitialized) {
+    initOnMounted()
+    nextTick(() => setupScrollObserver())
+    hasInitialized = true
+    return
+  }
+  // 已初始化的重新激活：从详情页返回时刷新状态计数+恢复滚动+重设 observer
+  const fromDetail = sessionStorage.getItem('work-order-detail-from-list') === '1'
+  reactivateOnActivated(fromDetail)
 })
 </script>
 
@@ -591,6 +712,10 @@ onActivated(() => {
       <div class="filter-trigger" @click="showFilterPopup = true">
         <van-icon name="filter-o" size="20" color="#1677ff" />
         <span class="filter-text">筛选</span>
+      </div>
+      <div class="filter-trigger" @click="router.push({ name: 'Vehicle' })">
+        <van-icon name="car-o" size="20" color="#1677ff" />
+        <span class="filter-text">车辆</span>
       </div>
       <div v-if="allowBatchOcr" class="filter-trigger" @click="toggleSelectionMode">
         <van-icon name="checked" size="20" :color="selectionMode ? '#52c41a' : '#1677ff'" />
@@ -645,7 +770,7 @@ onActivated(() => {
           />
           <div class="card-body">
             <div class="card-top">
-              <div class="plate-wrap">
+              <div class="plate-wrap" @click.stop="goVehicleHistory(order)">
                 <van-icon name="car-o" size="16" color="#1677ff" />
                 <span class="plate-number">{{ order.plateNumber || '未识别车牌' }}</span>
               </div>
@@ -717,16 +842,26 @@ onActivated(() => {
 
     <!-- 选择模式底部栏 -->
     <div v-if="selectionMode" class="selection-bar">
-      <div class="selection-left" @click="toggleSelectAll">
-        <van-checkbox :model-value="allChecked" shape="square" />
-        <span class="select-all-text">全选</span>
+      <div class="selection-row">
+        <div class="selection-left" @click="toggleSelectAll">
+          <van-checkbox :model-value="allChecked" shape="square" />
+          <span class="select-all-text">全选</span>
+        </div>
+        <div class="selection-info">
+          已选 <span class="count">{{ checkedOrderIds.length }}</span> 条
+        </div>
+        <van-button type="primary" size="small" round @click="openBatchOcr">
+          OCR ({{ ocrPendingSelectedCount }})
+        </van-button>
       </div>
-      <div class="selection-info">
-        已选 <span class="count">{{ checkedOrderIds.length }}</span> 条
+      <div class="selection-row selection-actions">
+        <van-button type="success" size="small" round block :disabled="settleableIds.length === 0" :loading="batchSettleLoading" @click="handleBatchSettle">
+          批量结算 ({{ settleableIds.length }})
+        </van-button>
+        <van-button type="warning" size="small" round block :disabled="unsettleableIds.length === 0" :loading="batchUnsettleLoading" @click="handleBatchUnsettle">
+          批量取消结算 ({{ unsettleableIds.length }})
+        </van-button>
       </div>
-      <van-button type="primary" size="small" round :disabled="ocrPendingSelectedCount === 0" @click="openBatchOcr">
-        一键OCR ({{ ocrPendingSelectedCount }})
-      </van-button>
     </div>
 
     <!-- 筛选弹窗 -->
@@ -819,6 +954,7 @@ onActivated(() => {
         <div class="batch-ocr-desc">
           仅处理待审核/草稿状态、含图片且存在空白字段的工单。
         </div>
+        <div class="batch-ocr-section-title">处理范围</div>
         <van-radio-group v-model="batchOcrMode" :disabled="batchOcrLoading" direction="horizontal" class="batch-ocr-mode">
           <van-radio name="selected" :disabled="checkedOrderIds.length === 0">
             选中工单
@@ -826,6 +962,12 @@ onActivated(() => {
           <van-radio name="all">
             已加载全部
           </van-radio>
+        </van-radio-group>
+        <div class="batch-ocr-section-title">识别模式</div>
+        <van-radio-group v-model="batchOcrFillMode" :disabled="batchOcrLoading" direction="horizontal" class="batch-ocr-mode">
+          <van-radio name="all">全部</van-radio>
+          <van-radio name="basic">仅基础资料</van-radio>
+          <van-radio name="items">仅部位</van-radio>
         </van-radio-group>
         <div class="batch-ocr-pending">
           可处理数量：<van-tag type="success">{{ batchOcrMode === 'selected' ? ocrPendingSelectedCount : ocrPendingAllCount }} 条</van-tag>
@@ -958,7 +1100,7 @@ onActivated(() => {
 .order-page {
   min-height: 100vh;
   background: #f5f7fa;
-  padding-bottom: 80px;
+  padding-bottom: 120px;
 }
 
 .search-header {
@@ -1077,12 +1219,20 @@ onActivated(() => {
   display: flex;
   align-items: center;
   gap: 6px;
+  cursor: pointer;
+  padding: 2px 8px 2px 4px;
+  border-radius: 4px;
+  transition: background-color 0.2s;
+
+  &:active {
+    background-color: rgba(22, 119, 255, 0.1);
+  }
 }
 
 .plate-number {
   font-size: 16px;
   font-weight: 700;
-  color: #333;
+  color: #1677ff;
 }
 
 .card-tags {
@@ -1189,13 +1339,24 @@ onActivated(() => {
   right: 0;
   bottom: 0;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  flex-direction: column;
+  gap: 8px;
   padding: 10px 16px;
+  padding-bottom: calc(10px + env(safe-area-inset-bottom));
   background: #fff;
   box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.05);
   z-index: 101;
+}
+
+.selection-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.selection-actions {
+  gap: 10px;
 }
 
 .selection-left {
@@ -1307,6 +1468,13 @@ onActivated(() => {
   font-size: 13px;
   color: #666;
   margin-bottom: 16px;
+}
+
+.batch-ocr-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #333;
+  margin-bottom: 8px;
 }
 
 .batch-ocr-mode {

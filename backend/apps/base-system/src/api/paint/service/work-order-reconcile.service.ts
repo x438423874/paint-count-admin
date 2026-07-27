@@ -20,6 +20,8 @@ export interface ReconcileMatchedItem {
   diff: number;
   status: string;
   systemRemark?: string | null;
+  isRework?: boolean | null;
+  reworkRemark?: string | null;
 }
 
 export interface ReconcileMissingInSystemItem {
@@ -37,6 +39,8 @@ export interface ReconcileExtraInSystemItem {
   plateNumber: string;
   systemPaintCount: number;
   status: string;
+  isRework?: boolean | null;
+  reworkRemark?: string | null;
 }
 
 export interface ReconcileDuplicateItem {
@@ -66,6 +70,8 @@ export interface ReconcileResult {
     missingInSystemCount: number;
     extraInSystemCount: number;
     duplicateCount: number;
+    reworkExcludedCount: number;
+    reworkExcludedPaintCount: number;
   };
   items: ReconcileItem[];
 }
@@ -106,8 +112,14 @@ export class WorkOrderReconcileService {
         totalPaintCount: true,
         status: true,
         remark: true,
+        isRework: true,
+        reworkRemark: true,
       },
     });
+
+    // 返工工单统计（幅数不计入系统总幅数）
+    const reworkExcludedCount = systemOrders.filter(o => o.isRework).length;
+    const reworkExcludedPaintCount = +systemOrders.filter(o => o.isRework).reduce((sum, o) => sum + Number(o.totalPaintCount), 0).toFixed(2);
 
     if (systemOrders.length === 0) {
       throw new BadRequestException(`该门店 ${settlementMonth} 月份没有已审核/已结算的工单，请确认门店和月份是否正确`);
@@ -226,6 +238,8 @@ export class WorkOrderReconcileService {
           diff: 0,
           status: systemOrder.status,
           systemRemark: systemOrder.remark,
+          isRework: systemOrder.isRework,
+          reworkRemark: systemOrder.reworkRemark,
         });
       } else {
         items.push({
@@ -238,6 +252,8 @@ export class WorkOrderReconcileService {
           diff,
           status: systemOrder.status,
           systemRemark: systemOrder.remark,
+          isRework: systemOrder.isRework,
+          reworkRemark: systemOrder.reworkRemark,
         });
       }
     }
@@ -274,12 +290,15 @@ export class WorkOrderReconcileService {
           plateNumber: plateKey,
           systemPaintCount: Number(systemOrder.totalPaintCount),
           status: systemOrder.status,
+          isRework: systemOrder.isRework,
+          reworkRemark: systemOrder.reworkRemark,
         });
       }
     }
 
     const excelTotal = +excelRows.reduce((sum, r) => sum + r.paintCount, 0).toFixed(2);
-    const systemTotal = +systemOrders.reduce((sum, o) => sum + Number(o.totalPaintCount), 0).toFixed(2);
+    // 系统总幅数不计入返工工单
+    const systemTotal = +systemOrders.filter(o => !o.isRework).reduce((sum, o) => sum + Number(o.totalPaintCount), 0).toFixed(2);
     const diff = +(excelTotal - systemTotal).toFixed(2);
 
     const matchedCount = items.filter(i => i.type === 'matched').length;
@@ -300,6 +319,8 @@ export class WorkOrderReconcileService {
         missingInSystemCount,
         extraInSystemCount,
         duplicateCount,
+        reworkExcludedCount,
+        reworkExcludedPaintCount,
       },
       items,
     };

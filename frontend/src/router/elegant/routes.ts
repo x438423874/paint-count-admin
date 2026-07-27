@@ -216,6 +216,15 @@ export const generatedRoutes: GeneratedRoute[] = [
         }
       },
       {
+        name: 'paint_vehicle',
+        path: '/paint/vehicle',
+        component: 'view.paint_vehicle',
+        meta: {
+          title: 'paint_vehicle',
+          i18nKey: 'route.paint_vehicle'
+        }
+      },
+      {
         name: 'paint_work-order',
         path: '/paint/work-order',
         component: 'view.paint_work-order',

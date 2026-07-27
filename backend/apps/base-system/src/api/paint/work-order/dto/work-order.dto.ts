@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsNotEmpty, IsOptional, IsString, IsInt, IsDateString, IsIn, ValidateNested, IsArray, IsBoolean, MaxLength } from 'class-validator';
+import { IsNotEmpty, IsOptional, IsString, IsInt, IsDateString, IsIn, ValidateNested, IsArray, IsBoolean, MaxLength, IsNumber } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class WorkOrderItemDto {
@@ -23,6 +23,12 @@ export class WorkOrderItemDto {
   @IsOptional()
   @IsString()
   specialPaintId?: string;
+
+  @ApiPropertyOptional({ description: '手动覆盖幅数，不传则自动计算' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  overridePaintCount?: number;
 }
 
 export class CreateWorkOrderDto {

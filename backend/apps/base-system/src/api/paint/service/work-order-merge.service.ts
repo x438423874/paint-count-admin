@@ -1,11 +1,15 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '@lib/shared/prisma/prisma.service';
 import { Prisma } from '@prisma/client';
 import { generateMergeGroupId } from './paint-calculation';
+import { PaintVehicleService } from './paint-vehicle.service';
 
 @Injectable()
 export class WorkOrderMergeService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly vehicleService: PaintVehicleService,
+  ) {}
 
   /** 合并重复工单：将 sourceIds 的图片合并到 targetId，并补充目标工单缺失的基础信息 */
   async mergeOrders(targetId: string, sourceIds: string[]) {
@@ -15,7 +19,11 @@ export class WorkOrderMergeService {
     // 生成合并组ID
     const mergeGroupId = generateMergeGroupId(target.mergeGroupId);
 
-    return this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    // 收集源工单的 vehicleId，用于合并后刷新车辆统计
+    const vehicleIdsToRefresh = new Set<string>();
+    if (target.vehicleId) vehicleIdsToRefresh.add(target.vehicleId);
+
+    const result = await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       // 收集所有源工单，用于后续补充基础信息
       const sourceOrders = [];
       for (const sourceId of sourceIds) {
@@ -24,7 +32,14 @@ export class WorkOrderMergeService {
           where: { id: sourceId },
           include: { images: true },
         });
-        if (source) sourceOrders.push(source);
+        if (source) {
+          // 防御性校验：跨月工单不允许合并（拆单结算方案下同号不同月为独立工单）
+          if ((source.settlementMonth || '') !== (target.settlementMonth || '')) {
+            throw new BadRequestException('不能合并不同结算月份的工单');
+          }
+          sourceOrders.push(source);
+          if (source.vehicleId) vehicleIdsToRefresh.add(source.vehicleId);
+        }
       }
 
       // 补充目标工单缺失的基础信息（按 sourceIds 顺序，取第一个非空值）
@@ -88,6 +103,13 @@ export class WorkOrderMergeService {
         },
       });
     });
+
+    // 异步刷新涉及车辆的统计（源工单被删除后需重算）
+    for (const vid of vehicleIdsToRefresh) {
+      this.vehicleService.refreshStats(vid).catch(() => {});
+    }
+
+    return result;
   }
 
   /** 查询工单的重复工单列表（同orderNo） */
@@ -95,6 +117,7 @@ export class WorkOrderMergeService {
     orderNo: string,
     excludeId?: string,
     accessibleShopIds?: string[] | null,
+    settlementMonth?: string,
   ) {
     const where: Prisma.PaintWorkOrderWhereInput = {
       orderNo,
@@ -105,6 +128,10 @@ export class WorkOrderMergeService {
     // 数据权限：accessibleShopIds 为 null 表示不限制，数组表示限制到这些门店
     if (accessibleShopIds) {
       where.shopId = { in: accessibleShopIds };
+    }
+    // 同号不同结算月份不算重复，仅查询同月的
+    if (settlementMonth) {
+      where.settlementMonth = settlementMonth;
     }
     return this.prisma.paintWorkOrder.findMany({
       where,

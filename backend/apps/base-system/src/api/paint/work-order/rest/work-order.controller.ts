@@ -85,8 +85,8 @@ export class WorkOrderController {
     const thumbnailBuffer = await getFieldBuffer('thumbnail');
     // 是否启用 OCR 识别（默认启用）。批量上传时可关闭以加速创建
     const enableOcr = getFieldValue('enableOcr') !== 'false';
-    // OCR 识别模式：basic（仅基础资料）/ items（仅部位）/ all（全部），默认 all
-    const ocrMode = (getFieldValue('ocrMode') as 'basic' | 'items' | 'all') || 'all';
+    // OCR 识别模式：basic（仅基础资料）/ items（仅部位）/ all（全部），默认 basic
+    const ocrMode = (getFieldValue('ocrMode') as 'basic' | 'items' | 'all') || 'basic';
 
     // 优先使用前端传入的值
     const plateNumber = getFieldValue('plateNumber') || undefined;
@@ -183,7 +183,11 @@ export class WorkOrderController {
         if (!result.plateNumber) warnings.push('未识别到车牌号');
         if (!result.orderNo) warnings.push('未识别到工单号');
         if (result.orderNo && rules.length > 0 && !this.noRuleService.validate(result.orderNo, rules).valid) {
-          warnings.push(`工单号格式不符合规则`);
+          if (result.orderNoCandidates && result.orderNoCandidates.length > 0) {
+            warnings.push(`工单号格式不符合规则，已自动修正为 ${result.orderNo}`);
+          } else {
+            warnings.push(`工单号格式不符合规则`);
+          }
         }
         if (!result.date) warnings.push('未识别到日期');
 
@@ -312,8 +316,8 @@ export class WorkOrderController {
       return field?.value?.toString() || '';
     };
     const shopId = getFieldValue('shopId') || undefined;
-    // OCR 识别模式：basic（仅基础资料）/ items（仅部位）/ all（全部），默认 all
-    const ocrMode = (getFieldValue('ocrMode') as 'basic' | 'items' | 'all') || 'all';
+    // OCR 识别模式：basic（仅基础资料）/ items（仅部位）/ all（全部），默认 basic
+    const ocrMode = (getFieldValue('ocrMode') as 'basic' | 'items' | 'all') || 'basic';
 
     // 数据权限：校验用户是否有权访问该门店
     if (shopId) {
@@ -324,7 +328,7 @@ export class WorkOrderController {
       const result = await this.ocrService.recognizeWithTemplate(buffer, shopId, ocrMode);
       return ApiRes.success(result);
     } catch (e) {
-      // 透传 PaddleOCR 不可用等明确错误信息，便于前端提示用户
+      // 透传 OCR 服务不可用等明确错误信息，便于前端提示用户
       const msg = e instanceof Error ? e.message : 'OCR识别失败';
       throw new InternalServerErrorException(msg);
     }
@@ -405,10 +409,11 @@ export class WorkOrderController {
     @Request() req: AuthenticatedRequest,
     @Param('orderNo') orderNo: string,
     @Query('excludeId') excludeId?: string,
+    @Query('settlementMonth') settlementMonth?: string,
   ) {
     // 数据权限：仅返回当前用户有权访问的门店的重复工单
     const accessibleShopIds = await this.userShopService.getAccessibleShopIds(req.user.uid);
-    const data = await this.mergeService.findDuplicateOrders(orderNo, excludeId, accessibleShopIds);
+    const data = await this.mergeService.findDuplicateOrders(orderNo, excludeId, accessibleShopIds, settlementMonth);
     return ApiRes.success(data);
   }
 
@@ -421,6 +426,33 @@ export class WorkOrderController {
     // 数据权限：批量校验目标工单和所有源工单的权限（避免 N+1 查询）
     await this.userShopService.assertWorkOrdersAccess(req.user.uid, [body.targetId, ...body.sourceIds]);
     const data = await this.mergeService.mergeOrders(body.targetId, body.sourceIds);
+    return ApiRes.success(data);
+  }
+
+  @Post('batch-settle')
+  @ApiOperation({ summary: '批量结算工单' })
+  async batchSettle(@Body() body: { ids: string[] }, @Request() req: AuthenticatedRequest) {
+    if (!body.ids || !Array.isArray(body.ids) || body.ids.length === 0) {
+      throw new BadRequestException('请选择要结算的工单');
+    }
+    // 数据权限：校验所有工单
+    for (const id of body.ids) {
+      await this.userShopService.assertWorkOrderAccess(req.user.uid, id);
+    }
+    const data = await this.settlementService.batchSettle(body.ids, req.user?.uid);
+    return ApiRes.success(data);
+  }
+
+  @Post('batch-unsettle')
+  @ApiOperation({ summary: '批量取消结算' })
+  async batchUnsettle(@Body() body: { ids: string[] }, @Request() req: AuthenticatedRequest) {
+    if (!body.ids || !Array.isArray(body.ids) || body.ids.length === 0) {
+      throw new BadRequestException('请选择要取消结算的工单');
+    }
+    for (const id of body.ids) {
+      await this.userShopService.assertWorkOrderAccess(req.user.uid, id);
+    }
+    const data = await this.settlementService.batchUnsettle(body.ids);
     return ApiRes.success(data);
   }
 

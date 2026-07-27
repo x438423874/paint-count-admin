@@ -422,7 +422,7 @@ export interface OcrRecognizedItem {
 export type OcrMode = 'basic' | 'items' | 'all';
 
 export function ocrRecognizeImage(formData: FormData) {
-  return request<{ plateNumber: string; orderNo: string; customerName: string; phone: string; carModel: string; vin: string; brand: string; date: string; rawText: string; items?: OcrRecognizedItem[] }>({
+  return request<{ plateNumber: string; orderNo: string; customerName: string; phone: string; carModel: string; vin: string; brand: string; date: string; rawText: string; orderNoValid?: boolean; orderNoCandidates?: string[]; vinCorrected?: boolean; vinOriginal?: string; items?: OcrRecognizedItem[] }>({
     url: '/paint/work-order/ocr',
     method: 'post',
     data: formData,
@@ -718,11 +718,11 @@ export function unauditWorkOrder(id: string) {
 
 // ==================== 工单合并 ====================
 
-export function findDuplicateOrders(orderNo: string, excludeId?: string) {
+export function findDuplicateOrders(orderNo: string, excludeId?: string, settlementMonth?: string) {
   return request<PaintWorkOrder[]>({
     url: `/paint/work-order/duplicates/${orderNo}`,
     method: 'get',
-    params: excludeId ? { excludeId } : undefined
+    params: { ...(excludeId ? { excludeId } : {}), ...(settlementMonth ? { settlementMonth } : {}) }
   });
 }
 
@@ -748,6 +748,22 @@ export function unsettleWorkOrder(orderId: string) {
   return request({
     url: `/paint/work-order/${orderId}/unsettle`,
     method: 'post'
+  });
+}
+
+export function batchSettleWorkOrders(ids: string[]) {
+  return request<{ success: number; failed: number; errors: { id: string; message: string }[] }>({
+    url: '/paint/work-order/batch-settle',
+    method: 'post',
+    data: { ids }
+  });
+}
+
+export function batchUnsettleWorkOrders(ids: string[]) {
+  return request<{ success: number; failed: number; errors: { id: string; message: string }[] }>({
+    url: '/paint/work-order/batch-unsettle',
+    method: 'post',
+    data: { ids }
   });
 }
 
@@ -800,6 +816,8 @@ export interface ReconcileSummary {
   missingInSystemCount: number;
   extraInSystemCount: number;
   duplicateCount: number;
+  reworkExcludedCount: number;
+  reworkExcludedPaintCount: number;
 }
 
 export type ReconcileItemType = 'matched' | 'diff' | 'missing_in_system' | 'extra_in_system' | 'duplicate';
@@ -817,6 +835,8 @@ export interface ReconcileItem {
   remark?: string;
   source?: 'excel' | 'system';
   count?: number;
+  isRework?: boolean | null;
+  reworkRemark?: string | null;
 }
 
 export interface ReconcileResult {
@@ -981,13 +1001,18 @@ export function bindUserShops(userId: string, shopIds: string[]) {
 // ==================== 封单管理 API ====================
 
 export interface SettlementMonthRecord {
-  id: string;
+  id: string | null;
   shopId: string;
   month: string;
   isSealed: boolean;
   sealedAt: string | null;
   sealedBy: string | null;
   shop?: { id: string; name: string };
+  stats?: {
+    orderCount: number;
+    totalPaintCount: number;
+    reworkCount: number;
+  };
 }
 
 export function sealSettlementMonth(shopId: string, month: string) {
@@ -1011,5 +1036,132 @@ export function getSealStatus(shopId: string, month: string) {
     url: '/paint/settlement-month/status',
     method: 'get',
     params: { shopId, month }
+  });
+}
+
+// ==================== 车辆/客户主数据 API ====================
+
+export interface PaintVehicle {
+  id: string;
+  plateNumber: string;
+  vin?: string | null;
+  carModel?: string | null;
+  brand?: string | null;
+  customerName?: string | null;
+  phone?: string | null;
+  contactPerson?: string | null;
+  remark?: string | null;
+  lastOrderAt?: string | null;
+  lastShopId?: string | null;
+  lastShopName?: string | null;
+  totalOrderCount: number;
+  totalPaintCount: number | string;
+  createdAt: string;
+  updatedAt?: string | null;
+}
+
+export interface VehicleHistorySummary {
+  totalOrders: number;
+  totalPaintCount: number;
+  firstOrderAt: string | null;
+  lastOrderAt: string | null;
+  shopCount: number;
+  reworkCount: number;
+  abnormalCount: number;
+}
+
+export function fetchPaintVehiclePage(params: {
+  current?: number;
+  size?: number;
+  plateNumber?: string;
+  customerName?: string;
+  phone?: string;
+  vin?: string;
+  shopId?: string;
+}) {
+  return request<PageResult<PaintVehicle>>({
+    url: '/paint/vehicle/page',
+    method: 'get',
+    params
+  });
+}
+
+export function fetchVehicleList(keyword?: string) {
+  return request<Partial<PaintVehicle>[]>({
+    url: '/paint/vehicle/list',
+    method: 'get',
+    params: { keyword }
+  });
+}
+
+export function fetchVehicleByPlate(plateNumber: string) {
+  return request<PaintVehicle | null>({
+    url: `/paint/vehicle/by-plate/${encodeURIComponent(plateNumber)}`,
+    method: 'get'
+  });
+}
+
+export function fetchVehicleById(id: string) {
+  return request<PaintVehicle>({
+    url: `/paint/vehicle/${id}`,
+    method: 'get'
+  });
+}
+
+export function createPaintVehicle(data: {
+  plateNumber: string;
+  vin?: string;
+  carModel?: string;
+  brand?: string;
+  customerName?: string;
+  phone?: string;
+  contactPerson?: string;
+  remark?: string;
+}) {
+  return request<PaintVehicle>({
+    url: '/paint/vehicle',
+    method: 'post',
+    data
+  });
+}
+
+export function updatePaintVehicle(data: {
+  id: string;
+  plateNumber?: string;
+  vin?: string;
+  carModel?: string;
+  brand?: string;
+  customerName?: string;
+  phone?: string;
+  contactPerson?: string;
+  remark?: string;
+}) {
+  return request<PaintVehicle>({
+    url: '/paint/vehicle',
+    method: 'put',
+    data
+  });
+}
+
+export function deletePaintVehicle(id: string) {
+  return request({
+    url: `/paint/vehicle/${id}`,
+    method: 'delete'
+  });
+}
+
+export function fetchVehicleHistory(
+  id: string,
+  params: {
+    scope?: 'current_shop' | 'all_shops';
+    shopId?: string;
+    current?: number;
+    size?: number;
+  }
+) {
+  return request<{ records: any[]; total: number; summary: VehicleHistorySummary }>({
+    url: `/paint/vehicle/${id}/history-orders`,
+    method: 'get',
+    params
   });
 }

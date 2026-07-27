@@ -28,7 +28,7 @@ const loading = ref(false);
 const creating = ref(false);
 const step = ref<1 | 2>(1);
 // OCR 识别模式：basic 仅基础资料（省 token）/ items 仅部位 / all 全部
-const ocrMode = ref<OcrMode>('all');
+const ocrMode = ref<OcrMode>('basic');
 
 const hasInvalid = computed(() => previewItems.value.some(i => !i.valid));
 const validCount = computed(() => previewItems.value.filter(i => i.valid).length);
@@ -123,7 +123,7 @@ function handleClose() {
   previewItems.value = [];
   fileMap.clear();
   step.value = 1;
-  ocrMode.value = 'all';
+  ocrMode.value = 'basic';
   emit('update:show', false);
 }
 
@@ -209,13 +209,13 @@ const columns = [
         <NFormItem label="识别模式">
           <NRadioGroup v-model:value="ocrMode">
             <NSpace>
-              <NRadioButton value="all">全部识别</NRadioButton>
               <NRadioButton value="basic">仅基础资料</NRadioButton>
               <NRadioButton value="items">仅部位</NRadioButton>
+              <NRadioButton value="all">全部识别</NRadioButton>
             </NSpace>
           </NRadioGroup>
           <NText depth="3" style="margin-left:12px; font-size:12px">
-            选择"仅基础资料"或"仅部位"可减少 token 消耗
+            推荐"仅基础资料"快速填充核心信息；选"仅部位"只识别喷漆项目；选"全部"识别所有内容
           </NText>
         </NFormItem>
 

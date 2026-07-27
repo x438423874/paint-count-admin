@@ -404,14 +404,21 @@ model PaintWorkOrder {
   createdAt     DateTime  @default(now()) @map("created_at")
   updatedAt     DateTime? @updatedAt @map("updated_at")
 
-  shop   PaintShop          @relation(fields: [shopId], references: [id])
-  items  PaintWorkOrderItem[]
-  images PaintWorkOrderImage[]
+  vehicleId     String?   @map("vehicle_id")
+
+  shop    PaintShop          @relation(fields: [shopId], references: [id])
+  vehicle PaintVehicle?     @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+  items   PaintWorkOrderItem[]
+  images  PaintWorkOrderImage[]
 
   @@index([shopId, settlementMonth])
+  @@index([shopId, settlementMonth, status])
   @@index([settlementMonth])
+  @@index([shopId, orderDate])
   @@index([orderNo])
   @@index([mergeGroupId])
+  @@index([plateNumber])
+  @@index([vehicleId])
   @@map("paint_work_order")
 }
 
@@ -479,4 +486,33 @@ model PaintSettlementMonth {
 
   @@unique([shopId, month])
   @@map("paint_settlement_month")
+}
+
+// 车辆/客户主数据：按车牌号全局唯一，跨门店共享
+model PaintVehicle {
+  id               String    @id @default(cuid())
+  plateNumber      String    @map("plate_number") @db.VarChar(50)
+  vin              String?   @db.VarChar(30)
+  carModel         String?   @default("") @map("car_model") @db.VarChar(100)
+  brand            String?   @db.VarChar(50)
+  customerName     String?   @default("") @map("customer_name") @db.VarChar(50)
+  phone            String?   @db.VarChar(20)
+  contactPerson    String?   @map("contact_person") @db.VarChar(50)
+  remark           String?
+  // 反向统计字段（写入时维护，避免历史查询时聚合）
+  lastOrderAt      DateTime? @map("last_order_at")
+  lastShopId       String?   @map("last_shop_id")
+  totalOrderCount  Int       @default(0) @map("total_order_count")
+  totalPaintCount  Decimal   @default(0) @map("total_paint_count") @db.Decimal(10, 2)
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime? @updatedAt @map("updated_at")
+
+  orders PaintWorkOrder[]
+
+  @@unique([plateNumber])
+  @@index([customerName])
+  @@index([phone])
+  @@index([lastShopId])
+  @@index([lastOrderAt])
+  @@map("paint_vehicle")
 }

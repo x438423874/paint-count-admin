@@ -25,6 +25,8 @@ export interface OcrResult {
   rawText: string;
   orderNoValid?: boolean;
   orderNoCandidates?: string[];
+  vinCorrected?: boolean;      // VIN 是否被自动修正（O→0、I→1、Q→0 等）
+  vinOriginal?: string;        // VIN 修正前的原始值
   items?: OcrItem[];
 }
 
@@ -74,6 +76,11 @@ export class OcrService {
 
       // 保留占位符清洗
       result = this.sanitizeResult(result);
+
+      // VIN 车架号自动修正：VIN 规范不含 I/O/Q，OCR 常混淆 O↔0、I↔1、Q↔0
+      if (result.vin && wantBasic) {
+        result = this.applyVinCorrection(result);
+      }
 
       // 保留工单号规则校验
       if (shopId && wantBasic) {
@@ -209,6 +216,34 @@ export class OcrService {
     result.orderNoCandidates = corrected.candidates;
     if (!corrected.valid && corrected.candidates.length > 0) {
       result.orderNo = corrected.candidates[0];
+    }
+    return result;
+  }
+
+  /** VIN 车架号自动修正：VIN 规范不含 I/O/Q，OCR 常混淆 O→0、I→1、Q→0 */
+  private applyVinCorrection(result: OcrResult): OcrResult {
+    if (!result.vin) return result;
+    const original = result.vin.trim().toUpperCase();
+    // VIN 标准字符集：A-Z（不含 I/O/Q）+ 0-9
+    const vinCharRegex = /^[A-HJ-NPR-Z0-9]{17}$/;
+    if (vinCharRegex.test(original)) {
+      // 已经符合 VIN 规范，无需修正
+      result.vinCorrected = false;
+      return result;
+    }
+    // 执行常见 OCR 混淆替换：O→0、I→1、Q→0
+    let corrected = original;
+    corrected = corrected.replace(/O/g, '0');
+    corrected = corrected.replace(/I/g, '1');
+    corrected = corrected.replace(/Q/g, '0');
+    if (vinCharRegex.test(corrected)) {
+      result.vinOriginal = original;
+      result.vin = corrected;
+      result.vinCorrected = true;
+      this.logger.log(`VIN自动修正: "${original}" → "${corrected}"`);
+    } else {
+      // 修正后仍不符合，标记但不修改
+      result.vinCorrected = false;
     }
     return result;
   }

@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { createWorkOrder, getShopList, getShopCategoriesWithStandard, quickCreateWorkOrder, ocrRecognizeImage, getSpecialPaintList } from '@/api/paint'
-import type { PaintShop, PaintStandard, PaintSpecialPaint, CreateWorkOrderItemDto } from '@/api/types/paint'
+import { createWorkOrder, getShopList, getShopCategoriesWithStandard, quickCreateWorkOrder, ocrRecognizeImage, getSpecialPaintList, fetchOrderNoRules, fetchVehicleByPlate } from '@/api/paint'
+import type { OrderNoRule } from '@/api/paint'
+import type { PaintShop, PaintStandard, PaintSpecialPaint, PaintVehicle, CreateWorkOrderItemDto } from '@/api/types/paint'
 import { compressImage } from '@/utils/image-compress'
+import { analyzeOrderNoErrors } from '@/utils/order-no-rule'
 
 const route = useRoute()
 const router = useRouter()
@@ -10,6 +12,25 @@ const shops = ref<PaintShop[]>([])
 const standards = ref<PaintStandard[]>([])
 const specialPaints = ref<PaintSpecialPaint[]>([])
 const submitting = ref(false)
+const plateNumberError = ref('')
+const vinError = ref('')
+const phoneError = ref('')
+const orderNoError = ref('')
+const orderNoRules = ref<OrderNoRule[]>([])
+const ocrVinCorrectionMsg = ref('')
+
+// 车辆主数据自动填充
+const vehicleLookingUp = ref(false)
+const vehicleFound = ref<PaintVehicle | null>(null)
+const vehicleMatchedFields = ref<string[]>([])
+
+// 校验正则
+// 车牌号正则：支持普通7位（省份+字母+5位）、新能源8位、旧6位（字母+5位字母数字）
+// 省份含：31省市+使领+军警武警+军区(海空北沈兰济南广成武翼)
+const PLATE_PROVINCE = '京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼使领军警海空北沈兰济南广成武翼'
+const plateNumberRegex = new RegExp(`^([${PLATE_PROVINCE}][A-Z][A-HJ-NP-Z0-9]{4,5}[A-HJ-NP-Z0-9挂学警港澳]|[A-Z][A-HJ-NP-Z0-9]{5})$`)
+const phoneRegex = /^1[3-9]\d{9}$/
+const vinRegex = /^[A-HJ-NPR-Z0-9]{17}$/
 
 const form = reactive({
   shopId: '',
@@ -71,6 +92,7 @@ function onShopConfirm({ selectedValues }: any) {
   showShopPicker.value = false
   if (selectedValues[0]) {
     loadStandards(selectedValues[0])
+    loadOrderNoRules(selectedValues[0])
   }
 }
 
@@ -90,6 +112,7 @@ async function loadShops() {
     if (shops.value.length === 1 && !form.shopId) {
       form.shopId = shops.value[0].id
       await loadStandards(form.shopId)
+      loadOrderNoRules(form.shopId)
     }
   }
   catch {
@@ -124,10 +147,24 @@ async function loadStandards(shopId: string) {
   }
 }
 
+async function loadOrderNoRules(shopId: string) {
+  try {
+    const res = await fetchOrderNoRules(shopId)
+    orderNoRules.value = (res as any as OrderNoRule[]) || []
+  }
+  catch {
+    orderNoRules.value = []
+  }
+}
+
 // 总幅数计算
 const totalPaintCount = computed(() => {
   return form.items.reduce((sum, item) => {
     if (!item.quantity || item.quantity <= 0) return sum
+    // 手动覆盖幅数
+    if (item.overridePaintCount !== undefined && item.overridePaintCount !== null) {
+      return sum + item.overridePaintCount
+    }
     const std = standards.value.find(s => s.categoryId === item.categoryId)
     if (!std) return sum
     const coefficient = Number(std.coefficient) || 0
@@ -141,6 +178,22 @@ const totalPaintCount = computed(() => {
     return sum + paintCount
   }, 0)
 })
+
+/** 获取单个 item 的自动计算幅数 */
+function getItemAutoPaintCount(index: number): number {
+  const item = form.items[index]
+  if (!item || !item.quantity || item.quantity <= 0) return 0
+  const std = standards.value.find(s => s.categoryId === item.categoryId)
+  if (!std) return 0
+  const coefficient = Number(std.coefficient) || 0
+  const newPartAddition = Number(std.newPartAddition) || 0
+  let specialMultiplier = 1
+  if (item.specialPaintId) {
+    const sp = specialPaints.value.find(s => s.id === item.specialPaintId)
+    if (sp) specialMultiplier = Number(sp.multiplier) || 1
+  }
+  return (item.quantity * coefficient + (item.newPartQuantity || 0) * newPartAddition) * specialMultiplier
+}
 
 // 特殊车漆选项
 const specialPaintOptions = computed(() => [
@@ -176,6 +229,54 @@ async function handleSubmit() {
     return
   }
 
+  // 校验工单号规则
+  if (form.orderNo && form.orderNo.trim() && orderNoRules.value.length > 0) {
+    const upper = form.orderNo.trim().toUpperCase()
+    let matched = false
+    for (const rule of orderNoRules.value) {
+      try {
+        const regex = new RegExp(`^${rule.pattern}$`)
+        if (regex.test(upper)) {
+          matched = true
+          break
+        }
+      }
+      catch {
+        continue
+      }
+    }
+    if (!matched) {
+      const errors = analyzeOrderNoErrors(upper, orderNoRules.value)
+      orderNoError.value = errors.length > 0
+        ? errors.join('；')
+        : `工单号不符合门店规则（长度应为 ${orderNoRules.value.map(r => r.length).join('/')}）`
+      showNotify({ type: 'warning', message: orderNoError.value })
+      return
+    }
+  }
+
+  // 校验车牌号
+  if (!form.plateNumber || !form.plateNumber.trim()) {
+    plateNumberError.value = '请输入车牌号'
+    return
+  }
+  if (!plateNumberRegex.test(form.plateNumber.trim().toUpperCase())) {
+    plateNumberError.value = '车牌号格式不正确（普通车牌7位，新能源车牌8位）'
+    return
+  }
+
+  // 校验车架号（非必填，填了则校验格式）
+  if (form.vin && form.vin.trim() && !vinRegex.test(form.vin.trim().toUpperCase())) {
+    vinError.value = '车架号应为17位字母数字（不含I、O、Q）'
+    return
+  }
+
+  // 校验手机号（非必填，填了则校验格式）
+  if (form.phone && form.phone.trim() && !phoneRegex.test(form.phone.trim())) {
+    phoneError.value = '手机号应为11位数字，以1开头'
+    return
+  }
+
   const validItems = form.items.filter(item => item.quantity > 0)
   if (validItems.length === 0) {
     showNotify({ type: 'warning', message: '请至少添加一个喷漆项目' })
@@ -196,12 +297,18 @@ async function handleSubmit() {
       customerName: form.customerName || undefined,
       phone: form.phone || undefined,
       remark: form.remark || undefined,
-      items: validItems.map(it => ({
-        categoryId: it.categoryId,
-        quantity: it.quantity,
-        newPartQuantity: it.newPartQuantity,
-        specialPaintId: it.specialPaintId || undefined,
-      })),
+      items: validItems.map(it => {
+        const item: any = {
+          categoryId: it.categoryId,
+          quantity: it.quantity,
+          newPartQuantity: it.newPartQuantity,
+          specialPaintId: it.specialPaintId || undefined,
+        }
+        if (it.overridePaintCount !== undefined && it.overridePaintCount !== null) {
+          item.overridePaintCount = it.overridePaintCount
+        }
+        return item
+      }),
     })
     showNotify({ type: 'success', message: '创建成功' })
     setTimeout(() => router.back(), 1000)
@@ -212,6 +319,87 @@ async function handleSubmit() {
   finally {
     submitting.value = false
   }
+}
+
+// 车辆主数据：按车牌号查询历史车辆并自动填充空字段（与 OCR 策略一致：仅填充空字段，不覆盖用户已填值）
+async function lookupVehicle(plate: string) {
+  const normalized = (plate || '').trim().toUpperCase()
+  if (!normalized || !plateNumberRegex.test(normalized)) {
+    vehicleFound.value = null
+    vehicleMatchedFields.value = []
+    return
+  }
+  // 已匹配到同一车牌则不重复查询
+  if (vehicleFound.value?.plateNumber === normalized) return
+  vehicleLookingUp.value = true
+  try {
+    const data = await fetchVehicleByPlate(normalized)
+    if (data) {
+      vehicleFound.value = data
+      const fieldMap: Array<{ key: 'vin' | 'carModel' | 'brand' | 'customerName' | 'phone' | 'contactPerson'; vehicleKey: 'vin' | 'carModel' | 'brand' | 'customerName' | 'phone' | 'contactPerson'; label: string }> = [
+        { key: 'vin', vehicleKey: 'vin', label: '车架号' },
+        { key: 'carModel', vehicleKey: 'carModel', label: '车型' },
+        { key: 'brand', vehicleKey: 'brand', label: '品牌' },
+        { key: 'customerName', vehicleKey: 'customerName', label: '客户名称' },
+        { key: 'phone', vehicleKey: 'phone', label: '电话' },
+        { key: 'contactPerson', vehicleKey: 'contactPerson', label: '联系人' },
+      ]
+      const filled: string[] = []
+      for (const { key, vehicleKey, label } of fieldMap) {
+        const currentValue = ((form as any)[key] || '').trim()
+        const vehicleValue = ((data as any)[vehicleKey] || '').trim()
+        if (!currentValue && vehicleValue) {
+          ;(form as any)[key] = vehicleValue
+          filled.push(label)
+        }
+      }
+      vehicleMatchedFields.value = filled
+      if (filled.length > 0) {
+        showNotify({ type: 'success', message: `已匹配历史车辆，填充 ${filled.join('、')}（累计 ${data.totalOrderCount} 单）` })
+      }
+      else {
+        showNotify({ type: 'primary', message: `匹配到历史车辆，累计 ${data.totalOrderCount} 单 / ${Number(data.totalPaintCount).toFixed(1)} 幅` })
+      }
+    }
+    else {
+      vehicleFound.value = null
+      vehicleMatchedFields.value = []
+    }
+  }
+  catch {
+    vehicleFound.value = null
+    vehicleMatchedFields.value = []
+  }
+  finally {
+    vehicleLookingUp.value = false
+  }
+}
+
+function onPlateNumberBlur() {
+  const plate = (form.plateNumber || '').trim().toUpperCase()
+  if (!plate) {
+    vehicleFound.value = null
+    vehicleMatchedFields.value = []
+    return
+  }
+  lookupVehicle(plate)
+}
+
+function onPlateNumberInput() {
+  // 车牌号被修改时清除匹配状态（下次 blur 时重新查询）
+  if (vehicleFound.value) {
+    const currentPlate = (form.plateNumber || '').trim().toUpperCase()
+    if (vehicleFound.value.plateNumber !== currentPlate) {
+      vehicleFound.value = null
+      vehicleMatchedFields.value = []
+    }
+  }
+}
+
+// 跳转车辆历史工单页
+function goVehicleHistory() {
+  if (!vehicleFound.value) return
+  router.push({ name: '/work-order/vehicle-history', query: { id: vehicleFound.value.id, plate: vehicleFound.value.plateNumber } })
 }
 
 function handleTakePhoto() {
@@ -244,12 +432,24 @@ const showBatchResult = ref(false)
 // 是否启用 OCR 识别（关闭时仅创建带图片的空工单，速度更快）
 const enableOcr = ref(true)
 // OCR 识别模式：basic 仅基础资料 / items 仅部位 / all 全部
-const ocrMode = ref<'basic' | 'items' | 'all'>('all')
+const ocrMode = ref<'basic' | 'items' | 'all'>('basic')
 const ocrModeOptions = [
-  { label: '全部', value: 'all' },
   { label: '仅基础资料', value: 'basic' },
   { label: '仅部位', value: 'items' },
+  { label: '全部', value: 'all' },
 ]
+
+/** 智能选择OCR模式：根据已填字段决定识别范围，节省token */
+const smartOcrMode = computed<'basic' | 'items' | 'all'>(() => {
+  const basicFields = [form.plateNumber, form.orderNo, form.customerName, form.phone, form.carModel, form.vin, form.brand, form.orderDate]
+  const basicFilled = basicFields.some(v => v && String(v).trim())
+  const itemsFilled = form.items.some(it => it.quantity && it.quantity > 0)
+
+  if (basicFilled && itemsFilled) return 'all'
+  if (basicFilled && !itemsFilled) return 'items'
+  if (!basicFilled && itemsFilled) return 'basic'
+  return 'all'
+})
 
 async function batchQuickCreate(files: File[]) {
   batchCreating.value = true
@@ -337,8 +537,6 @@ function onBatchResultConfirm() {
 
 // OCR 识别状态
 const ocrLoading = ref(false)
-const showOcrConflict = ref(false)
-const ocrConflicts = ref<Array<{ key: string; label: string; oldValue: string; newValue: string; checked: boolean }>>([])
 
 // OCR 识别（仅识别填入表单，不创建工单）
 function handleOcrRecognize() {
@@ -370,7 +568,6 @@ function handleOcrRecognize() {
       ]
 
       const filledMessages: string[] = []
-      const conflicts: Array<{ key: string; label: string; oldValue: string; newValue: string; checked: boolean }> = []
 
       for (const { key, label, ocrKey } of fieldMap) {
         const ocrValue = ((result as any)[ocrKey] || '').trim()
@@ -381,9 +578,7 @@ function handleOcrRecognize() {
           ;(form as any)[key] = ocrValue
           filledMessages.push(`${label}：${ocrValue}`)
         }
-        else if (currentValue !== ocrValue) {
-          conflicts.push({ key, label, oldValue: currentValue, newValue: ocrValue, checked: false })
-        }
+        // 已填字段不再覆盖，跳过
       }
 
       // 部位项目：用 OCR 识别到的部位填充（仅填充数量为0的部位）
@@ -407,12 +602,33 @@ function handleOcrRecognize() {
         showNotify({ type: 'success', message: `已填充 ${filledMessages.join('、')}` })
       }
 
-      if (conflicts.length > 0) {
-        ocrConflicts.value = conflicts
-        showOcrConflict.value = true
+      // 工单号修正提示：OCR 识别的工单号不符合规则，后端已自动修正
+      const candidates = (result as any).orderNoCandidates || []
+      const orderNoValid = (result as any).orderNoValid
+      if (candidates.length > 0 && orderNoValid === false) {
+        const correctedNo = (result as any).orderNo || ''
+        showNotify({ type: 'warning', message: `工单号已自动修正为 ${correctedNo}` })
       }
-      else if (filledMessages.length === 0) {
-        showNotify({ type: 'warning', message: '未识别到有效信息' })
+
+      // VIN 车架号修正提示：OCR 识别的 VIN 含易混淆字符（O↔0、I↔1、Q↔0），后端已自动修正
+      if ((result as any).vinCorrected && (result as any).vinOriginal) {
+        ocrVinCorrectionMsg.value = `OCR识别车架号含易混淆字符，已自动修正：「${(result as any).vinOriginal}」→「${(result as any).vin}」`
+        showNotify({ type: 'warning', message: ocrVinCorrectionMsg.value })
+      }
+      else {
+        ocrVinCorrectionMsg.value = ''
+      }
+
+      // OCR 填充完车牌后，触发车辆主数据查询，自动补全 OCR 未识别到的空字段
+      if (form.plateNumber && form.plateNumber.trim()) {
+        // 重置匹配状态，强制重新查询（OCR 可能更新了车牌）
+        vehicleFound.value = null
+        vehicleMatchedFields.value = []
+        await lookupVehicle(form.plateNumber)
+      }
+
+      if (filledMessages.length === 0 && (candidates.length === 0 || orderNoValid !== false)) {
+        showNotify({ type: 'warning', message: '未识别到有效信息或所有字段已填写' })
       }
     }
     catch {
@@ -423,19 +639,6 @@ function handleOcrRecognize() {
     }
   }
   input.click()
-}
-
-// 确认覆盖冲突字段
-function confirmOcrConflict() {
-  const selected = ocrConflicts.value.filter(f => f.checked)
-  for (const field of selected) {
-    ;(form as any)[field.key] = field.newValue
-  }
-  if (selected.length > 0) {
-    showNotify({ type: 'success', message: `已覆盖 ${selected.map(f => f.label).join('、')}` })
-  }
-  showOcrConflict.value = false
-  ocrConflicts.value = []
 }
 
 onMounted(() => {
@@ -470,13 +673,14 @@ onMounted(() => {
       <div class="ocr-switch-row">
         <span class="ocr-switch-label">OCR自动识别</span>
         <van-switch v-model="enableOcr" size="20px" />
-        <span class="ocr-switch-tip">{{ enableOcr ? '开启：自动识别车牌等信息' : '关闭：仅创建带图片的空工单（更快）' }}</span>
+        <span class="ocr-switch-tip">{{ enableOcr ? '开启：自动识别并填充基础资料' : '关闭：仅创建带图片的空工单（更快）' }}</span>
       </div>
       <div v-if="enableOcr" class="ocr-mode-row">
         <span class="ocr-mode-label">识别模式</span>
         <van-radio-group v-model="ocrMode" direction="horizontal">
           <van-radio v-for="opt in ocrModeOptions" :key="opt.value" :name="opt.value">{{ opt.label }}</van-radio>
         </van-radio-group>
+        <span class="ocr-mode-smart" @click="ocrMode = smartOcrMode">智能推荐</span>
       </div>
     </div>
 
@@ -494,15 +698,38 @@ onMounted(() => {
         </van-button>
       </div>
       <van-cell title="门店" :value="shopName || '请选择门店'" is-link @click="showShopPicker = true" />
-      <van-field v-model="form.orderNo" label="工单号" placeholder="请输入工单号" />
+      <van-field v-model="form.orderNo" label="工单号" placeholder="请输入工单号" :error-message="orderNoError" @update:model-value="orderNoError = ''" />
       <van-cell title="工单日期" :value="form.orderDate || '请选择日期（可选）'" is-link @click="showDatePicker = true" />
       <van-cell title="结算月份" :value="form.settlementMonth || '请选择结算月份'" is-link @click="showMonthPicker = true" />
-      <van-field v-model="form.plateNumber" label="车牌号" placeholder="请输入车牌号" />
+      <van-field
+        v-model="form.plateNumber"
+        label="车牌号"
+        placeholder="请输入车牌号"
+        :error-message="plateNumberError"
+        :loading="vehicleLookingUp"
+        @blur="onPlateNumberBlur"
+        @update:model-value="() => { plateNumberError = ''; onPlateNumberInput(); }"
+      >
+        <template v-if="vehicleFound" #button>
+          <van-button size="small" type="primary" plain @click="goVehicleHistory">
+            历史{{ vehicleFound.totalOrderCount }}单
+          </van-button>
+        </template>
+      </van-field>
+      <van-notice-bar
+        v-if="vehicleFound"
+        left-icon="checked"
+        :text="`已匹配历史车辆${vehicleMatchedFields.length ? '，已填充：' + vehicleMatchedFields.join('、') : ''}（累计 ${vehicleFound.totalOrderCount} 单 / ${Number(vehicleFound.totalPaintCount).toFixed(1)} 幅）`"
+        background="#e6f9e6"
+        color="#07c160"
+        style="margin: 0 16px 8px;"
+      />
       <van-field v-model="form.carModel" label="车型" placeholder="请输入车型" />
-      <van-field v-model="form.vin" label="车架号" placeholder="请输入车架号(VIN)" />
+      <van-field v-model="form.vin" label="车架号" placeholder="请输入车架号(VIN)" :error-message="vinError || ocrVinCorrectionMsg" @update:model-value="vinError = ''; ocrVinCorrectionMsg = ''" />
+      <van-notice-bar v-if="ocrVinCorrectionMsg" left-icon="warning-o" :text="ocrVinCorrectionMsg" background="#fffbe8" color="#ed6a0c" style="margin: 0 16px 8px;" />
       <van-field v-model="form.brand" label="品牌" placeholder="请输入品牌" />
       <van-field v-model="form.customerName" label="客户名称" placeholder="请输入客户名称" />
-      <van-field v-model="form.phone" label="联系电话" placeholder="请输入电话" type="tel" />
+      <van-field v-model="form.phone" label="联系电话" placeholder="请输入电话" type="tel" :error-message="phoneError" @update:model-value="phoneError = ''" />
       <van-field v-model="form.remark" label="备注" type="textarea" placeholder="请输入备注" rows="2" />
     </div>
 
@@ -525,6 +752,29 @@ onMounted(() => {
           <div v-if="Number(standards[index]?.newPartAddition) > 0" class="control-group">
             <span class="control-label">新件</span>
             <van-stepper v-model="item.newPartQuantity" min="0" />
+          </div>
+          <div class="control-group">
+            <span class="control-label">幅数</span>
+            <div class="paint-count-control">
+              <van-stepper
+                v-if="item.overridePaintCount !== undefined && item.overridePaintCount !== null"
+                :model-value="item.overridePaintCount"
+                min="0" max="99" step="0.1" decimal-length="1"
+                input-width="48px"
+                @update:model-value="(val: number) => { item.overridePaintCount = val }"
+              />
+              <span v-else class="paint-count-value" @click="item.overridePaintCount = getItemAutoPaintCount(index)">
+                {{ getItemAutoPaintCount(index).toFixed(1) }}
+              </span>
+              <van-icon
+                v-if="item.overridePaintCount !== undefined && item.overridePaintCount !== null"
+                name="close"
+                size="14"
+                color="#ff4d4f"
+                style="margin-left: 4px; cursor: pointer;"
+                @click="item.overridePaintCount = undefined"
+              />
+            </div>
           </div>
         </div>
         <div v-if="specialPaints.length > 0 && item.quantity > 0" class="special-paint-row">
@@ -609,36 +859,6 @@ onMounted(() => {
       </div>
     </van-dialog>
 
-    <!-- OCR 冲突确认弹窗 -->
-    <van-dialog
-      v-model:show="showOcrConflict"
-      title="OCR识别结果冲突"
-      show-cancel-button
-      confirm-button-text="覆盖选中"
-      cancel-button-text="不覆盖"
-      @confirm="confirmOcrConflict"
-    >
-      <div style="padding: 12px 16px; max-height: 300px; overflow-y: auto;">
-        <p style="font-size: 13px; color: #969799; margin-bottom: 12px;">
-          以下字段识别结果与已有数据不一致，勾选需覆盖的字段
-        </p>
-        <div
-          v-for="(field, index) in ocrConflicts"
-          :key="field.key"
-          style="display: flex; align-items: flex-start; gap: 8px; padding: 10px 0; border-bottom: 1px solid #f5f5f5;"
-        >
-          <van-checkbox v-model="ocrConflicts[index].checked" />
-          <div style="flex: 1;">
-            <div style="font-weight: bold; font-size: 14px; margin-bottom: 4px;">{{ field.label }}</div>
-            <div style="font-size: 13px; color: #969799;">
-              <span style="text-decoration: line-through;">{{ field.oldValue }}</span>
-              <span style="margin: 0 6px;">→</span>
-              <span style="color: #ff976a; font-weight: bold;">{{ field.newValue }}</span>
-            </div>
-          </div>
-        </div>
-      </div>
-    </van-dialog>
   </div>
 </template>
 
@@ -740,6 +960,14 @@ onMounted(() => {
   white-space: nowrap;
 }
 
+.ocr-mode-smart {
+  font-size: 12px;
+  color: #1989fa;
+  cursor: pointer;
+  white-space: nowrap;
+  margin-left: auto;
+}
+
 .divider-text {
   display: flex;
   align-items: center;
@@ -826,6 +1054,22 @@ onMounted(() => {
 .control-label {
   font-size: 12px;
   color: #999;
+}
+
+.paint-count-control {
+  display: flex;
+  align-items: center;
+}
+
+.paint-count-value {
+  font-size: 13px;
+  color: #333;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: #f7f8fa;
+  min-width: 40px;
+  text-align: center;
 }
 
 .special-paint-row {

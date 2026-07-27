@@ -176,6 +176,7 @@ const local: App.I18n.Schema = {
     paint_category: 'Category',
     paint_shop: 'Shop Manage',
     'paint_standard-template': 'Standard Template',
+    paint_vehicle: 'Vehicle',
     'paint_work-order': 'Work Order',
     'paint_work-order_reconcile': 'Work Order Reconcile',
     paint_statistics: 'Statistics',

@@ -1,17 +1,22 @@
 import request from '@/utils/request'
 import type {
   CategoryBreakdown,
+  CreateVehicleDto,
   CreateWorkOrderDto,
   MonthlyStatistics,
   PageResult,
+  PageVehicleDto,
   PageWorkOrderDto,
   PaintCategory,
   PaintShop,
   PaintSpecialPaint,
   PaintStandard,
+  PaintVehicle,
   PaintWorkOrder,
   ShopComparison,
+  UpdateVehicleDto,
   UpdateWorkOrderDto,
+  VehicleHistorySummary,
   YearOverview,
   StatisticsOverview,
 } from './types/paint'
@@ -52,8 +57,8 @@ export function deleteWorkOrder(id: string) {
   return request.delete(`/paint/work-order/${id}`)
 }
 
-export function findDuplicateWorkOrders(orderNo: string, excludeId?: string) {
-  return request.get<PaintWorkOrder[]>('/paint/work-order/duplicate', { params: { orderNo, excludeId } })
+export function findDuplicateWorkOrders(orderNo: string, excludeId?: string, settlementMonth?: string) {
+  return request.get<PaintWorkOrder[]>('/paint/work-order/duplicates/' + orderNo, { params: { ...(excludeId ? { excludeId } : {}), ...(settlementMonth ? { settlementMonth } : {}) } })
 }
 
 export function mergeWorkOrders(targetId: string, sourceIds: string[]) {
@@ -104,6 +109,10 @@ export function ocrRecognizeImage(file: File, shopId?: string, ocrMode: OcrMode 
     brand: string
     date: string
     rawText: string
+    orderNoValid?: boolean
+    orderNoCandidates?: string[]
+    vinCorrected?: boolean
+    vinOriginal?: string
     items?: {
       categoryId?: string
       matchedName: string
@@ -185,6 +194,69 @@ export function unsettleWorkOrder(orderId: string) {
   return request.post<PaintWorkOrder>(`/paint/work-order/${orderId}/unsettle`)
 }
 
+export function batchSettleWorkOrders(ids: string[]) {
+  return request.post<{ success: number; failed: number; errors: { id: string; message: string }[] }>('/paint/work-order/batch-settle', { ids })
+}
+
+export function batchUnsettleWorkOrders(ids: string[]) {
+  return request.post<{ success: number; failed: number; errors: { id: string; message: string }[] }>('/paint/work-order/batch-unsettle', { ids })
+}
+
 export function setAbnormal(orderId: string, isAbnormal: boolean, abnormalRemark?: string) {
   return request.post(`/paint/work-order/${orderId}/abnormal`, { isAbnormal, abnormalRemark })
+}
+
+// ===== 工单号规则 API =====
+
+export interface OrderNoRule {
+  pattern: string;
+  length: number;
+  description?: string;
+}
+
+export function fetchOrderNoRules(shopId: string) {
+  return request.get<OrderNoRule[]>('/paint/work-order/order-no-rules', { params: { shopId } })
+}
+
+// ===== 车辆主数据 API =====
+
+/** 按车牌号查询车辆（工单表单自动填充用） */
+export function fetchVehicleByPlate(plateNumber: string) {
+  return request.get<PaintVehicle | null>(`/paint/vehicle/by-plate/${encodeURIComponent(plateNumber)}`)
+}
+
+/** 查询车辆历史工单 + 统计摘要 */
+export function fetchVehicleHistory(
+  vehicleId: string,
+  params?: { current?: number; size?: number; scope?: 'current_shop' | 'all_shops'; shopId?: string },
+) {
+  return request.get<{ records: PaintWorkOrder[]; total: number; summary: VehicleHistorySummary }>(
+    `/paint/vehicle/${vehicleId}/history-orders`,
+    { params },
+  )
+}
+
+/** 分页查询车辆（按数据权限过滤） */
+export function fetchPaintVehiclePage(params: PageVehicleDto) {
+  return request.get<PageResult<PaintVehicle>>('/paint/vehicle/page', { params })
+}
+
+/** 新增车辆 */
+export function createPaintVehicle(data: CreateVehicleDto) {
+  return request.post<PaintVehicle>('/paint/vehicle', data)
+}
+
+/** 编辑车辆 */
+export function updatePaintVehicle(data: UpdateVehicleDto) {
+  return request.put<PaintVehicle>('/paint/vehicle', data)
+}
+
+/** 删除车辆（仅解除关联，不删工单） */
+export function deletePaintVehicle(id: string) {
+  return request.delete(`/paint/vehicle/${id}`)
+}
+
+/** 查询车辆详情 */
+export function fetchVehicleById(id: string) {
+  return request.get<PaintVehicle>(`/paint/vehicle/${id}`)
 }

@@ -16,6 +16,7 @@ import {
 } from './paint-calculation';
 import { CreateWorkOrderDto, UpdateWorkOrderDto, PageWorkOrderDto, WorkOrderItemDto } from '../work-order/dto/work-order.dto';
 import { SettlementMonthService } from './settlement-month.service';
+import { PaintVehicleService } from './paint-vehicle.service';
 import { Jimp } from 'jimp';
 
 interface OrderItemCreateData {
@@ -39,6 +40,7 @@ export class WorkOrderService {
     private readonly metricsService: MetricsService,
     @Inject(WINSTON_MODULE_PROVIDER) private readonly logger: Logger,
     private readonly settlementMonthService: SettlementMonthService,
+    private readonly vehicleService: PaintVehicleService,
   ) {}
 
   /** 一次性查询门店标准模板项目，避免 N+1 */
@@ -84,6 +86,22 @@ export class WorkOrderService {
     specialPaintMap: Map<string, { id: string; multiplier: number }>,
   ): OrderItemCreateData[] {
     return items.map(item => {
+      // 手动覆盖幅数：直接使用用户指定的值，跳过自动计算
+      if (item.overridePaintCount !== undefined && item.overridePaintCount !== null) {
+        const specialPaint = item.specialPaintId ? specialPaintMap.get(item.specialPaintId) : null;
+        const specialPaintId = specialPaint ? specialPaint.id : null;
+        const specialPaintMultiplier = specialPaint ? specialPaint.multiplier : null;
+
+        return {
+          categoryId: item.categoryId,
+          quantity: item.quantity || 1,
+          paintCount: item.overridePaintCount,
+          newPartQuantity: item.newPartQuantity || 0,
+          specialPaintId,
+          specialPaintMultiplier,
+        };
+      }
+
       const templateItem = templateItemMap.get(item.categoryId);
       const coefficient = templateItem?.coefficient ?? 0;
       const newPartAddition = templateItem?.newPartAddition ?? 0;
@@ -150,6 +168,19 @@ export class WorkOrderService {
 
     // 在事务内创建工单（批量上传时不自动生成工单号，等OCR填充）
     const order = await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      // 按车牌号 upsert 车辆主数据（自动沉淀，全局唯一）
+      let vehicleId: string | undefined;
+      if (plateNumber && plateNumber.trim()) {
+        vehicleId = await this.vehicleService.upsertByPlateWithTx(tx, {
+          plateNumber: plateNumber.slice(0, 50),
+          vin: vin || undefined,
+          carModel: carModel || undefined,
+          brand: brand || undefined,
+          customerName: customerName || undefined,
+          phone: phone || undefined,
+        }, shopId, finalOrderDate || undefined);
+      }
+
       const created = await tx.paintWorkOrder.create({
         data: {
           orderNo: ocrOrderNo || null,
@@ -161,6 +192,7 @@ export class WorkOrderService {
           brand: brand || '',
           customerName: customerName || '',
           phone: phone || '',
+          vehicleId: vehicleId || null,
           totalPaintCount,
           status: 'PENDING',
           settlementMonth: settlementMonth || null,
@@ -181,6 +213,13 @@ export class WorkOrderService {
 
       return created;
     });
+
+    // 事务提交后异步刷新车辆统计（不阻塞主流程）
+    if (plateNumber && plateNumber.trim()) {
+      this.vehicleService.refreshStats(order.vehicleId || '').catch((e) => {
+        this.logger?.error?.(`刷新车辆统计失败: ${e instanceof Error ? e.message : e}`);
+      });
+    }
 
     return this.findById(order.id);
   }
@@ -205,12 +244,27 @@ export class WorkOrderService {
     }
 
     return this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-      const orderNo = dto.orderNo || await this.generateOrderNo(dto.shopId, tx);
+      // 按车牌号 upsert 车辆主数据（自动沉淀，全局唯一）
+      let vehicleId: string | undefined;
+      const orderDateObj = dto.orderDate ? new Date(dto.orderDate) : new Date();
+      if (dto.plateNumber && dto.plateNumber.trim()) {
+        vehicleId = await this.vehicleService.upsertByPlateWithTx(tx, {
+          plateNumber: dto.plateNumber.slice(0, 50),
+          vin: dto.vin || undefined,
+          carModel: dto.carModel || undefined,
+          brand: dto.brand || undefined,
+          customerName: dto.customerName || undefined,
+          phone: dto.phone || undefined,
+          contactPerson: dto.contactPerson || undefined,
+        }, dto.shopId, orderDateObj);
+      }
+
+      const orderNo = dto.orderNo || null;
       const order = await tx.paintWorkOrder.create({
         data: {
           orderNo,
           shopId: dto.shopId,
-          orderDate: dto.orderDate ? new Date(dto.orderDate) : new Date(),
+          orderDate: orderDateObj,
           settlementMonth: dto.settlementMonth || null,
           carModel: dto.carModel,
           plateNumber: dto.plateNumber ? dto.plateNumber.slice(0, 50) : dto.plateNumber,
@@ -220,6 +274,7 @@ export class WorkOrderService {
           phone: dto.phone,
           contactPerson: dto.contactPerson,
           description: dto.description,
+          vehicleId: vehicleId || null,
           totalPaintCount,
           remark: dto.remark,
           status: 'DRAFT' as PaintOrderStatus,
@@ -228,6 +283,14 @@ export class WorkOrderService {
         include: { items: { include: { category: true, specialPaint: true } }, shop: true },
       });
       this.metricsService.recordWorkOrderCreation(dto.shopId, 'manual');
+
+      // 事务提交后异步刷新车辆统计
+      if (vehicleId) {
+        this.vehicleService.refreshStats(vehicleId).catch((e) => {
+          this.logger?.error?.(`刷新车辆统计失败: ${e instanceof Error ? e.message : e}`);
+        });
+      }
+
       return order;
     });
   }
@@ -337,13 +400,69 @@ export class WorkOrderService {
       }
     }
 
-    const updated = await this.prisma.paintWorkOrder.update({
-      where: { id: dto.id },
-      data: updateData,
-      include: { items: { include: { category: true, specialPaint: true } }, shop: true },
+    const updated = await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      // 若车牌号或车辆相关字段有变更，同步 upsert 车辆主数据
+      const hasVehicleFieldChange =
+        dto.plateNumber !== undefined ||
+        dto.vin !== undefined ||
+        dto.carModel !== undefined ||
+        dto.brand !== undefined ||
+        dto.customerName !== undefined ||
+        dto.phone !== undefined ||
+        dto.contactPerson !== undefined;
+
+      let vehicleId = existing.vehicleId;
+      // 记录旧车辆ID，用于车牌变更后刷新旧车辆统计
+      const oldVehicleId = existing.vehicleId;
+      const plateForVehicle = dto.plateNumber !== undefined ? dto.plateNumber : existing.plateNumber;
+      if (plateForVehicle && plateForVehicle.trim()) {
+        const newVehicleId = await this.vehicleService.upsertByPlateWithTx(tx, {
+          plateNumber: plateForVehicle.slice(0, 50),
+          vin: dto.vin !== undefined ? dto.vin || undefined : (existing.vin || undefined),
+          carModel: dto.carModel !== undefined ? dto.carModel || undefined : (existing.carModel || undefined),
+          brand: dto.brand !== undefined ? dto.brand || undefined : (existing.brand || undefined),
+          customerName: dto.customerName !== undefined ? dto.customerName || undefined : (existing.customerName || undefined),
+          phone: dto.phone !== undefined ? dto.phone || undefined : (existing.phone || undefined),
+          contactPerson: dto.contactPerson !== undefined ? dto.contactPerson || undefined : (existing.contactPerson || undefined),
+        }, dto.shopId || existing.shopId, dto.orderDate ? new Date(dto.orderDate) : (existing.orderDate || undefined));
+
+        if (newVehicleId !== vehicleId) {
+          vehicleId = newVehicleId;
+          updateData.vehicle = { connect: { id: newVehicleId } };
+        }
+      } else if (dto.plateNumber !== undefined && !plateForVehicle?.trim()) {
+        // 用户主动清空了车牌，解除车辆关联
+        updateData.vehicle = { disconnect: true };
+        vehicleId = null;
+      }
+
+      // 没有任何车辆字段变更时不调用 upsert，避免无意义写入
+      void hasVehicleFieldChange;
+
+      const result = await tx.paintWorkOrder.update({
+        where: { id: dto.id },
+        data: updateData,
+        include: { items: { include: { category: true, specialPaint: true } }, shop: true },
+      });
+
+      return { result, vehicleId, oldVehicleId };
     });
 
-    return updated;
+    // 事务提交后异步刷新车辆统计
+    // 1) 新车辆（或未变更的当前车辆）统计刷新
+    if (updated.vehicleId) {
+      this.vehicleService.refreshStats(updated.vehicleId).catch((e) => {
+        this.logger?.error?.(`刷新车辆统计失败: ${e instanceof Error ? e.message : e}`);
+      });
+    }
+    // 2) 若车牌变更导致车辆切换，旧车辆统计也需刷新（移除本工单的贡献）
+    if (updated.oldVehicleId && updated.oldVehicleId !== updated.vehicleId) {
+      this.vehicleService.refreshStats(updated.oldVehicleId).catch((e) => {
+        this.logger?.error?.(`刷新旧车辆统计失败: ${e instanceof Error ? e.message : e}`);
+      });
+    }
+
+    return updated.result;
   }
 
   /** 设置/取消异常标注 */
@@ -385,14 +504,25 @@ export class WorkOrderService {
     // 先清理关联的图片文件和数据库记录
     await this.imageService.deleteOrderImages(id);
 
-    return this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    const vehicleIdToRefresh = existing.vehicleId;
+
+    const result = await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       // 删除数据库中的图片记录
       await tx.paintWorkOrderImage.deleteMany({ where: { orderId: id } });
       // 删除工单项
       await tx.paintWorkOrderItem.deleteMany({ where: { orderId: id } });
-      // 删除工单
+      // 删除工单（vehicleId 关系由 onDelete: SetNull 处理，但工单已删除所以无所谓）
       return tx.paintWorkOrder.delete({ where: { id } });
     });
+
+    // 事务提交后异步刷新车辆统计（工单数 -1）
+    if (vehicleIdToRefresh) {
+      this.vehicleService.refreshStats(vehicleIdToRefresh).catch((e) => {
+        this.logger?.error?.(`删除工单后刷新车辆统计失败: ${e instanceof Error ? e.message : e}`);
+      });
+    }
+
+    return result;
   }
 
   /** 补充展示状态（status 已由各操作直接写入数据库，此处不再覆盖） */
@@ -453,25 +583,36 @@ export class WorkOrderService {
       return { current, size, total: 0, records: [] };
     }
 
-    // 先查询所有满足条件的工单 id/orderNo/createdAt/totalPaintCount，用于全局识别重复工单、排序及统计总幅数
-    const allOrders = await this.prisma.paintWorkOrder.findMany({
-      where,
-      select: { id: true, orderNo: true, createdAt: true, totalPaintCount: true },
-      orderBy: [{ orderNo: 'asc' }, { createdAt: 'asc' }],
-    });
+    // 并行：1) 轻量字段查询用于重复识别和排序 2) 总幅数聚合 3) 总数 count
+    // 注意：重复工单需全局识别（同 orderNo+settlementMonth 出现>1 次），无法直接数据库分页
+    // 优化点：select 仅必要字段，配合索引；聚合用 _sum 避免 reduce 全量数据到内存
+    const [allOrders, totalPaintCountAgg] = await Promise.all([
+      this.prisma.paintWorkOrder.findMany({
+        where,
+        select: { id: true, orderNo: true, settlementMonth: true, createdAt: true },
+        orderBy: [{ orderNo: 'asc' }, { createdAt: 'asc' }],
+      }),
+      this.prisma.paintWorkOrder.aggregate({
+        where,
+        _sum: { totalPaintCount: true },
+      }),
+    ]);
 
-    // 统计每个 orderNo 出现次数
-    const orderNoCount = new Map<string, number>();
+    // 统计每个 orderNo+settlementMonth 组合出现次数（同号不同月不算重复）
+    const orderNoMonthCount = new Map<string, number>();
     allOrders.forEach(order => {
       if (order.orderNo) {
-        orderNoCount.set(order.orderNo, (orderNoCount.get(order.orderNo) || 0) + 1);
+        const key = `${order.orderNo}|${order.settlementMonth || ''}`;
+        orderNoMonthCount.set(key, (orderNoMonthCount.get(key) || 0) + 1);
       }
     });
 
-    // 重复工单全局优先显示，同 orderNo 按创建时间排序
+    // 重复工单全局优先显示，同 orderNo+settlementMonth 按创建时间排序
     const sortedOrders = allOrders.sort((a, b) => {
-      const aDup = a.orderNo && (orderNoCount.get(a.orderNo) || 0) > 1 ? 0 : 1;
-      const bDup = b.orderNo && (orderNoCount.get(b.orderNo) || 0) > 1 ? 0 : 1;
+      const aKey = `${a.orderNo}|${a.settlementMonth || ''}`;
+      const bKey = `${b.orderNo}|${b.settlementMonth || ''}`;
+      const aDup = a.orderNo && (orderNoMonthCount.get(aKey) || 0) > 1 ? 0 : 1;
+      const bDup = b.orderNo && (orderNoMonthCount.get(bKey) || 0) > 1 ? 0 : 1;
       if (aDup !== bDup) return aDup - bDup;
       if (a.orderNo !== b.orderNo) return (a.orderNo || '').localeCompare(b.orderNo || '');
       return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
@@ -487,7 +628,8 @@ export class WorkOrderService {
           where: { id: { in: pageIds } },
           include: {
             items: { include: { category: true, specialPaint: true } },
-            images: { orderBy: { createdAt: 'desc' } },
+            // 列表页仅查询首图，避免图片过多导致响应臃肿
+            images: { orderBy: { createdAt: 'desc' }, take: 1 },
             shop: { select: { id: true, name: true, code: true } },
           },
         })
@@ -501,10 +643,11 @@ export class WorkOrderService {
 
     const enrichedRecords = orderedRecords.map(record => {
       const normalized = this.applyDerivedStatus(record);
+      const monthKey = `${record.orderNo || ''}|${record.settlementMonth || ''}`;
       return {
         ...normalized,
-        _duplicateCount: orderNoCount.get(record.orderNo || '') || 1,
-        _isDuplicate: (orderNoCount.get(record.orderNo || '') || 1) > 1,
+        _duplicateCount: orderNoMonthCount.get(monthKey) || 1,
+        _isDuplicate: (orderNoMonthCount.get(monthKey) || 1) > 1,
       };
     });
 
@@ -537,7 +680,8 @@ export class WorkOrderService {
       (record as any)._isSealed = !!(month && record.shopId && sealedSet.has(`${record.shopId}|${month}`));
     }
 
-    const totalPaintCount = allOrders.reduce((sum, o) => sum + Number(o.totalPaintCount), 0);
+    // 使用数据库聚合结果，避免内存 reduce
+    const totalPaintCount = Number(totalPaintCountAgg._sum.totalPaintCount || 0);
 
     return { current, size, total, totalPaintCount, records: enrichedRecords };
   }

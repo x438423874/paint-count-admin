@@ -3,11 +3,13 @@ import {
   getWorkOrderDetail, auditWorkOrder, unauditWorkOrder, deleteWorkOrder,
   uploadWorkOrderImage, deleteWorkOrderImage, getShopList, updateWorkOrder, getShopCategoriesWithStandard,
   settleWorkOrder, unsettleWorkOrder, setAbnormal, ocrRecognizeImage,
-  getSpecialPaintList,
+  getSpecialPaintList, fetchOrderNoRules, fetchVehicleByPlate,
 } from '@/api/paint'
-import type { PaintWorkOrder, PaintShop, PaintStandard, PaintSpecialPaint, CreateWorkOrderItemDto } from '@/api/types/paint'
+import type { PaintWorkOrder, PaintShop, PaintStandard, PaintSpecialPaint, PaintVehicle, CreateWorkOrderItemDto } from '@/api/types/paint'
+import type { OrderNoRule } from '@/api/paint'
 import { compressImage } from '@/utils/image-compress'
 import { canAudit, canDelete, canEdit } from '@/utils/permission'
+import { analyzeOrderNoErrors } from '@/utils/order-no-rule'
 
 // 权限标志
 const allowAudit = canAudit()
@@ -26,9 +28,16 @@ const ocrCorrectionMode = ref(false)
 
 // OCR 识别状态
 const ocrLoading = ref(false)
-const showOcrConflict = ref(false)
-const ocrConflicts = ref<Array<{ key: string; label: string; oldValue: string; newValue: string; checked: boolean }>>([])
 const showImagePicker = ref(false)
+/** OCR识别模式：默认智能选择，用户可手动切换 */
+const editOcrMode = ref<'basic' | 'items' | 'all'>('basic')
+
+// 车辆主数据自动填充
+const vehicleLookingUp = ref(false)
+const vehicleFound = ref<PaintVehicle | null>(null)
+const vehicleMatchedFields = ref<string[]>([])
+// 查看模式下的车辆主数据（展示累计工单数等信息）
+const viewModeVehicle = ref<PaintVehicle | null>(null)
 
 // 编辑表单
 const editForm = reactive({
@@ -44,6 +53,22 @@ const editForm = reactive({
   remark: '',
   items: [] as CreateWorkOrderItemDto[],
 })
+
+// 编辑表单校验
+const editOrderNoError = ref('')
+const editPlateNumberError = ref('')
+const editVinError = ref('')
+const editPhoneError = ref('')
+const editOrderNoRules = ref<OrderNoRule[]>([])
+const ocrVinCorrectionMsg = ref('')
+
+// 校验正则
+// 车牌号正则：支持普通7位（省份+字母+5位）、新能源8位、旧6位（字母+5位字母数字）
+// 省份含：31省市+使领+军警武警+军区(海空北沈兰济南广成武翼)
+const PLATE_PROVINCE = '京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼使领军警海空北沈兰济南广成武翼'
+const plateNumberRegex = new RegExp(`^([${PLATE_PROVINCE}][A-Z][A-HJ-NP-Z0-9]{4,5}[A-HJ-NP-Z0-9挂学警港澳]|[A-Z][A-HJ-NP-Z0-9]{5})$`)
+const phoneRegex = /^1[3-9]\d{9}$/
+const vinRegex = /^[A-HJ-NPR-Z0-9]{17}$/
 
 // 日期选择器
 const showEditDatePicker = ref(false)
@@ -164,6 +189,15 @@ async function loadDetail() {
     const res = await getWorkOrderDetail(orderId.value)
     order.value = res as any as PaintWorkOrder
     reworkRemarkInput.value = order.value?.reworkRemark || ''
+    // 查看模式下：若有车牌号则预查车辆主数据（显示累计工单数等）
+    if (order.value?.plateNumber && order.value.plateNumber.trim()) {
+      fetchVehicleByPlate(order.value.plateNumber.trim().toUpperCase())
+        .then(data => { viewModeVehicle.value = data })
+        .catch(() => { viewModeVehicle.value = null })
+    }
+    else {
+      viewModeVehicle.value = null
+    }
   }
   catch {
     order.value = null
@@ -185,6 +219,8 @@ function enterEdit() {
   editPendingDeleteIds.value = []
   loadEditStandards()
   loadSpecialPaints()
+  loadEditOrderNoRules()
+  clearEditErrors()
   isEditing.value = true
 }
 
@@ -194,6 +230,8 @@ function enterOcrCorrection() {
   initEditForm(order.value)
   editPendingUploads.value = []
   editPendingDeleteIds.value = []
+  loadEditOrderNoRules()
+  clearEditErrors()
   isEditing.value = true
 }
 
@@ -213,7 +251,138 @@ function initEditForm(source: PaintWorkOrder) {
     quantity: item.quantity,
     newPartQuantity: item.newPartQuantity,
     specialPaintId: item.specialPaintId || undefined,
+    // 保存已有 paintCount 作为 overridePaintCount，等 standards 加载后清理与自动计算一致的值
+    overridePaintCount: item.paintCount !== undefined && item.paintCount !== null ? Number(item.paintCount) : undefined,
   }))
+  // 重置车辆匹配状态，并在有车牌时触发一次查询（编辑模式打开时）
+  vehicleFound.value = null
+  vehicleMatchedFields.value = []
+  if (editForm.plateNumber && editForm.plateNumber.trim()) {
+    lookupVehicle(editForm.plateNumber)
+  }
+}
+
+// 车辆主数据：按车牌号查询历史车辆并自动填充字段
+// overwrite=false: 仅填充空字段（初始加载时用，不覆盖用户已填值）
+// overwrite=true: 用车辆主数据覆盖所有字段（用户手动修改车牌号后失焦时用）
+async function lookupVehicle(plate: string, overwrite = false) {
+  const normalized = (plate || '').trim().toUpperCase()
+  if (!normalized || !plateNumberRegex.test(normalized)) {
+    vehicleFound.value = null
+    vehicleMatchedFields.value = []
+    return
+  }
+  if (vehicleFound.value?.plateNumber === normalized && !overwrite) return
+  vehicleLookingUp.value = true
+  try {
+    const data = await fetchVehicleByPlate(normalized)
+    if (data) {
+      vehicleFound.value = data
+      const fieldMap: Array<{ key: 'vin' | 'carModel' | 'brand' | 'customerName' | 'phone'; vehicleKey: 'vin' | 'carModel' | 'brand' | 'customerName' | 'phone'; label: string }> = [
+        { key: 'vin', vehicleKey: 'vin', label: '车架号' },
+        { key: 'carModel', vehicleKey: 'carModel', label: '车型' },
+        { key: 'brand', vehicleKey: 'brand', label: '品牌' },
+        { key: 'customerName', vehicleKey: 'customerName', label: '客户名称' },
+        { key: 'phone', vehicleKey: 'phone', label: '电话' },
+      ]
+      const filled: string[] = []
+      for (const { key, vehicleKey, label } of fieldMap) {
+        const currentValue = ((editForm as any)[key] || '').trim()
+        const vehicleValue = ((data as any)[vehicleKey] || '').trim()
+        if (overwrite) {
+          // 用户手动修改车牌号：用车辆主数据覆盖（空值也覆盖，即清空工单中不匹配的字段）
+          if (vehicleValue && vehicleValue !== currentValue) {
+            ;(editForm as any)[key] = vehicleValue
+            filled.push(label)
+          }
+        }
+        else {
+          // 初始加载：仅填充空字段
+          if (!currentValue && vehicleValue) {
+            ;(editForm as any)[key] = vehicleValue
+            filled.push(label)
+          }
+        }
+      }
+      vehicleMatchedFields.value = filled
+      if (filled.length > 0) {
+        showNotify({ type: 'success', message: `已匹配历史车辆，填充 ${filled.join('、')}（累计 ${data.totalOrderCount} 单）` })
+      }
+      else {
+        showNotify({ type: 'primary', message: `匹配到历史车辆，累计 ${data.totalOrderCount} 单 / ${Number(data.totalPaintCount).toFixed(1)} 幅` })
+      }
+    }
+    else {
+      vehicleFound.value = null
+      vehicleMatchedFields.value = []
+    }
+  }
+  catch {
+    vehicleFound.value = null
+    vehicleMatchedFields.value = []
+  }
+  finally {
+    vehicleLookingUp.value = false
+  }
+}
+
+function onEditPlateNumberBlur() {
+  const plate = (editForm.plateNumber || '').trim().toUpperCase()
+  if (!plate) {
+    vehicleFound.value = null
+    vehicleMatchedFields.value = []
+    return
+  }
+  // 用户手动修改车牌号后失焦，用车辆主数据覆盖字段
+  lookupVehicle(plate, true)
+}
+
+function onEditPlateNumberInput() {
+  if (vehicleFound.value) {
+    const currentPlate = (editForm.plateNumber || '').trim().toUpperCase()
+    if (vehicleFound.value.plateNumber !== currentPlate) {
+      vehicleFound.value = null
+      vehicleMatchedFields.value = []
+    }
+  }
+}
+
+function goVehicleHistory() {
+  if (!vehicleFound.value) return
+  router.push({ name: '/work-order/vehicle-history', query: { id: vehicleFound.value.id, plate: vehicleFound.value.plateNumber } })
+}
+
+/** 查看模式下跳转车辆历史（优先用 viewModeVehicle，否则用车牌号重新查询） */
+function goViewModeVehicleHistory() {
+  if (viewModeVehicle.value) {
+    router.push({ name: '/work-order/vehicle-history', query: { id: viewModeVehicle.value.id, plate: viewModeVehicle.value.plateNumber } })
+  }
+  else if (order.value?.plateNumber) {
+    // fallback：没有预查到车辆主数据，用车牌号作为查询参数
+    router.push({ name: '/work-order/vehicle-history', query: { plate: order.value.plateNumber } })
+  }
+}
+
+async function loadEditOrderNoRules() {
+  if (!order.value?.shopId) {
+    editOrderNoRules.value = []
+    return
+  }
+  try {
+    const res = await fetchOrderNoRules(order.value.shopId)
+    editOrderNoRules.value = (res as any as OrderNoRule[]) || []
+  }
+  catch {
+    editOrderNoRules.value = []
+  }
+}
+
+function clearEditErrors() {
+  editOrderNoError.value = ''
+  editPlateNumberError.value = ''
+  editVinError.value = ''
+  editPhoneError.value = ''
+  ocrVinCorrectionMsg.value = ''
 }
 
 async function loadSpecialPaints() {
@@ -231,6 +400,15 @@ async function loadEditStandards() {
   try {
     const res = await getShopCategoriesWithStandard(order.value.shopId)
     editStandards.value = (res as any as PaintStandard[]).filter(s => Number(s.coefficient) > 0)
+    // 清理与自动计算值一致的 overridePaintCount
+    editForm.items.forEach(item => {
+      if (item.overridePaintCount !== undefined && item.overridePaintCount !== null && item.categoryId) {
+        const autoCount = getEditItemAutoPaintCount(item)
+        if (Math.abs(item.overridePaintCount - autoCount) < 0.01) {
+          item.overridePaintCount = undefined
+        }
+      }
+    })
   }
   catch {
     editStandards.value = []
@@ -246,25 +424,121 @@ function cancelEdit() {
   editPendingDeleteIds.value = []
 }
 
-// OCR 识别（识别工单已有图片，仅识别填入编辑表单，不保存）
+// OCR 识别（识别工单已有图片或待上传图片，仅识别填入编辑表单，不保存）
 function handleOcrRecognize() {
-  const images = editImages.value
-  if (!images || images.length === 0) {
+  const savedImages = editImages.value
+  const pendingImages = editPendingUploads.value
+  const totalCount = savedImages.length + pendingImages.length
+
+  if (totalCount === 0) {
     showNotify({ type: 'warning', message: '工单无图片，无法识别' })
     return
   }
-  if (images.length === 1) {
-    doOcrRecognizeByUrl(images[0].url)
+  // 只有一张图片时直接识别
+  if (totalCount === 1) {
+    if (savedImages.length === 1) {
+      doOcrRecognizeByUrl(savedImages[0].url)
+    } else {
+      doOcrRecognizeByFile(pendingImages[0].file)
+    }
+    return
   }
-  else {
-    showImagePicker.value = true
-  }
+  // 多张图片时弹出选择
+  showImagePicker.value = true
 }
 
 // 选择图片后识别
 function onPickImage(url: string) {
   showImagePicker.value = false
   doOcrRecognizeByUrl(url)
+}
+
+// 选择待上传图片后识别
+function onPickPendingImage(index: number) {
+  showImagePicker.value = false
+  const item = editPendingUploads.value[index]
+  if (item) {
+    doOcrRecognizeByFile(item.file)
+  }
+}
+
+// 根据待上传的 File 对象进行 OCR 识别
+async function doOcrRecognizeByFile(file: File) {
+  const shopId = order.value?.shopId
+  if (!shopId) {
+    showNotify({ type: 'warning', message: '门店信息缺失，无法识别' })
+    return
+  }
+  ocrLoading.value = true
+  try {
+    const compressed = await compressImage(file)
+    const result = await ocrRecognizeImage(compressed, shopId, editOcrMode.value)
+    applyOcrResult(result)
+  }
+  catch {
+    showNotify({ type: 'danger', message: 'OCR识别失败' })
+  }
+  finally {
+    ocrLoading.value = false
+  }
+}
+
+// 将 OCR 识别结果应用到编辑表单（仅填充空白字段）
+function applyOcrResult(result: any) {
+  const fieldMap = [
+    { key: 'plateNumber', label: '车牌号', ocrKey: 'plateNumber' },
+    { key: 'orderNo', label: '工单号', ocrKey: 'orderNo' },
+    { key: 'customerName', label: '客户名称', ocrKey: 'customerName' },
+    { key: 'phone', label: '联系电话', ocrKey: 'phone' },
+    { key: 'carModel', label: '车型', ocrKey: 'carModel' },
+    { key: 'vin', label: '车架号', ocrKey: 'vin' },
+    { key: 'brand', label: '品牌', ocrKey: 'brand' },
+    { key: 'orderDate', label: '工单日期', ocrKey: 'date' },
+  ]
+
+  const filledMessages: string[] = []
+
+  for (const { key, label, ocrKey } of fieldMap) {
+    const ocrValue = ((result as any)[ocrKey] || '').trim()
+    if (!ocrValue) continue
+
+    const currentValue = ((editForm as any)[key] || '').trim()
+    if (!currentValue) {
+      ;(editForm as any)[key] = ocrValue
+      filledMessages.push(`${label}：${ocrValue}`)
+    }
+  }
+
+  // 工单号修正提示：OCR 识别的工单号不符合规则，后端已自动修正
+  const candidates = result.orderNoCandidates || []
+  const orderNoValid = result.orderNoValid
+  if (candidates.length > 0 && orderNoValid === false) {
+    const correctedNo = result.orderNo || ''
+    showNotify({ type: 'warning', message: `工单号已自动修正为 ${correctedNo}` })
+  }
+
+  // VIN 车架号修正提示：OCR 识别的 VIN 含易混淆字符（O↔0、I↔1、Q↔0），后端已自动修正
+  if (result.vinCorrected && result.vinOriginal) {
+    ocrVinCorrectionMsg.value = `OCR识别车架号含易混淆字符，已自动修正：「${result.vinOriginal}」→「${result.vin}」`
+    showNotify({ type: 'warning', message: ocrVinCorrectionMsg.value })
+  }
+  else {
+    ocrVinCorrectionMsg.value = ''
+  }
+
+  // OCR 填充完车牌后，触发车辆主数据查询，自动补全 OCR 未识别到的空字段
+  if (editForm.plateNumber && editForm.plateNumber.trim()) {
+    vehicleFound.value = null
+    vehicleMatchedFields.value = []
+    lookupVehicle(editForm.plateNumber)
+  }
+
+  if (filledMessages.length > 0) {
+    showNotify({ type: 'success', message: `已填充 ${filledMessages.join('、')}` })
+  }
+  else if (candidates.length === 0 || orderNoValid !== false) {
+    showNotify({ type: 'warning', message: '未识别到有效信息或所有字段已填写' })
+  }
 }
 
 // 根据图片 URL 进行 OCR 识别
@@ -282,47 +556,8 @@ async function doOcrRecognizeByUrl(imageUrl: string) {
     const blob = await resp.blob()
     const file = new File([blob], 'image.jpg', { type: blob.type || 'image/jpeg' })
     const compressed = await compressImage(file)
-    const result = await ocrRecognizeImage(compressed, shopId)
-
-    const fieldMap = [
-      { key: 'plateNumber', label: '车牌号', ocrKey: 'plateNumber' },
-      { key: 'orderNo', label: '工单号', ocrKey: 'orderNo' },
-      { key: 'customerName', label: '客户名称', ocrKey: 'customerName' },
-      { key: 'phone', label: '联系电话', ocrKey: 'phone' },
-      { key: 'carModel', label: '车型', ocrKey: 'carModel' },
-      { key: 'vin', label: '车架号', ocrKey: 'vin' },
-      { key: 'brand', label: '品牌', ocrKey: 'brand' },
-      { key: 'orderDate', label: '工单日期', ocrKey: 'date' },
-    ]
-
-    const filledMessages: string[] = []
-    const conflicts: Array<{ key: string; label: string; oldValue: string; newValue: string; checked: boolean }> = []
-
-    for (const { key, label, ocrKey } of fieldMap) {
-      const ocrValue = ((result as any)[ocrKey] || '').trim()
-      if (!ocrValue) continue
-
-      const currentValue = ((editForm as any)[key] || '').trim()
-      if (!currentValue) {
-        ;(editForm as any)[key] = ocrValue
-        filledMessages.push(`${label}：${ocrValue}`)
-      }
-      else if (currentValue !== ocrValue) {
-        conflicts.push({ key, label, oldValue: currentValue, newValue: ocrValue, checked: false })
-      }
-    }
-
-    if (filledMessages.length > 0) {
-      showNotify({ type: 'success', message: `已填充 ${filledMessages.join('、')}` })
-    }
-
-    if (conflicts.length > 0) {
-      ocrConflicts.value = conflicts
-      showOcrConflict.value = true
-    }
-    else if (filledMessages.length === 0) {
-      showNotify({ type: 'warning', message: '未识别到有效信息' })
-    }
+    const result = await ocrRecognizeImage(compressed, shopId, editOcrMode.value)
+    applyOcrResult(result)
   }
   catch {
     showNotify({ type: 'danger', message: 'OCR识别失败' })
@@ -332,21 +567,58 @@ async function doOcrRecognizeByUrl(imageUrl: string) {
   }
 }
 
-// 确认覆盖冲突字段
-function confirmOcrConflict() {
-  const selected = ocrConflicts.value.filter(f => f.checked)
-  for (const field of selected) {
-    ;(editForm as any)[field.key] = field.newValue
-  }
-  if (selected.length > 0) {
-    showNotify({ type: 'success', message: `已覆盖 ${selected.map(f => f.label).join('、')}` })
-  }
-  showOcrConflict.value = false
-  ocrConflicts.value = []
-}
-
 async function saveEdit() {
   if (!order.value) return
+
+  // 校验工单号规则
+  if (editForm.orderNo && editForm.orderNo.trim() && editOrderNoRules.value.length > 0) {
+    const upper = editForm.orderNo.trim().toUpperCase()
+    let matched = false
+    for (const rule of editOrderNoRules.value) {
+      try {
+        const regex = new RegExp(`^${rule.pattern}$`)
+        if (regex.test(upper)) {
+          matched = true
+          break
+        }
+      }
+      catch {
+        continue
+      }
+    }
+    if (!matched) {
+      const errors = analyzeOrderNoErrors(upper, editOrderNoRules.value)
+      editOrderNoError.value = errors.length > 0
+        ? errors.join('；')
+        : `工单号不符合门店规则（长度应为 ${editOrderNoRules.value.map(r => r.length).join('/')}）`
+      showNotify({ type: 'warning', message: editOrderNoError.value })
+      return
+    }
+  }
+
+  // 校验车牌号
+  if (editForm.plateNumber && editForm.plateNumber.trim()) {
+    if (!plateNumberRegex.test(editForm.plateNumber.trim().toUpperCase())) {
+      editPlateNumberError.value = '车牌号格式不正确（普通车牌7位，新能源车牌8位）'
+      showNotify({ type: 'warning', message: editPlateNumberError.value })
+      return
+    }
+  }
+
+  // 校验车架号（非必填，填了则校验格式）
+  if (editForm.vin && editForm.vin.trim() && !vinRegex.test(editForm.vin.trim().toUpperCase())) {
+    editVinError.value = '车架号应为17位字母数字（不含I、O、Q）'
+    showNotify({ type: 'warning', message: editVinError.value })
+    return
+  }
+
+  // 校验手机号（非必填，填了则校验格式）
+  if (editForm.phone && editForm.phone.trim() && !phoneRegex.test(editForm.phone.trim())) {
+    editPhoneError.value = '手机号应为11位数字，以1开头'
+    showNotify({ type: 'warning', message: editPhoneError.value })
+    return
+  }
+
   saving.value = true
   try {
     if (ocrCorrectionMode.value) {
@@ -383,7 +655,18 @@ async function saveEdit() {
         customerName: editForm.customerName || undefined,
         phone: editForm.phone || undefined,
         remark: editForm.remark || undefined,
-        items: validItems,
+        items: validItems.map(it => {
+          const item: any = {
+            categoryId: it.categoryId,
+            quantity: it.quantity,
+            newPartQuantity: it.newPartQuantity,
+            specialPaintId: it.specialPaintId || undefined,
+          }
+          if (it.overridePaintCount !== undefined && it.overridePaintCount !== null) {
+            item.overridePaintCount = it.overridePaintCount
+          }
+          return item
+        }),
       })
 
       // 2. 批量删除图片
@@ -656,9 +939,28 @@ function formatDate(dateStr: string) {
 }
 
 // 编辑模式下的总幅数和部位数
+/** 获取编辑模式下单个 item 的自动计算幅数 */
+function getEditItemAutoPaintCount(item: CreateWorkOrderItemDto): number {
+  if (!item.quantity || item.quantity <= 0) return 0
+  const std = editStandards.value.find(s => s.categoryId === item.categoryId)
+  if (!std) return 0
+  const coefficient = Number(std.coefficient) || 0
+  const newPartAddition = Number(std.newPartAddition) || 0
+  let specialMultiplier = 1
+  if (item.specialPaintId) {
+    const sp = specialPaints.value.find(s => s.id === item.specialPaintId)
+    if (sp) specialMultiplier = Number(sp.multiplier) || 1
+  }
+  return (item.quantity * coefficient + (item.newPartQuantity || 0) * newPartAddition) * specialMultiplier
+}
+
 const editTotalPaintCount = computed(() => {
   return editForm.items.reduce((sum, item) => {
     if (!item.quantity || item.quantity <= 0) return sum
+    // 手动覆盖幅数
+    if (item.overridePaintCount !== undefined && item.overridePaintCount !== null) {
+      return sum + item.overridePaintCount
+    }
     const std = editStandards.value.find(s => s.categoryId === item.categoryId)
     if (!std) return sum
     const coefficient = Number(std.coefficient) || 0
@@ -718,7 +1020,18 @@ onMounted(() => {
         <div v-if="!isEditing" class="info-grid">
           <div class="info-item">
             <span class="info-label">车牌号</span>
-            <span class="info-value">{{ order.plateNumber || '-' }}</span>
+            <span class="info-value">
+              {{ order.plateNumber || '-' }}
+              <van-tag
+                v-if="viewModeVehicle && viewModeVehicle.totalOrderCount > 0"
+                type="primary"
+                size="medium"
+                style="margin-left: 6px; cursor: pointer;"
+                @click="goViewModeVehicleHistory"
+              >
+                历史{{ viewModeVehicle.totalOrderCount }}单
+              </van-tag>
+            </span>
           </div>
           <div class="info-item">
             <span class="info-label">车型</span>
@@ -766,16 +1079,44 @@ onMounted(() => {
             <van-button type="primary" size="small" plain icon="scan" :loading="ocrLoading" loading-text="识别中..." @click="handleOcrRecognize">
               OCR识别填充
             </van-button>
+            <van-radio-group v-model="editOcrMode" direction="horizontal" style="margin-left: 8px;">
+              <van-radio name="basic" style="font-size: 12px;">基础资料</van-radio>
+              <van-radio name="items" style="font-size: 12px;">部位</van-radio>
+              <van-radio name="all" style="font-size: 12px;">全部</van-radio>
+            </van-radio-group>
           </div>
-          <van-field v-model="editForm.orderNo" label="工单号" placeholder="请输入工单号" />
-          <van-field v-model="editForm.plateNumber" label="车牌号" placeholder="请输入车牌号" />
+          <van-field v-model="editForm.orderNo" label="工单号" placeholder="请输入工单号" :error-message="editOrderNoError" @update:model-value="editOrderNoError = ''" />
+          <van-field
+            v-model="editForm.plateNumber"
+            label="车牌号"
+            placeholder="请输入车牌号"
+            :error-message="editPlateNumberError"
+            :loading="vehicleLookingUp"
+            @blur="onEditPlateNumberBlur"
+            @update:model-value="() => { editPlateNumberError = ''; onEditPlateNumberInput(); }"
+          >
+            <template v-if="vehicleFound" #button>
+              <van-button size="small" type="primary" plain @click="goVehicleHistory">
+                历史{{ vehicleFound.totalOrderCount }}单
+              </van-button>
+            </template>
+          </van-field>
+          <van-notice-bar
+            v-if="vehicleFound"
+            left-icon="checked"
+            :text="`已匹配历史车辆${vehicleMatchedFields.length ? '，已填充：' + vehicleMatchedFields.join('、') : ''}（累计 ${vehicleFound.totalOrderCount} 单 / ${Number(vehicleFound.totalPaintCount).toFixed(1)} 幅）`"
+            background="#e6f9e6"
+            color="#07c160"
+            style="margin: 0 16px 8px;"
+          />
           <van-field v-model="editForm.carModel" label="车型" placeholder="请输入车型" />
-          <van-field v-model="editForm.vin" label="车架号" placeholder="请输入车架号(VIN)" />
+          <van-field v-model="editForm.vin" label="车架号" placeholder="请输入车架号(VIN)" :error-message="editVinError || ocrVinCorrectionMsg" @update:model-value="editVinError = ''; ocrVinCorrectionMsg = ''" />
+          <van-notice-bar v-if="ocrVinCorrectionMsg" left-icon="warning-o" :text="ocrVinCorrectionMsg" background="#fffbe8" color="#ed6a0c" style="margin: 0 16px 8px;" />
           <van-field v-model="editForm.brand" label="品牌" placeholder="请输入品牌" />
           <van-cell title="工单日期" :value="editForm.orderDate || '请选择日期'" is-link @click="showEditDatePicker = true" />
           <van-cell title="结算月份" :value="editForm.settlementMonth || '请选择月份'" is-link @click="showEditSettlementMonthPicker = true" />
           <van-field v-model="editForm.customerName" label="客户名称" placeholder="请输入客户名称" />
-          <van-field v-model="editForm.phone" label="联系电话" placeholder="请输入电话" type="tel" />
+          <van-field v-model="editForm.phone" label="联系电话" placeholder="请输入电话" type="tel" :error-message="editPhoneError" @update:model-value="editPhoneError = ''" />
           <van-field v-model="editForm.remark" label="备注" type="textarea" placeholder="请输入备注" rows="2" />
         </div>
       </div>
@@ -854,6 +1195,29 @@ onMounted(() => {
               <div v-if="editStandards.find(s => s.categoryId === item.categoryId && Number(s.newPartAddition) > 0)" class="control-group">
                 <span class="control-label">新件</span>
                 <van-stepper v-model="item.newPartQuantity" min="0" />
+              </div>
+              <div class="control-group">
+                <span class="control-label">幅数</span>
+                <div class="paint-count-control">
+                  <van-stepper
+                    v-if="item.overridePaintCount !== undefined && item.overridePaintCount !== null"
+                    :model-value="item.overridePaintCount"
+                    min="0" max="99" step="0.1" decimal-length="1"
+                    input-width="48px"
+                    @update:model-value="(val: number) => { item.overridePaintCount = val }"
+                  />
+                  <span v-else class="paint-count-value" @click="item.overridePaintCount = getEditItemAutoPaintCount(item)">
+                    {{ getEditItemAutoPaintCount(item).toFixed(1) }}
+                  </span>
+                  <van-icon
+                    v-if="item.overridePaintCount !== undefined && item.overridePaintCount !== null"
+                    name="close"
+                    size="14"
+                    color="#ff4d4f"
+                    style="margin-left: 4px; cursor: pointer;"
+                    @click="item.overridePaintCount = undefined"
+                  />
+                </div>
               </div>
             </div>
           </div>
@@ -1017,37 +1381,6 @@ onMounted(() => {
       </div>
     </van-popup>
 
-    <!-- OCR 冲突确认弹窗 -->
-    <van-dialog
-      v-model:show="showOcrConflict"
-      title="OCR识别结果冲突"
-      show-cancel-button
-      confirm-button-text="覆盖选中"
-      cancel-button-text="不覆盖"
-      @confirm="confirmOcrConflict"
-    >
-      <div style="padding: 12px 16px; max-height: 300px; overflow-y: auto;">
-        <p style="font-size: 13px; color: #969799; margin-bottom: 12px;">
-          以下字段识别结果与已有数据不一致，勾选需覆盖的字段
-        </p>
-        <div
-          v-for="(field, index) in ocrConflicts"
-          :key="field.key"
-          style="display: flex; align-items: flex-start; gap: 8px; padding: 10px 0; border-bottom: 1px solid #f5f5f5;"
-        >
-          <van-checkbox v-model="ocrConflicts[index].checked" />
-          <div style="flex: 1;">
-            <div style="font-weight: bold; font-size: 14px; margin-bottom: 4px;">{{ field.label }}</div>
-            <div style="font-size: 13px; color: #969799;">
-              <span style="text-decoration: line-through;">{{ field.oldValue }}</span>
-              <span style="margin: 0 6px;">→</span>
-              <span style="color: #ff976a; font-weight: bold;">{{ field.newValue }}</span>
-            </div>
-          </div>
-        </div>
-      </div>
-    </van-dialog>
-
     <!-- 多图片选择弹窗 -->
     <van-popup v-model:show="showImagePicker" position="bottom" round :style="{ padding: '16px' }">
       <div class="image-picker">
@@ -1055,12 +1388,21 @@ onMounted(() => {
         <div class="picker-grid">
           <div
             v-for="(img, index) in editImages"
-            :key="img.id"
+            :key="'saved-' + img.id"
             class="picker-item"
             @click="onPickImage(img.url)"
           >
             <van-image :src="img.thumbnailUrl || img.url" fit="cover" class="picker-image" />
             <div class="picker-index">{{ index + 1 }}</div>
+          </div>
+          <div
+            v-for="(item, index) in editPendingUploads"
+            :key="'pending-' + index"
+            class="picker-item"
+            @click="onPickPendingImage(index)"
+          >
+            <van-image :src="item.previewUrl" fit="cover" class="picker-image" />
+            <div class="picker-index">{{ editImages.length + index + 1 }}</div>
           </div>
         </div>
         <div class="picker-cancel" @click="showImagePicker = false">取消</div>
@@ -1321,6 +1663,22 @@ onMounted(() => {
 .control-label {
   font-size: 12px;
   color: #999;
+}
+
+.paint-count-control {
+  display: flex;
+  align-items: center;
+}
+
+.paint-count-value {
+  font-size: 13px;
+  color: #333;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: #f7f8fa;
+  min-width: 40px;
+  text-align: center;
 }
 
 .add-item-btn {

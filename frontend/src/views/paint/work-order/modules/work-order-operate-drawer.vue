@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, reactive, watch, ref, nextTick, h } from 'vue';
-import { NSelect, NInputNumber, NCheckbox, NButton, NText, NImage, NTag, NSpace } from 'naive-ui';
-import { createWorkOrder, updateWorkOrder, fetchPaintShopList, fetchShopCategoriesWithStandard, fetchSpecialPaintList, uploadWorkOrderImage, removeWorkOrderImage, ocrRecognizeImage, fetchOrderNoRules } from '@/service/api';
+import { NSelect, NInputNumber, NButton, NText, NImage, NTag, NSpace, NInput, NTooltip, NGrid, NGridItem, NCard, NAlert } from 'naive-ui';
+import { createWorkOrder, updateWorkOrder, fetchPaintShopList, fetchShopCategoriesWithStandard, fetchSpecialPaintList, uploadWorkOrderImage, removeWorkOrderImage, ocrRecognizeImage, fetchOrderNoRules, fetchVehicleByPlate } from '@/service/api';
 import type { PaintOrderStatus, OrderNoRule } from '@/service/api/paint';
 import { useFormRules, useNaiveForm } from '@/hooks/common/form';
 import { $t } from '@/locales';
 import { compressDualImage } from '@/utils/image-compress';
+import { analyzeOrderNoErrors } from '@/utils/order-no-rule';
 
 defineOptions({
   name: 'WorkOrderOperateDrawer'
@@ -39,6 +40,13 @@ const shopHasTemplate = ref(true);
 const orderNoRules = ref<OrderNoRule[]>([]);
 const ocrOrderNoCandidates = ref<string[]>([]);
 const ocrOrderNoOriginal = ref('');
+const ocrOrderNoCorrectionMsg = ref('');
+const ocrVinCorrectionMsg = ref('');
+
+// 车辆主数据自动填充
+const vehicleLookingUp = ref(false);
+const vehicleFound = ref<any>(null);
+const vehicleMatchedFields = ref<string[]>([]);
 
 const title = computed(() => {
   const titles: Record<NaiveUI.TableOperateType, string> = {
@@ -54,6 +62,7 @@ interface OrderItem {
   quantity: number;
   newPartQuantity: number;
   specialPaintId: string;
+  overridePaintCount?: number;
 }
 
 interface FormModel {
@@ -96,11 +105,48 @@ function createDefaultModel(): FormModel {
   };
 }
 
-type RuleKey = Extract<keyof FormModel, 'shopId' | 'plateNumber'>;
+type RuleKey = Extract<keyof FormModel, 'shopId' | 'plateNumber' | 'vin' | 'phone'>;
+
+// 车牌号正则：支持普通7位（省份+字母+5位）、新能源8位、旧6位（字母+5位字母数字）
+// 省份含：31省市+使领+军警武警+军区(海空北沈兰济南广成武翼)
+const PLATE_PROVINCE = '京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼使领军警海空北沈兰济南广成武翼';
+const plateNumberRegex = new RegExp(`^([${PLATE_PROVINCE}][A-Z][A-HJ-NP-Z0-9]{4,5}[A-HJ-NP-Z0-9挂学警港澳]|[A-Z][A-HJ-NP-Z0-9]{5})$`);
+// 手机号正则：11位，1开头
+const phoneRegex = /^1[3-9]\d{9}$/;
+// 车架号正则：17位字母数字（不含I、O、Q）
+const vinRegex = /^[A-HJ-NPR-Z0-9]{17}$/;
 
 const rules: Record<RuleKey, App.Global.FormRule> = {
   shopId: defaultRequiredRule,
-  plateNumber: defaultRequiredRule
+  plateNumber: {
+    required: true,
+    validator: (_rule, value) => {
+      if (!value || !value.trim()) return new Error('请输入车牌号');
+      const v = value.trim().toUpperCase();
+      if (!plateNumberRegex.test(v)) {
+        return new Error('车牌号格式不正确（普通7位/新能源8位/旧6位）');
+      }
+      return true;
+    }
+  },
+  vin: {
+    validator: (_rule, value) => {
+      if (!value || !value.trim()) return true; // 非必填
+      if (!vinRegex.test(value.trim().toUpperCase())) {
+        return new Error('车架号应为17位字母数字（不含I、O、Q）');
+      }
+      return true;
+    }
+  },
+  phone: {
+    validator: (_rule, value) => {
+      if (!value || !value.trim()) return true; // 非必填
+      if (!phoneRegex.test(value.trim())) {
+        return new Error('手机号应为11位数字，以1开头');
+      }
+      return true;
+    }
+  }
 };
 
 const orderNoValidation = computed(() => {
@@ -115,10 +161,13 @@ const orderNoValidation = computed(() => {
     }
   }
   const candidates = generateOrderNoCandidates(upper, orderNoRules.value);
+  const errors = analyzeOrderNoErrors(upper, orderNoRules.value);
+  const message = errors.length > 0
+    ? errors.join('；') + (candidates.length > 0 ? '，点击候选值一键修正' : '')
+    : `工单号不符合门店规则（长度应为 ${orderNoRules.value.map(r => r.length).join('/')}）`;
   return {
     valid: false,
-    message: `工单号不符合门店规则（长度应为 ${orderNoRules.value.map(r => r.length).join('/')}` +
-      (candidates.length > 0 ? '，点击候选值一键修正' : '）'),
+    message,
     candidates
   };
 });
@@ -181,6 +230,69 @@ async function loadSpecialPaints() {
 }
 loadSpecialPaints();
 
+// 车辆主数据：按车牌号查询历史车辆并自动填充空字段
+async function lookupVehicle(plate: string) {
+  if (!plate || !plateNumberRegex.test(plate.toUpperCase())) {
+    vehicleFound.value = null;
+    vehicleMatchedFields.value = [];
+    return;
+  }
+  // 已匹配到同一车牌则不重复查询
+  if (vehicleFound.value?.plateNumber === plate.toUpperCase()) return;
+  vehicleLookingUp.value = true;
+  try {
+    const { data, error } = await fetchVehicleByPlate(plate);
+    if (!error && data) {
+      vehicleFound.value = data;
+      // 仅填充表单中为空的字段，不覆盖用户已填值（与 OCR 策略一致）
+      const fieldMap: Array<{ key: keyof FormModel; vehicleKey: string; label: string }> = [
+        { key: 'vin', vehicleKey: 'vin', label: '车架号' },
+        { key: 'carModel', vehicleKey: 'carModel', label: '车型' },
+        { key: 'brand', vehicleKey: 'brand', label: '品牌' },
+        { key: 'customerName', vehicleKey: 'customerName', label: '客户名称' },
+        { key: 'phone', vehicleKey: 'phone', label: '电话' },
+        { key: 'contactPerson', vehicleKey: 'contactPerson', label: '联系人' }
+      ];
+      const filled: string[] = [];
+      for (const { key, vehicleKey, label } of fieldMap) {
+        const currentValue = ((model[key] as string) || '').trim();
+        const vehicleValue = ((data as any)[vehicleKey] as string || '').trim();
+        if (!currentValue && vehicleValue) {
+          (model as any)[key] = vehicleValue;
+          filled.push(label);
+        }
+      }
+      vehicleMatchedFields.value = filled;
+    } else {
+      vehicleFound.value = null;
+      vehicleMatchedFields.value = [];
+    }
+  } finally {
+    vehicleLookingUp.value = false;
+  }
+}
+
+function onPlateNumberBlur() {
+  const plate = (model.plateNumber || '').trim().toUpperCase();
+  if (!plate) {
+    vehicleFound.value = null;
+    vehicleMatchedFields.value = [];
+    return;
+  }
+  lookupVehicle(plate);
+}
+
+function onPlateNumberInput() {
+  // 车牌号被修改时清除匹配状态（下次 blur 时重新查询）
+  if (vehicleFound.value) {
+    const currentPlate = (model.plateNumber || '').trim().toUpperCase();
+    if (vehicleFound.value.plateNumber !== currentPlate) {
+      vehicleFound.value = null;
+      vehicleMatchedFields.value = [];
+    }
+  }
+}
+
 async function onShopChange(shopId: string, isInit = false) {
   if (!isInit) {
     categories.value = [];
@@ -222,6 +334,17 @@ async function onShopChange(shopId: string, isInit = false) {
           c => c.name === nameHint || c.alias === nameHint
         );
         if (match) item.categoryId = match.id;
+      });
+
+      // 清理与自动计算值一致的 overridePaintCount（编辑时暂存了已有 paintCount，
+      // 如果它与自动计算值一致，则不需要覆盖标记）
+      model.items.forEach(item => {
+        if (item.overridePaintCount !== undefined && item.overridePaintCount !== null && item.categoryId) {
+          const autoCount = getCategoryPaintCount(item.categoryId, item.newPartQuantity, item.quantity, item.specialPaintId);
+          if (Math.abs(item.overridePaintCount - autoCount) < 0.01) {
+            item.overridePaintCount = undefined;
+          }
+        }
       });
     }
   } else {
@@ -324,12 +447,51 @@ const itemColumns = computed(() => {
   {
     key: 'paintCount',
     title: '幅数',
-    width: 70,
+    width: 90,
     align: 'center' as const,
     render: (_row: any, index: number) => {
       const item = model.items[index];
-      const count = getCategoryPaintCount(item.categoryId, item.newPartQuantity, item.quantity, item.specialPaintId);
-      return h(NText, { depth: 3 }, () => `${count.toFixed(1)}`);
+      const autoCount = getCategoryPaintCount(item.categoryId, item.newPartQuantity, item.quantity, item.specialPaintId);
+      const hasOverride = item.overridePaintCount !== undefined && item.overridePaintCount !== null;
+      const displayCount = hasOverride ? item.overridePaintCount! : autoCount;
+
+      if (hasOverride) {
+        // 手动覆盖模式：显示输入框 + 标记
+        return h(NSpace, { align: 'center', size: 4, justify: 'center' }, () => [
+          h(NInputNumber, {
+            value: item.overridePaintCount,
+            size: 'small',
+            min: 0,
+            max: 99,
+            step: 0.1,
+            style: 'width: 60px',
+            onUpdateValue: (val: number | null) => {
+              item.overridePaintCount = val !== null ? val : undefined;
+            }
+          }),
+          h(NTooltip, {}, {
+            trigger: () => h(NText, { type: 'warning', style: 'cursor: pointer; font-size: 12px' }, () => '*'),
+            default: () => '手动覆盖（自动计算值: ' + autoCount.toFixed(1) + '）'
+          }),
+          h(NButton, {
+            size: 'tiny',
+            quaternary: true,
+            type: 'error',
+            onClick: () => { item.overridePaintCount = undefined; }
+          }, { icon: () => h('span', { class: 'i-ic-round-close', style: 'font-size: 12px' }) })
+        ]);
+      }
+
+      // 自动计算模式：显示计算值，可点击手动覆盖
+      return h(NSpace, { align: 'center', size: 4, justify: 'center' }, () => [
+        h(NText, { depth: 3 }, () => `${displayCount.toFixed(1)}`),
+        h(NButton, {
+          size: 'tiny',
+          quaternary: true,
+          type: 'primary',
+          onClick: () => { item.overridePaintCount = autoCount; }
+        }, { icon: () => h('span', { class: 'i-ic-round-edit', style: 'font-size: 12px' }) })
+      ]);
     }
   },
   {
@@ -372,6 +534,9 @@ function getCategoryPaintCount(categoryId: string, newPartQuantity: number, tota
 
 const totalPaintCount = computed(() => {
   return model.items.reduce((sum, item) => {
+    if (item.overridePaintCount !== undefined && item.overridePaintCount !== null) {
+      return sum + item.overridePaintCount;
+    }
     const count = getCategoryPaintCount(item.categoryId, item.newPartQuantity, item.quantity, item.specialPaintId);
     return sum + count;
   }, 0);
@@ -393,7 +558,7 @@ const backendOrigin = ''; // 通过Vite代理访问，无需后端根地址
 
 // OCR 相关状态
 const ocrLoading = ref(false);
-const ocrMode = ref<'all' | 'basic' | 'items'>('all');
+const ocrMode = ref<'all' | 'basic' | 'items'>('basic');
 const showOcrModal = ref(false);
 const ocrImageIndex = ref(-1);
 const ocrCanvasRef = ref<HTMLCanvasElement | null>(null);
@@ -401,14 +566,28 @@ const ocrImgRef = ref<HTMLImageElement | null>(null);
 const isDrawing = ref(false);
 const drawStart = ref({ x: 0, y: 0 });
 const drawEnd = ref({ x: 0, y: 0 });
+
+/** 智能选择OCR模式：根据已填字段决定识别范围，节省token */
+const smartOcrMode = computed<'all' | 'basic' | 'items'>(() => {
+  const basicFields = [model.plateNumber, model.orderNo, model.customerName, model.phone, model.carModel, model.vin, model.brand, model.orderDate];
+  const basicFilled = basicFields.some(v => v && String(v).trim());
+  const itemsFilled = model.items.some(it => it.categoryId && it.quantity > 0);
+
+  if (basicFilled && itemsFilled) return 'all'; // 都有部分填写，仍需全量识别补全
+  if (basicFilled && !itemsFilled) return 'items'; // 基础资料已填，只识别部位
+  if (!basicFilled && itemsFilled) return 'basic'; // 部位已填，只识别基础资料
+  return 'all'; // 都未填，全量识别
+});
 const hasCropRegion = ref(false);
+// OCR 填充结果反馈
+const ocrFilledFields = ref<string[]>([]);
+const ocrFilledVisible = ref(false);
+let ocrFilledTimer: ReturnType<typeof setTimeout> | null = null;
 
 // OCR 可识别字段标签
 const ocrFieldLabels = ['工单号', '车牌号', '客户名称', '联系电话', '车型', '车架号', '品牌', '日期'];
 
-// OCR 冲突确认弹窗
-const showConflictModal = ref(false);
-const conflictFields = ref<Array<{ key: string; label: string; oldValue: string; newValue: string; checked: boolean }>>([]);
+
 
 // 获取图片的显示URL
 // 列表展示用缩略图（加载快），OCR用高清图
@@ -542,7 +721,7 @@ function onOcrMouseUp() {
   isDrawing.value = false;
 }
 
-// 全图OCR识别（调用后端 PaddleOCR API）
+// 全图OCR识别
 async function ocrRecognizeFull() {
   const img = images.value[ocrImageIndex.value];
   if (!img?.file && !img?.url) return;
@@ -585,7 +764,7 @@ async function ocrRecognizeFull() {
       }
     }
 
-    // 调用后端 PaddleOCR 识别
+    // 调用后端 OCR 识别
     const formData = new FormData();
     formData.append('file', blob, 'ocr_image.png');
     if (model.shopId) formData.append('shopId', model.shopId);
@@ -595,12 +774,12 @@ async function ocrRecognizeFull() {
       applyOcrResult(data);
       showOcrModal.value = false;
     } else {
-      // 后端识别失败（通常是 PaddleOCR 服务未启动）
-      const errMsg = (error as any)?.message || 'OCR识别失败，请确认 PaddleOCR 服务已启动';
+      // 后端识别失败
+      const errMsg = (error as any)?.message || 'OCR识别失败，请稍后重试';
       window.$message?.error(errMsg);
     }
   } catch {
-    window.$message?.error('OCR识别失败，请确认 PaddleOCR 服务已启动（端口 8500）');
+    window.$message?.error('OCR识别失败，请检查网络后重试');
   } finally {    ocrLoading.value = false;
   }
 }
@@ -619,11 +798,24 @@ function applyOcrResult(result: { plateNumber?: string; orderNo?: string; orderN
   ];
 
   const filledMessages: string[] = [];
-  const conflicts: Array<{ key: string; label: string; oldValue: string; newValue: string; checked: boolean }> = [];
 
   // 记录 OCR 工单号纠正信息
   ocrOrderNoOriginal.value = result.orderNo || '';
   ocrOrderNoCandidates.value = result.orderNoCandidates || [];
+
+  // 工单号自动修正提示（显示在输入框下方）
+  if (result.orderNoCandidates && result.orderNoCandidates.length > 0 && result.orderNoValid === false) {
+    ocrOrderNoCorrectionMsg.value = `OCR识别工单号格式不正确，已自动修正为「${result.orderNo}」，可点击候选值切换`;
+  } else {
+    ocrOrderNoCorrectionMsg.value = '';
+  }
+
+  // VIN 车架号自动修正提示
+  if ((result as any).vinCorrected && (result as any).vinOriginal) {
+    ocrVinCorrectionMsg.value = `OCR识别车架号含易混淆字符，已自动修正：「${(result as any).vinOriginal}」→「${result.vin}」`;
+  } else {
+    ocrVinCorrectionMsg.value = '';
+  }
 
   for (const { key, label, ocrKey } of fieldMap) {
     const ocrValue = ((result as any)[ocrKey] || '').trim();
@@ -634,39 +826,28 @@ function applyOcrResult(result: { plateNumber?: string; orderNo?: string; orderN
       // 空字段直接填充
       (model as any)[key] = ocrValue;
       filledMessages.push(`${label}：${ocrValue}`);
-    } else if (currentValue !== ocrValue) {
-      // 冲突字段，加入确认列表
-      conflicts.push({ key, label, oldValue: currentValue, newValue: ocrValue, checked: false });
     }
+    // 已填字段不再覆盖，跳过
   }
 
   if (filledMessages.length > 0) {
-    window.$message?.success(`已填充 ${filledMessages.join('、')}`);
+    // 展示 OCR 填充反馈条
+    ocrFilledFields.value = filledMessages;
+    ocrFilledVisible.value = true;
+    if (ocrFilledTimer) clearTimeout(ocrFilledTimer);
+    ocrFilledTimer = setTimeout(() => { ocrFilledVisible.value = false; }, 5000);
+  } else {
+    window.$message?.warning('未识别到有效信息或所有字段已填写');
   }
 
-  if (conflicts.length > 0) {
-    // 有冲突字段，弹出确认弹窗
-    conflictFields.value = conflicts;
-    showConflictModal.value = true;
-  } else if (filledMessages.length === 0) {
-    window.$message?.warning('未识别到有效信息，请尝试框选标记区域识别');
+  // OCR 填充完成后，若车牌号有效，触发车辆主数据查询
+  const plate = (model.plateNumber || '').trim().toUpperCase();
+  if (plate && plateNumberRegex.test(plate)) {
+    lookupVehicle(plate);
   }
 }
 
-// 确认覆盖冲突字段
-function confirmConflictOverwrite() {
-  const selected = conflictFields.value.filter(f => f.checked);
-  for (const field of selected) {
-    (model as any)[field.key] = field.newValue;
-  }
-  if (selected.length > 0) {
-    window.$message?.success(`已覆盖 ${selected.map(f => f.label).join('、')}`);
-  }
-  showConflictModal.value = false;
-  conflictFields.value = [];
-}
-
-// 框选区域OCR识别（裁剪后调用后端 PaddleOCR API）
+// 框选区域OCR识别
 async function ocrRecognizeCrop() {
   const imgEl = ocrImgRef.value;
   if (!imgEl || !hasCropRegion.value) return;
@@ -676,7 +857,6 @@ async function ocrRecognizeCrop() {
 
   // CSS 显示尺寸（不含 dpr）
   const cssWidth = parseFloat(canvas.style.width);
-  const cssHeight = parseFloat(canvas.style.height);
 
   // CSS 坐标与原图的比例
   const scale = cssWidth / imgEl.naturalWidth;
@@ -696,7 +876,7 @@ async function ocrRecognizeCrop() {
 
   ocrLoading.value = true;
   try {
-    // 从原图裁剪区域，转为 blob 发送给后端 PaddleOCR
+    // 从原图裁剪区域，转为 blob 发送给后端
     const cropCanvas = document.createElement('canvas');
     cropCanvas.width = Math.round(region.width);
     cropCanvas.height = Math.round(region.height);
@@ -720,7 +900,7 @@ async function ocrRecognizeCrop() {
       }, 'image/png');
     });
 
-    // 调用后端 PaddleOCR 识别
+    // 调用后端 OCR 识别
     const formData = new FormData();
     formData.append('file', blob, 'ocr_crop.png');
     if (model.shopId) formData.append('shopId', model.shopId);
@@ -730,11 +910,11 @@ async function ocrRecognizeCrop() {
       applyOcrResult(data);
       showOcrModal.value = false;
     } else {
-      const errMsg = (error as any)?.message || 'OCR识别失败，请确认 PaddleOCR 服务已启动';
+      const errMsg = (error as any)?.message || 'OCR识别失败，请稍后重试';
       window.$message?.error(errMsg);
     }
   } catch {
-    window.$message?.error('OCR识别失败，请确认 PaddleOCR 服务已启动（端口 8500）');
+    window.$message?.error('OCR识别失败，请检查网络后重试');
   } finally {
     ocrLoading.value = false;
   }
@@ -760,13 +940,22 @@ function handleInitModel() {
       remark: props.rowData.remark || '',
       status: props.rowData.status || 'PENDING',
       settlementMonth: props.rowData.settlementMonth || '',
-      items: (props.rowData.items || []).map((it: any) => ({
-        categoryId: it.categoryId || it.category?.id || '',
-        categoryName: it.category?.name || it.categoryName || '',
-        quantity: it.quantity || 1,
-        newPartQuantity: it.newPartQuantity || 0,
-        specialPaintId: it.specialPaintId || ''
-      }))
+      items: (props.rowData.items || []).map((it: any) => {
+        const item: OrderItem = {
+          categoryId: it.categoryId || it.category?.id || '',
+          categoryName: it.category?.name || it.categoryName || '',
+          quantity: it.quantity || 1,
+          newPartQuantity: it.newPartQuantity || 0,
+          specialPaintId: it.specialPaintId || ''
+        };
+        // 如果已有的 paintCount 与自动计算值不同，标记为手动覆盖
+        // 注意：这里无法立即检测，因为 categories 可能还没加载
+        // 将 paintCount 暂存到 overridePaintCount，等 categories 加载后对比
+        if (it.paintCount !== undefined && it.paintCount !== null) {
+          item.overridePaintCount = Number(it.paintCount);
+        }
+        return item;
+      })
     });
     // 加载已有图片
     images.value = (props.rowData.images || []).map((img: any) => ({
@@ -817,12 +1006,35 @@ async function handleRemoveImage(index: number) {
   images.value.splice(index, 1);
 }
 
+/** 构建提交的 items 数据，包含 overridePaintCount */
+function buildItemsData() {
+  return model.items.filter(it => it.categoryId).map(it => {
+    const item: any = {
+      categoryId: it.categoryId,
+      quantity: it.quantity,
+      newPartQuantity: it.newPartQuantity,
+      specialPaintId: it.specialPaintId || undefined
+    };
+    // 如果有手动覆盖幅数，传递给后端
+    if (it.overridePaintCount !== undefined && it.overridePaintCount !== null) {
+      item.overridePaintCount = it.overridePaintCount;
+    }
+    return item;
+  });
+}
+
 function closeDrawer() {
   visible.value = false;
 }
 
 async function handleSubmit() {
   await validate();
+
+  // 工单号规则校验：不符合规则则阻止提交
+  if (!orderNoValidation.value.valid) {
+    window.$message?.warning(orderNoValidation.value.message);
+    return;
+  }
 
   if (props.operateType === 'add') {
     const { data: orderData, error } = await createWorkOrder({
@@ -839,7 +1051,7 @@ async function handleSubmit() {
       contactPerson: model.contactPerson || undefined,
       description: model.description || undefined,
       remark: model.remark || undefined,
-      items: model.items.filter(it => it.categoryId).map(it => ({ categoryId: it.categoryId, quantity: it.quantity, newPartQuantity: it.newPartQuantity, specialPaintId: it.specialPaintId || undefined }))
+      items: buildItemsData()
     });
     if (error) return;
 
@@ -872,7 +1084,7 @@ async function handleSubmit() {
       phone: model.phone || undefined,
       settlementMonth: model.settlementMonth || undefined,
       remark: model.remark || undefined,
-      items: model.items.filter(it => it.categoryId).map(it => ({ categoryId: it.categoryId, quantity: it.quantity, newPartQuantity: it.newPartQuantity, specialPaintId: it.specialPaintId || undefined }))
+      items: buildItemsData()
     });
     if (error) {
       window.$message?.error(error.message || '更新失败');
@@ -900,6 +1112,7 @@ watch(() => model.shopId, (shopId) => {
 watch(() => model.orderNo, () => {
   ocrOrderNoCandidates.value = [];
   ocrOrderNoOriginal.value = '';
+  ocrOrderNoCorrectionMsg.value = '';
 });
 </script>
 
@@ -918,10 +1131,10 @@ watch(() => model.orderNo, () => {
           <NGridItem>
             <NFormItem
               label="工单号"
-              :validation-status="model.orderNo && !orderNoValidation.valid ? 'warning' : undefined"
-              :feedback="orderNoValidation.message"
+              :validation-status="model.orderNo && !orderNoValidation.valid ? 'warning' : ocrOrderNoCorrectionMsg ? 'warning' : undefined"
+              :feedback="ocrOrderNoCorrectionMsg || orderNoValidation.message"
             >
-              <NInput v-model:value="model.orderNo" placeholder="不填则自动生成" />
+              <NInput v-model:value="model.orderNo" placeholder="不填则自动生成" @update:value="ocrOrderNoCorrectionMsg = ''" />
             </NFormItem>
             <NSpace v-if="orderNoValidation.candidates.length > 0 || ocrOrderNoCandidates.length > 0" class="mb-8px" :size="6">
               <NText depth="3">候选修正：</NText>
@@ -984,7 +1197,22 @@ watch(() => model.orderNo, () => {
         <NGrid :cols="2" :x-gap="16">
           <NGridItem>
             <NFormItem label="车牌号" path="plateNumber">
-              <NInput v-model:value="model.plateNumber" placeholder="请输入车牌号" />
+              <NInput
+                v-model:value="model.plateNumber"
+                placeholder="请输入车牌号"
+                :loading="vehicleLookingUp"
+                @blur="onPlateNumberBlur"
+                @update:value="onPlateNumberInput"
+              >
+                <template v-if="vehicleFound" #suffix>
+                  <NTooltip>
+                    <template #trigger>
+                      <icon-ic-round-check-circle class="text-18px" style="color: #18a058; cursor: pointer" />
+                    </template>
+                    已匹配历史车辆：{{ vehicleFound.customerName || '客户' }} / 累计 {{ vehicleFound.totalOrderCount }} 单
+                  </NTooltip>
+                </template>
+              </NInput>
             </NFormItem>
           </NGridItem>
           <NGridItem>
@@ -992,9 +1220,18 @@ watch(() => model.orderNo, () => {
               <NInput v-model:value="model.carModel" placeholder="请输入车型" />
             </NFormItem>
           </NGridItem>
+          <NGridItem v-if="vehicleFound" span="2">
+            <NAlert type="success" :bordered="false" closable @close="vehicleFound = null">
+              <NSpace align="center" :size="8" :wrap="false">
+                <span>已匹配历史车辆，<template v-if="vehicleMatchedFields.length">已自动填充：{{ vehicleMatchedFields.join('、') }}</template><template v-else>所有字段已有值</template></span>
+                <span class="text-gray-400">·</span>
+                <span class="text-12px text-gray-500">累计 {{ vehicleFound.totalOrderCount }} 单 / {{ Number(vehicleFound.totalPaintCount).toFixed(1) }} 幅</span>
+              </NSpace>
+            </NAlert>
+          </NGridItem>
           <NGridItem span="2">
-            <NFormItem label="车架号">
-              <NInput v-model:value="model.vin" placeholder="请输入VIN" />
+            <NFormItem label="车架号" path="vin" :validation-status="ocrVinCorrectionMsg ? 'warning' : undefined" :feedback="ocrVinCorrectionMsg">
+              <NInput v-model:value="model.vin" placeholder="请输入VIN" @update:value="ocrVinCorrectionMsg = ''" />
             </NFormItem>
           </NGridItem>
           <NGridItem>
@@ -1011,7 +1248,7 @@ watch(() => model.orderNo, () => {
             </NFormItem>
           </NGridItem>
           <NGridItem>
-            <NFormItem label="电话">
+            <NFormItem label="电话" path="phone">
               <NInput v-model:value="model.phone" placeholder="请输入电话" />
             </NFormItem>
           </NGridItem>
@@ -1071,6 +1308,13 @@ watch(() => model.orderNo, () => {
           OCR识别填充
         </NButton>
       </div>
+      <!-- OCR 填充结果反馈条 -->
+      <Transition name="ocr-filled-fade">
+        <div v-if="ocrFilledVisible" class="ocr-filled-bar">
+          <icon-ic-round-check-circle class="ocr-filled-icon" />
+          <span>已填充：{{ ocrFilledFields.join('、') }}</span>
+        </div>
+      </Transition>
       <NSpace :size="8" align="center" class="image-upload-row">
         <NUpload
           :max="9"
@@ -1132,29 +1376,76 @@ watch(() => model.orderNo, () => {
   </NModal>
 
   <!-- OCR 识别弹窗 -->
-  <NModal v-model:show="showOcrModal" preset="card" title="OCR识别" style="width: 900px" :mask-closable="false">
+  <NModal v-model:show="showOcrModal" preset="card" title="OCR 智能识别" style="width: 900px" :mask-closable="false">
     <NSpace vertical :size="12">
-      <NAlert type="info" :bordered="false">
-        <template #header>操作说明</template>
-        <div><strong>全图识别：</strong>直接识别整张图片中的工单号、车牌号、客户名称、联系电话、车型、车架号、品牌、日期</div>
-        <div><strong>标记识别：</strong>在图片上拖拽框选区域，精准识别指定位置的文字（推荐）</div>
-      </NAlert>
+      <!-- 操作说明：两列卡片 -->
+      <NGrid :cols="2" :x-gap="12">
+        <NGridItem>
+          <NCard size="small" :bordered="true" style="background: #f8f9ff;">
+            <NSpace align="center" :size="8">
+              <NText style="font-size: 18px;">🔍</NText>
+              <NSpace vertical :size="2">
+                <NText strong style="font-size: 13px;">全图识别</NText>
+                <NText depth="3" style="font-size: 12px;">识别整张工单，快速填充所有空白字段</NText>
+              </NSpace>
+            </NSpace>
+          </NCard>
+        </NGridItem>
+        <NGridItem>
+          <NCard size="small" :bordered="true" style="background: #f8fff8;">
+            <NSpace align="center" :size="8">
+              <NText style="font-size: 18px;">✂️</NText>
+              <NSpace vertical :size="2">
+                <NText strong style="font-size: 13px;">标记识别</NText>
+                <NText depth="3" style="font-size: 12px;">框选图片区域精准识别，适合局部修正</NText>
+              </NSpace>
+            </NSpace>
+          </NCard>
+        </NGridItem>
+      </NGrid>
 
-      <div class="ocr-fields-row">
-        <NText depth="3" style="font-size: 12px; white-space: nowrap;">可识别字段：</NText>
-        <NSpace :size="8" wrap>
-          <NTag v-for="field in ocrFieldLabels" :key="field" size="small" type="info" round>{{ field }}</NTag>
-        </NSpace>
+      <!-- 可识别字段：分组展示 -->
+      <div class="ocr-fields-group">
+        <div class="ocr-fields-row">
+          <NText depth="3" style="font-size: 12px; white-space: nowrap;">基础资料：</NText>
+          <NSpace :size="6" wrap>
+            <NTag v-for="field in ['工单号','车牌号','客户名称','联系电话','车型','车架号','品牌','日期']" :key="field" size="small" type="info" round>{{ field }}</NTag>
+          </NSpace>
+        </div>
+        <div class="ocr-fields-row">
+          <NText depth="3" style="font-size: 12px; white-space: nowrap;">部位项目：</NText>
+          <NSpace :size="6" wrap>
+            <NTag size="small" type="success" round>喷漆部位×数量</NTag>
+          </NSpace>
+        </div>
       </div>
 
-      <NSpace align="center" :size="12">
-        <NText depth="3" style="font-size: 12px; white-space: nowrap;">识别模式：</NText>
-        <NRadioGroup v-model:value="ocrMode" size="small">
-          <NRadioButton value="all">全部识别</NRadioButton>
-          <NRadioButton value="basic">仅基础资料</NRadioButton>
-          <NRadioButton value="items">仅部位</NRadioButton>
-        </NRadioGroup>
-      </NSpace>
+      <!-- 识别范围选择 -->
+      <NCard size="small" :bordered="true">
+        <NSpace vertical :size="8">
+          <NText strong style="font-size: 13px;">识别范围</NText>
+          <NSpace align="center" :size="12" wrap>
+            <NRadioGroup v-model:value="ocrMode" size="small">
+              <NRadioButton value="basic">仅基础资料</NRadioButton>
+              <NRadioButton value="items">仅部位</NRadioButton>
+              <NRadioButton value="all">全部识别</NRadioButton>
+            </NRadioGroup>
+            <NTooltip>
+              <template #trigger>
+                <NButton type="primary" size="small" ghost @click="ocrMode = smartOcrMode">
+                  智能推荐
+                </NButton>
+              </template>
+              根据已填字段自动选择最省 token 的识别范围（当前推荐：{{ smartOcrMode === 'all' ? '全部' : smartOcrMode === 'basic' ? '基础资料' : '部位' }}）
+            </NTooltip>
+          </NSpace>
+          <NText depth="3" style="font-size: 12px;">
+            <template v-if="ocrMode === 'basic'">仅识别车牌号、工单号、客户名称等基础字段</template>
+            <template v-else-if="ocrMode === 'items'">仅识别喷漆部位项目明细</template>
+            <template v-else>同时识别基础字段和部位项目</template>
+          </NText>
+        </NSpace>
+      </NCard>
 
       <div style="position: relative; display: inline-block; cursor: crosshair;">
         <canvas
@@ -1191,32 +1482,6 @@ watch(() => model.orderNo, () => {
     </template>
   </NModal>
 
-  <!-- OCR 冲突确认弹窗 -->
-  <NModal v-model:show="showConflictModal" preset="card" title="OCR识别结果冲突确认" style="width: 560px" :mask-closable="false">
-    <NSpace vertical :size="12">
-      <NAlert type="warning" :bordered="false">
-        以下字段的OCR识别结果与工单原有数据不一致，勾选需要覆盖的字段
-      </NAlert>
-      <div v-for="(field, index) in conflictFields" :key="field.key" style="display: flex; align-items: center; gap: 12px; padding: 8px 12px; border: 1px solid #e0e0e0; border-radius: 4px;">
-        <NCheckbox v-model:checked="conflictFields[index].checked" />
-        <div style="flex: 1;">
-          <div style="font-weight: bold; font-size: 13px; margin-bottom: 4px;">{{ field.label }}</div>
-          <NSpace align="center" :size="8" style="font-size: 13px;">
-            <NText depth="3">原值：</NText>
-            <NText style="text-decoration: line-through; color: #999;">{{ field.oldValue }}</NText>
-            <NText>→</NText>
-            <NText type="warning" style="font-weight: bold;">{{ field.newValue }}</NText>
-          </NSpace>
-        </div>
-      </div>
-    </NSpace>
-    <template #footer>
-      <NSpace justify="end">
-        <NButton @click="showConflictModal = false">不覆盖</NButton>
-        <NButton type="primary" @click="confirmConflictOverwrite">覆盖选中字段</NButton>
-      </NSpace>
-    </template>
-  </NModal>
 </template>
 
 <style scoped>
@@ -1319,5 +1584,46 @@ watch(() => model.orderNo, () => {
   .form-panel {
     max-height: 50vh;
   }
+}
+
+.ocr-fields-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ocr-fields-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ocr-filled-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  margin-bottom: 8px;
+  background: linear-gradient(135deg, #e8f5e9, #f1f8e9);
+  border: 1px solid #c8e6c9;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #2e7d32;
+}
+
+.ocr-filled-icon {
+  color: #4caf50;
+  font-size: 18px;
+}
+
+.ocr-filled-fade-enter-active,
+.ocr-filled-fade-leave-active {
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+.ocr-filled-fade-enter-from,
+.ocr-filled-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-8px);
 }
 </style>

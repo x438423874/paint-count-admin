@@ -66,6 +66,20 @@ declare module 'vue-router/auto-routes' {
       Record<never, never>,
       | never
     >,
+    'Vehicle': RouteRecordInfo<
+      'Vehicle',
+      '/vehicle',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
+    'VehicleEdit': RouteRecordInfo<
+      'VehicleEdit',
+      '/vehicle/edit',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
     'WorkOrder': RouteRecordInfo<
       'WorkOrder',
       '/work-order',
@@ -83,6 +97,13 @@ declare module 'vue-router/auto-routes' {
     'WorkOrderDetail': RouteRecordInfo<
       'WorkOrderDetail',
       '/work-order/detail',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
+    '/work-order/vehicle-history': RouteRecordInfo<
+      '/work-order/vehicle-history',
+      '/work-order/vehicle-history',
       Record<never, never>,
       Record<never, never>,
       | never
@@ -140,6 +161,22 @@ declare module 'vue-router/auto-routes' {
       pathParamNames:
         | never
     }
+    'src/pages/vehicle/index.vue': {
+      routes:
+        | 'Vehicle'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
+    'src/pages/vehicle/edit.vue': {
+      routes:
+        | 'VehicleEdit'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
     'src/pages/work-order/index.vue': {
       routes:
         | 'WorkOrder'
@@ -159,6 +196,14 @@ declare module 'vue-router/auto-routes' {
     'src/pages/work-order/detail.vue': {
       routes:
         | 'WorkOrderDetail'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
+    'src/pages/work-order/vehicle-history.vue': {
+      routes:
+        | '/work-order/vehicle-history'
       views:
         | never
       pathParamNames:

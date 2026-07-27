@@ -63,6 +63,12 @@ function clearCache() {
         </div>
         <span class="quick-text">数据统计</span>
       </div>
+      <div class="quick-item" @click="router.push({ name: 'Vehicle' })">
+        <div class="quick-icon purple">
+          <van-icon name="car-o" size="22" color="#fff" />
+        </div>
+        <span class="quick-text">车辆管理</span>
+      </div>
     </div>
 
     <!-- 设置列表 -->
@@ -152,7 +158,7 @@ function clearCache() {
 
 .quick-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 12px;
   padding: 0 16px;
   margin-top: -30px;
@@ -190,6 +196,10 @@ function clearCache() {
 
 .quick-icon.orange {
   background: #fa8c16;
+}
+
+.quick-icon.purple {
+  background: #722ed1;
 }
 
 .quick-text {

@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { PrismaModule } from '@lib/shared/prisma/prisma.module';
 import { PaintImageService } from './service/paint-image.service';
 import { PaintShopService } from './service/paint-shop.service';
+import { PaintVehicleService } from './service/paint-vehicle.service';
 import { WorkOrderService } from './service/work-order.service';
 import { WorkOrderAuditService } from './service/work-order-audit.service';
 import { WorkOrderMergeService } from './service/work-order-merge.service';
@@ -23,6 +24,7 @@ import { ScheduledTaskManager } from './scheduled/scheduled-task-manager.service
 import { ScheduledTaskRegistrar } from './scheduled/scheduled-task-registrar.service';
 import { ScheduledTaskController } from './scheduled/rest/scheduled-task.controller';
 import { PaintShopController } from './shop/rest/shop.controller';
+import { PaintVehicleController } from './vehicle/rest/vehicle.controller';
 import { WorkOrderController } from './work-order/rest/work-order.controller';
 import { PaintStatisticsController } from './statistics/rest/statistics.controller';
 import { PaintStandardController } from './standard/rest/standard.controller';
@@ -34,6 +36,7 @@ import { UserShopController } from './user-shop/rest/user-shop.controller';
   imports: [PrismaModule],
   controllers: [
     PaintShopController,
+    PaintVehicleController,
     WorkOrderController,
     PaintStatisticsController,
     PaintStandardController,
@@ -47,6 +50,7 @@ import { UserShopController } from './user-shop/rest/user-shop.controller';
     ScheduledTaskManager,
     ScheduledTaskRegistrar,
     PaintShopService,
+    PaintVehicleService,
     WorkOrderService,
     WorkOrderAuditService,
     WorkOrderMergeService,
@@ -68,6 +72,7 @@ import { UserShopController } from './user-shop/rest/user-shop.controller';
   exports: [
     PaintImageService,
     PaintShopService,
+    PaintVehicleService,
     WorkOrderService,
     WorkOrderAuditService,
     WorkOrderMergeService,

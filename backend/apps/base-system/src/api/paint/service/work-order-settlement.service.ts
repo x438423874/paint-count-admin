@@ -80,6 +80,44 @@ export class WorkOrderSettlementService {
     });
   }
 
+  /** 批量结算工单 */
+  async batchSettle(orderIds: string[], settledBy?: string) {
+    let success = 0;
+    let failed = 0;
+    const errors: { id: string; message: string }[] = [];
+
+    for (const id of orderIds) {
+      try {
+        await this.settle(id, undefined, settledBy);
+        success++;
+      } catch (e: any) {
+        failed++;
+        errors.push({ id, message: e?.message || '结算失败' });
+      }
+    }
+
+    return { success, failed, errors };
+  }
+
+  /** 批量取消结算 */
+  async batchUnsettle(orderIds: string[]) {
+    let success = 0;
+    let failed = 0;
+    const errors: { id: string; message: string }[] = [];
+
+    for (const id of orderIds) {
+      try {
+        await this.unsettle(id);
+        success++;
+      } catch (e: any) {
+        failed++;
+        errors.push({ id, message: e?.message || '取消结算失败' });
+      }
+    }
+
+    return { success, failed, errors };
+  }
+
   private getMonthFromDate(date: Date | null | undefined): string {
     const d = date || new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
