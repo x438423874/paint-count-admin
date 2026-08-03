@@ -7,15 +7,23 @@ import {
   UserReadRepoPortToken,
   UserWriteRepoPortToken,
 } from '@app/base-system/lib/bounded-contexts/iam/authentication/constants';
+import {
+  TokensWriteRepoPortToken,
+} from '@app/base-system/lib/bounded-contexts/iam/tokens/constants';
 
 import { ConfigKeyPaths, ISecurityConfig, securityRegToken } from '@lib/config';
 
+import { TokensWriteRepository } from '../tokens/repository/tokens.write.pg.repository';
 import { UserReadRepository } from './repository/user.read.pg.repository';
 import { UserWriteRepository } from './repository/user.write.pg.repository';
 
 const providers = [
   { provide: UserReadRepoPortToken, useClass: UserReadRepository },
   { provide: UserWriteRepoPortToken, useClass: UserWriteRepository },
+  {
+    provide: TokensWriteRepoPortToken,
+    useClass: TokensWriteRepository,
+  },
 ];
 
 @Module({

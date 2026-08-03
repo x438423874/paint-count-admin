@@ -129,7 +129,7 @@ function getImageUrl(url: string) {
 .detail-image-panel {
   width: 480px;
   flex-shrink: 0;
-  border-left: 1px solid #f0f0f0;
+  border-left: 1px solid var(--neutral-150);
   padding-left: 16px;
   padding-right: 8px;
 }
@@ -137,7 +137,7 @@ function getImageUrl(url: string) {
 .detail-image-panel-title {
   font-size: 16px;
   font-weight: 600;
-  color: #333;
+  color: var(--text-strong);
   margin-bottom: 12px;
 }
 
@@ -149,10 +149,10 @@ function getImageUrl(url: string) {
 
 .detail-image-card {
   position: relative;
-  border: 1px solid #f0f0f0;
+  border: 1px solid var(--neutral-150);
   border-radius: 6px;
   overflow: hidden;
-  background: #fafafa;
+  background: var(--neutral-50);
 }
 
 .detail-image-card-img {
@@ -161,7 +161,7 @@ function getImageUrl(url: string) {
   min-height: 120px;
   display: block;
   object-fit: contain;
-  background: #f5f5f5;
+  background: var(--neutral-100);
 }
 
 .detail-image-type-tag {
@@ -180,7 +180,7 @@ function getImageUrl(url: string) {
   .detail-image-panel {
     width: 100%;
     border-left: none;
-    border-top: 1px solid #f0f0f0;
+    border-top: 1px solid var(--neutral-150);
     padding-left: 0;
     padding-top: 16px;
     max-height: 40vh;

@@ -43,8 +43,23 @@ export class SettlementMonthService {
       create: { shopId, month, isSealed: true, sealedAt: new Date(), sealedBy: sealedBy || null },
     });
 
+    // 封单时自动将该月所有「已审核」工单结算为「已结算」
+    const settled = await this.prisma.paintWorkOrder.updateMany({
+      where: {
+        shopId,
+        settlementMonth: month,
+        status: 'AUDITED' as any,
+      },
+      data: {
+        status: 'SETTLED' as any,
+        settledAt: new Date(),
+        settledBy: sealedBy || null,
+      },
+    });
+
     return {
       ...result,
+      settledCount: settled.count,
       stats: {
         orderCount: stats._count,
         totalPaintCount: stats._sum.totalPaintCount || 0,

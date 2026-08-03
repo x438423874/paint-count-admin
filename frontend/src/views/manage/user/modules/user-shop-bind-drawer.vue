@@ -95,7 +95,7 @@ function handleClearAll() {
         <div
           v-for="shop in allShops"
           :key="shop.id"
-          class="flex items-center justify-between rounded-4px bg-#f5f5f5 px-12px py-8px"
+          class="flex items-center justify-between rounded-4px bg-[var(--neutral-100)] px-12px py-8px"
         >
           <NCheckbox :value="shop.id">
             <span class="ml-4px font-500">{{ shop.name }}</span>

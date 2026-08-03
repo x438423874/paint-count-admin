@@ -5,6 +5,8 @@ import { MetricsService } from '@lib/shared/metrics/metrics.service';
 import { WINSTON_MODULE_PROVIDER } from 'nest-winston';
 import { WorkOrderService } from './work-order.service';
 import { PaintImageService } from './paint-image.service';
+import { SettlementMonthService } from './settlement-month.service';
+import { PaintVehicleService } from './paint-vehicle.service';
 import { CreateWorkOrderDto } from '../work-order/dto/work-order.dto';
 
 // Mock RedisUtility（工单号生成依赖 Redis）
@@ -55,6 +57,20 @@ describe('WorkOrderService', () => {
         WorkOrderService,
         { provide: PrismaService, useValue: prisma },
         { provide: PaintImageService, useValue: {} },
+        {
+          provide: SettlementMonthService,
+          useValue: {
+            assertNotSealed: jest.fn().mockResolvedValue(undefined),
+            assertOrderNotSealed: jest.fn().mockResolvedValue(undefined),
+          },
+        },
+        {
+          provide: PaintVehicleService,
+          useValue: {
+            upsertByPlateWithTx: jest.fn().mockResolvedValue({ id: 'veh-1' }),
+            refreshStats: jest.fn().mockResolvedValue(undefined),
+          },
+        },
         { provide: MetricsService, useValue: { recordWorkOrderCreation: jest.fn(), recordOcrRecognition: jest.fn(), recordExcelImport: jest.fn() } },
         { provide: WINSTON_MODULE_PROVIDER, useValue: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() } },
       ],

@@ -83,6 +83,21 @@ export class AuthenticationController {
     return ApiRes.success(token);
   }
 
+  @Post('logout')
+  @ApiOperation({
+    summary: 'User logout - revoke refresh tokens',
+    description:
+      'Revokes the current refresh token (or all sessions of the user) and clears the role cache.',
+  })
+  async logout(
+    @Request() req: AuthenticatedRequest,
+    @Body('refreshToken') refreshToken?: string,
+  ): Promise<ApiRes<any>> {
+    const user: IAuthentication = req.user;
+    await this.authenticationService.logout(user.uid, refreshToken);
+    return ApiRes.success(null);
+  }
+
   @Get('getUserInfo')
   async getProfile(@Request() req: AuthenticatedRequest): Promise<ApiRes<any>> {
     const user: IAuthentication = req.user;

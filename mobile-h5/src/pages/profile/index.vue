@@ -65,7 +65,7 @@ function clearCache() {
       </div>
       <div class="quick-item" @click="router.push({ name: 'Vehicle' })">
         <div class="quick-icon purple">
-          <van-icon name="car-o" size="22" color="#fff" />
+          <van-icon name="logistics" size="22" color="#fff" />
         </div>
         <span class="quick-text">车辆管理</span>
       </div>
@@ -101,7 +101,7 @@ function clearCache() {
 <style lang="less" scoped>
 .profile-page {
   min-height: 100vh;
-  background: #f5f7fa;
+  background: var(--color-bg);
 }
 
 .user-header {
@@ -115,7 +115,7 @@ function clearCache() {
   left: 0;
   right: 0;
   bottom: 0;
-  background: linear-gradient(135deg, #1677ff 0%, #4096ff 100%);
+  background: linear-gradient(135deg, var(--color-primary) 0%, color-mix(in srgb, var(--color-primary) 60%, #fff) 100%);
   border-radius: 0 0 24px 24px;
 }
 
@@ -167,7 +167,7 @@ function clearCache() {
 }
 
 .quick-item {
-  background: #fff;
+  background: var(--color-surface);
   border-radius: 16px;
   padding: 16px 10px;
   display: flex;
@@ -187,15 +187,15 @@ function clearCache() {
 }
 
 .quick-icon.blue {
-  background: #1677ff;
+  background: var(--color-primary);
 }
 
 .quick-icon.green {
-  background: #52c41a;
+  background: var(--color-success);
 }
 
 .quick-icon.orange {
-  background: #fa8c16;
+  background: var(--color-warning);
 }
 
 .quick-icon.purple {
@@ -204,12 +204,12 @@ function clearCache() {
 
 .quick-text {
   font-size: 13px;
-  color: #333;
+  color: var(--text-regular);
 }
 
 .menu-section {
   margin: 16px;
-  background: #fff;
+  background: var(--color-surface);
   border-radius: 16px;
   overflow: hidden;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.03);
@@ -217,7 +217,7 @@ function clearCache() {
 
 .version-text {
   font-size: 13px;
-  color: #999;
+  color: var(--text-tertiary);
 }
 
 .logout-section {

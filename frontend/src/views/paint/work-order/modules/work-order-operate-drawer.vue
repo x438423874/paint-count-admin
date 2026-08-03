@@ -7,6 +7,7 @@ import { useFormRules, useNaiveForm } from '@/hooks/common/form';
 import { $t } from '@/locales';
 import { compressDualImage } from '@/utils/image-compress';
 import { analyzeOrderNoErrors } from '@/utils/order-no-rule';
+import { useThemeStore } from '@/store/modules/theme';
 
 defineOptions({
   name: 'WorkOrderOperateDrawer'
@@ -28,6 +29,8 @@ const emit = defineEmits<Emits>();
 const visible = defineModel<boolean>('visible', {
   default: false
 });
+
+const themeStore = useThemeStore();
 
 const { formRef, validate, restoreValidation } = useNaiveForm();
 const { defaultRequiredRule } = useFormRules();
@@ -257,7 +260,15 @@ async function lookupVehicle(plate: string) {
       for (const { key, vehicleKey, label } of fieldMap) {
         const currentValue = ((model[key] as string) || '').trim();
         const vehicleValue = ((data as any)[vehicleKey] as string || '').trim();
-        if (!currentValue && vehicleValue) {
+        if (!vehicleValue) continue;
+        if (key === 'carModel') {
+          // 车型以车辆主数据为准：主数据更完整（更长）或表单为空时覆盖，避免"宋"不更新为"宋PLUS DM-i"
+          if (!currentValue || vehicleValue.length > currentValue.length) {
+            (model as any)[key] = vehicleValue;
+            filled.push(label);
+          }
+        } else if (!currentValue) {
+          // 其余字段（车架号/客户/电话等）仅填空，避免误覆盖用户已填值
           (model as any)[key] = vehicleValue;
           filled.push(label);
         }
@@ -689,7 +700,7 @@ function drawOcrCanvas() {
     ctx.clearRect(x, y, w, h);
     ctx.drawImage(imgEl, x / scale, y / scale, w / scale, h / scale, x, y, w, h);
     // 选区边框
-    ctx.strokeStyle = '#18a058';
+    ctx.strokeStyle = themeStore.themeColors.success;
     ctx.lineWidth = 2;
     ctx.setLineDash([6, 3]);
     ctx.strokeRect(x, y, w, h);
@@ -1207,7 +1218,7 @@ watch(() => model.orderNo, () => {
                 <template v-if="vehicleFound" #suffix>
                   <NTooltip>
                     <template #trigger>
-                      <icon-ic-round-check-circle class="text-18px" style="color: #18a058; cursor: pointer" />
+                      <icon-ic-round-check-circle class="text-18px" style="color: var(--color-success); cursor: pointer" />
                     </template>
                     已匹配历史车辆：{{ vehicleFound.customerName || '客户' }} / 累计 {{ vehicleFound.totalOrderCount }} 单
                   </NTooltip>
@@ -1381,7 +1392,7 @@ watch(() => model.orderNo, () => {
       <!-- 操作说明：两列卡片 -->
       <NGrid :cols="2" :x-gap="12">
         <NGridItem>
-          <NCard size="small" :bordered="true" style="background: #f8f9ff;">
+          <NCard size="small" :bordered="true" style="background: var(--color-info-bg);">
             <NSpace align="center" :size="8">
               <NText style="font-size: 18px;">🔍</NText>
               <NSpace vertical :size="2">
@@ -1392,7 +1403,7 @@ watch(() => model.orderNo, () => {
           </NCard>
         </NGridItem>
         <NGridItem>
-          <NCard size="small" :bordered="true" style="background: #f8fff8;">
+          <NCard size="small" :bordered="true" style="background: var(--color-success-bg);">
             <NSpace align="center" :size="8">
               <NText style="font-size: 18px;">✂️</NText>
               <NSpace vertical :size="2">
@@ -1450,7 +1461,7 @@ watch(() => model.orderNo, () => {
       <div style="position: relative; display: inline-block; cursor: crosshair;">
         <canvas
           ref="ocrCanvasRef"
-          style="border: 1px solid #e0e0e0; border-radius: 4px; display: block;"
+          style="border: 1px solid var(--neutral-300); border-radius: 4px; display: block;"
           @mousedown="onOcrMouseDown"
           @mousemove="onOcrMouseMove"
           @mouseup="onOcrMouseUp"
@@ -1501,7 +1512,7 @@ watch(() => model.orderNo, () => {
 .image-panel {
   width: 520px;
   flex-shrink: 0;
-  border-left: 1px solid #f0f0f0;
+  border-left: 1px solid var(--neutral-150);
   padding-left: 16px;
   padding-right: 8px;
 }
@@ -1516,7 +1527,7 @@ watch(() => model.orderNo, () => {
 .image-panel-title {
   font-size: 16px;
   font-weight: 600;
-  color: #333;
+  color: var(--text-strong);
 }
 
 .image-upload-row {
@@ -1531,10 +1542,10 @@ watch(() => model.orderNo, () => {
 
 .image-card {
   position: relative;
-  border: 1px solid #f0f0f0;
+  border: 1px solid var(--neutral-150);
   border-radius: 6px;
   overflow: hidden;
-  background: #fafafa;
+  background: var(--neutral-50);
 }
 
 .image-card-img {
@@ -1543,7 +1554,7 @@ watch(() => model.orderNo, () => {
   min-height: 120px;
   display: block;
   object-fit: contain;
-  background: #f5f5f5;
+  background: var(--neutral-100);
 }
 
 .image-remove-btn {
@@ -1575,7 +1586,7 @@ watch(() => model.orderNo, () => {
   .image-panel {
     width: 100%;
     border-left: none;
-    border-top: 1px solid #f0f0f0;
+    border-top: 1px solid var(--neutral-150);
     padding-left: 0;
     padding-top: 16px;
     max-height: 40vh;
@@ -1604,15 +1615,15 @@ watch(() => model.orderNo, () => {
   gap: 8px;
   padding: 8px 14px;
   margin-bottom: 8px;
-  background: linear-gradient(135deg, #e8f5e9, #f1f8e9);
-  border: 1px solid #c8e6c9;
+  background: linear-gradient(135deg, var(--color-success-bg-strong), var(--color-success-bg));
+  border: 1px solid var(--color-success-border);
   border-radius: 6px;
   font-size: 13px;
-  color: #2e7d32;
+  color: var(--color-success-deep);
 }
 
 .ocr-filled-icon {
-  color: #4caf50;
+  color: var(--color-success);
   font-size: 18px;
 }
 

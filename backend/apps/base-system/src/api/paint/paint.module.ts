@@ -20,6 +20,7 @@ import { WorkOrderReconcileService } from './service/work-order-reconcile.servic
 import { PaintPdfExportService } from './service/paint-pdf-export.service';
 import { SettlementMonthService } from './service/settlement-month.service';
 import { UserShopService } from './service/user-shop.service';
+import { PendingImageService } from './service/pending-image.service';
 import { ScheduledTaskManager } from './scheduled/scheduled-task-manager.service';
 import { ScheduledTaskRegistrar } from './scheduled/scheduled-task-registrar.service';
 import { ScheduledTaskController } from './scheduled/rest/scheduled-task.controller';
@@ -31,6 +32,7 @@ import { PaintStandardController } from './standard/rest/standard.controller';
 import { PaintStandardTemplateController } from './standard/rest/standard-template.controller';
 import { SettlementMonthController } from './settlement-month/rest/settlement-month.controller';
 import { UserShopController } from './user-shop/rest/user-shop.controller';
+import { PendingImageController } from './pending-image/rest/pending-image.controller';
 
 @Module({
   imports: [PrismaModule],
@@ -44,6 +46,7 @@ import { UserShopController } from './user-shop/rest/user-shop.controller';
     SettlementMonthController,
     ScheduledTaskController,
     UserShopController,
+    PendingImageController,
   ],
   providers: [
     PaintImageService,
@@ -68,6 +71,7 @@ import { UserShopController } from './user-shop/rest/user-shop.controller';
     PaintPdfExportService,
     SettlementMonthService,
     UserShopService,
+    PendingImageService,
   ],
   exports: [
     PaintImageService,

@@ -3,12 +3,15 @@ import {
   Inject,
   Injectable,
   NotFoundException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { EventPublisher, QueryBus } from '@nestjs/cqrs';
 import { JwtService } from '@nestjs/jwt';
 
 import { TokensReadModel } from '@app/base-system/lib/bounded-contexts/iam/tokens/domain/tokens.read.model';
 import { TokensByRefreshTokenQuery } from '@app/base-system/lib/bounded-contexts/iam/tokens/queries/tokens.by-refresh_token.query';
+import { TokensWriteRepoPortToken } from '@app/base-system/lib/bounded-contexts/iam/tokens/constants';
+import { TokensWriteRepoPort } from '@app/base-system/lib/bounded-contexts/iam/tokens/ports/tokens.write.repo-port';
 
 import { ISecurityConfig, SecurityConfig } from '@lib/config';
 import { CacheConstant } from '@lib/constants/cache.constant';
@@ -33,6 +36,8 @@ export class AuthenticationService {
     private readonly repository: UserReadRepoPort,
     private queryBus: QueryBus,
     @Inject(SecurityConfig.KEY) private securityConfig: ISecurityConfig,
+    @Inject(TokensWriteRepoPortToken)
+    private readonly tokensWriteRepository: TokensWriteRepoPort,
   ) {}
 
   async refreshToken(dto: RefreshTokenDTO) {
@@ -41,16 +46,27 @@ export class AuthenticationService {
       TokensReadModel | null
     >(new TokensByRefreshTokenQuery(dto.refreshToken));
     if (!tokenDetails) {
-      throw new NotFoundException('Refresh token not found.');
+      throw new UnauthorizedException('Refresh token 不存在或已失效');
     }
 
-    await this.jwtService.verifyAsync(tokenDetails.refreshToken, {
-      secret: this.securityConfig.refreshJwtSecret,
-    });
+    try {
+      await this.jwtService.verifyAsync(tokenDetails.refreshToken, {
+        secret: this.securityConfig.refreshJwtSecret,
+      });
+    } catch {
+      throw new UnauthorizedException('Refresh token 已过期或非法');
+    }
+
+    // A) 原子消费（CAS）：仅当 refresh token 仍为 UNUSED 时才置为 USED，
+    // 利用 DB 条件更新消除并发重放，返回 0 表示已被使用或不存在。
+    const consumeResult = await this.tokensWriteRepository.consumeRefreshToken(
+      dto.refreshToken,
+    );
+    if (consumeResult.count === 0) {
+      throw new UnauthorizedException('Refresh token 已被使用或不存在');
+    }
 
     const tokensAggregate = new TokensEntity(tokenDetails);
-
-    await tokensAggregate.refreshTokenCheck();
 
     const tokens = await this.generateAccessToken(
       tokensAggregate.userId,
@@ -80,7 +96,34 @@ export class AuthenticationService {
     // refresh token 成功后同步刷新 Redis 中的角色缓存，避免 token 未过期但角色缓存已过期
     await this.refreshUserRolesCache(tokensAggregate.userId);
 
+    // D) 顺带清理过期的已用 token 记录
+    await this.pruneUsedTokens();
+
     return tokens;
+  }
+
+  /**
+   * B) 登出：吊销 refresh token 并清理角色缓存。
+   * 若传入 refreshToken，则只吊销该会话；否则吊销该用户所有未使用会话。
+   */
+  async logout(userId: string, refreshToken?: string): Promise<void> {
+    if (refreshToken) {
+      await this.tokensWriteRepository.revokeRefreshToken(refreshToken);
+    } else {
+      await this.tokensWriteRepository.revokeTokensByUserId(userId);
+    }
+    await RedisUtility.instance.del(
+      `${CacheConstant.AUTH_TOKEN_PREFIX}${userId}`,
+    );
+  }
+
+  /**
+   * D) 清理早于保留期的已用(USED) token 记录，避免 sys_tokens 无限膨胀。
+   */
+  private async pruneUsedTokens(): Promise<void> {
+    const retentionDays = 30;
+    const before = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
+    await this.tokensWriteRepository.deleteUsedTokens(before);
   }
 
   /**
@@ -150,6 +193,9 @@ export class AuthenticationService {
     userAggregate.commit();
 
     await this.refreshUserRolesCache(user.id);
+
+    // D) 登录时清理过期的已用 token 记录
+    await this.pruneUsedTokens();
 
     return tokens;
   }

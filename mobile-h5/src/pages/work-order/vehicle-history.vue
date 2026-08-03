@@ -184,14 +184,14 @@ onMounted(() => {
 <style scoped lang="less">
 .vehicle-history-page {
   min-height: 100vh;
-  background: #f7f8fa;
+  background: var(--color-bg);
   padding-bottom: 24px;
 }
 
 .summary-card {
   margin: 12px;
   padding: 16px;
-  background: linear-gradient(135deg, #07c160 0%, #10aeff 100%);
+  background: linear-gradient(135deg, var(--color-success) 0%, #10aeff 100%);
   border-radius: 12px;
   color: #fff;
 
@@ -238,7 +238,7 @@ onMounted(() => {
 .scope-switch {
   margin: 0 12px 8px;
   padding: 8px 12px;
-  background: #fff;
+  background: var(--color-surface);
   border-radius: 8px;
   font-size: 13px;
 }
@@ -248,7 +248,7 @@ onMounted(() => {
 }
 
 .order-card {
-  background: #fff;
+  background: var(--color-surface);
   border-radius: 8px;
   padding: 12px;
   margin-bottom: 8px;
@@ -263,7 +263,7 @@ onMounted(() => {
     .order-no {
       font-size: 15px;
       font-weight: 500;
-      color: #323233;
+      color: var(--text-primary);
     }
 
     .order-status {
@@ -278,7 +278,7 @@ onMounted(() => {
     display: flex;
     justify-content: space-between;
     font-size: 12px;
-    color: #646566;
+    color: var(--text-secondary);
     margin-bottom: 6px;
   }
 
@@ -287,10 +287,10 @@ onMounted(() => {
     justify-content: space-between;
     align-items: center;
     font-size: 12px;
-    color: #969799;
+    color: var(--text-tertiary);
 
     .paint-count {
-      color: #07c160;
+      color: var(--color-success);
       font-weight: 500;
     }
   }
@@ -302,7 +302,7 @@ onMounted(() => {
 
 .list-footer {
   text-align: center;
-  color: #969799;
+  color: var(--text-tertiary);
   font-size: 12px;
   padding: 12px 0;
 }

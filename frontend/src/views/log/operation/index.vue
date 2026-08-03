@@ -5,6 +5,7 @@ import { fetchGetOperationLogList } from '@/service/api';
 import { useAppStore } from '@/store/modules/app';
 import { useTable } from '@/hooks/common/table';
 import { $t } from '@/locales';
+import EmptyState from '@/components/common/EmptyState.vue';
 import OperationSearch from './modules/operation-log-search.vue';
 
 dayjs.extend(utc);
@@ -156,7 +157,11 @@ const { columns, data, getData, getDataByPage, loading, mobilePagination, search
         :row-key="row => row.id"
         :pagination="mobilePagination"
         class="sm:h-full"
-      />
+      >
+        <template #empty>
+          <EmptyState description="暂无操作日志" />
+        </template>
+      </NDataTable>
     </NCard>
   </div>
 </template>

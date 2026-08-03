@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '@lib/shared/prisma/prisma.service';
 import path from 'path';
 import fs from 'fs/promises';
+import { BACKEND_ROOT } from './upload-root';
 
 @Injectable()
 export class PaintImageService {
@@ -16,7 +17,7 @@ export class PaintImageService {
     const shopCode = shop?.code || 'unknown';
     const monthDir = settlementMonth || '未结算';
     const relativeDir = `uploads/paint/${shopCode}/${monthDir}`;
-    const absoluteDir = path.join(process.cwd(), relativeDir);
+    const absoluteDir = path.join(BACKEND_ROOT, relativeDir);
     await fs.mkdir(absoluteDir, { recursive: true });
     return { relativeDir, absoluteDir };
   }
@@ -55,7 +56,7 @@ export class PaintImageService {
 
       const updateData: Record<string, string> = {};
       for (const { oldUrl, field } of urls) {
-        const oldAbsolutePath = path.join(process.cwd(), oldUrl.replace(/^\//, ''));
+        const oldAbsolutePath = path.join(BACKEND_ROOT, oldUrl.replace(/^\//, ''));
         const filename = path.basename(oldUrl);
         const newAbsolutePath = path.join(newAbsoluteDir, filename);
 
@@ -81,7 +82,7 @@ export class PaintImageService {
   async deletePhysicalFiles(url: string, thumbnailUrl?: string | null) {
     for (const fileUrl of [url, thumbnailUrl]) {
       if (!fileUrl) continue;
-      const absolutePath = path.join(process.cwd(), fileUrl.replace(/^\//, ''));
+      const absolutePath = path.join(BACKEND_ROOT, fileUrl.replace(/^\//, ''));
       try {
         await fs.access(absolutePath);
         await fs.unlink(absolutePath);
@@ -111,7 +112,7 @@ export class PaintImageService {
   async cleanOrphanedFiles(): Promise<{ deleted: string[]; errors: string[] }> {
     const deleted: string[] = [];
     const errors: string[] = [];
-    const paintDir = path.join(process.cwd(), 'uploads/paint');
+    const paintDir = path.join(BACKEND_ROOT, 'uploads/paint');
 
     // 检查目录是否存在
     try {
@@ -135,7 +136,7 @@ export class PaintImageService {
 
     // 3. 找出冗余文件（磁盘存在但数据库无记录）
     for (const diskFile of diskFiles) {
-      const relativeUrl = `/${path.relative(process.cwd(), diskFile).replace(/\\/g, '/')}`;
+      const relativeUrl = `/${path.relative(BACKEND_ROOT, diskFile).replace(/\\/g, '/')}`;
       if (!dbUrls.has(relativeUrl)) {
         try {
           await fs.unlink(diskFile);

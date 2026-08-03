@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, nextTick, watch } from 'vue';
 import {
   NModal, NSpace, NSteps, NStep, NSpin, NAlert, NButton, NInput, NInputGroup,
   NGrid, NGridItem, NText, NForm, NFormItem, NSelect, NEmpty
@@ -39,24 +39,86 @@ function getCategoryOptions(templateName: string) {
   const templateCoefficient = templateStd?.paintCount;
   const currentValues = aliasMapData.value[templateName] || [];
 
-  const selectedOtherIds = Object.entries(aliasMapData.value)
+  // 记录每个系统部位被哪些模板列选中了
+  const selectedByOther = new Map<string, string[]>();
+  Object.entries(aliasMapData.value)
     .filter(([name, ids]) => name !== templateName && Array.isArray(ids))
-    .flatMap(([, ids]) => ids);
+    .forEach(([name, ids]) => {
+      for (const id of ids) {
+        if (!selectedByOther.has(id)) selectedByOther.set(id, []);
+        selectedByOther.get(id)!.push(name);
+      }
+    });
 
   const sameCoefficientCategories = templateCoefficient !== undefined
     ? shopCategoryStandards.value.filter(s => Math.abs(s.paintCount - templateCoefficient) < 0.001)
     : [];
 
-  return shopCategoryStandards.value
-    .filter(c => !selectedOtherIds.includes(c.id) || currentValues.includes(c.id))
-    .map(c => {
-      const label = `${c.name} (${(Number(c.paintCount) || 0).toFixed(1)}幅)`;
-      const isSameCoeff = sameCoefficientCategories.some(s => s.id === c.id);
-      return {
-        label: isSameCoeff ? `⭐ ${label}` : label,
+  const availableOptions: { label: string; value: string }[] = [];
+  const occupiedOptions: { label: string; value: string; disabled: boolean }[] = [];
+
+  for (const c of shopCategoryStandards.value) {
+    const isCurrent = currentValues.includes(c.id);
+    const occupiedBy = selectedByOther.get(c.id) || [];
+    const isOccupied = occupiedBy.length > 0 && !isCurrent;
+
+    const label = `${c.name} (${(Number(c.paintCount) || 0).toFixed(1)}幅)`;
+    const isSameCoeff = sameCoefficientCategories.some(s => s.id === c.id);
+    const baseLabel = isSameCoeff ? `⭐ ${label}` : label;
+
+    if (isOccupied) {
+      occupiedOptions.push({
+        label: `${baseLabel} [已映射: ${occupiedBy.join(', ')}]`,
+        value: c.id,
+        disabled: true
+      });
+    } else {
+      availableOptions.push({
+        label: baseLabel,
         value: c.id
-      };
-    });
+      });
+    }
+  }
+
+  // 当前列没有可用选项时（全部被其他列占用），显示已被占用的选项并禁用，避免空列表
+  if (availableOptions.length === 0) {
+    console.warn(`[excel-config-modal] "${templateName}" 没有可用选项，所有系统部位已被其他模板列映射`);
+    return occupiedOptions;
+  }
+
+  const result = [...availableOptions, ...occupiedOptions];
+  console.log(`[excel-config-modal] getCategoryOptions("${templateName}") => ${result.length} options`);
+  return result;
+}
+
+function autoFillAliasMap() {
+  const items = templateConfig.value?.items || [];
+  if (!items.length || !shopCategoryStandards.value.length) return;
+
+  let filledCount = 0;
+  for (const item of items) {
+    const templateName = item.categoryName;
+    if (!templateName) continue;
+
+    // 如果该列已经有手动配置，不覆盖
+    const existing = aliasMapData.value[templateName];
+    if (Array.isArray(existing) && existing.length > 0) continue;
+
+    // 按名称或别名精确匹配系统部位
+    const matched = shopCategoryStandards.value.find(
+      s => s.name === templateName || s.alias === templateName
+    );
+
+    if (matched?.id) {
+      aliasMapData.value[templateName] = [matched.id];
+      filledCount += 1;
+    }
+  }
+
+  if (filledCount > 0) {
+    console.log(`[excel-config-modal] 自动填充部位映射 ${filledCount} 项`);
+    window.$message?.success(`已自动匹配 ${filledCount} 个部位映射`);
+  }
 }
 
 async function loadConfig() {
@@ -67,6 +129,18 @@ async function loadConfig() {
       fetchCategoryAliasMap(props.shopId),
       fetchShopCategoriesWithStandard(props.shopId)
     ]);
+
+    // 检查各接口是否有错误（createFlatRequest 不会 throw，错误在 error 字段中）
+    if (configRes.error) {
+      window.$message?.error('加载模板配置失败: ' + (configRes.error.message || '未知错误'));
+    }
+    if (aliasRes.error) {
+      window.$message?.error('加载部位别名映射失败: ' + (aliasRes.error.message || '未知错误'));
+    }
+    if (standardsWithCatRes.error) {
+      window.$message?.error('加载门店部位标准失败: ' + (standardsWithCatRes.error.message || '未知错误'));
+    }
+
     templateConfig.value = configRes.data || null;
     const rawAliasMap = (aliasRes.data || {}) as Record<string, any>;
     aliasMapData.value = Object.entries(rawAliasMap).reduce((acc, [key, value]) => {
@@ -74,13 +148,22 @@ async function loadConfig() {
       else if (typeof value === 'string' && value) acc[key] = [value];
       return acc;
     }, {} as Record<string, string[]>);
-    shopCategoryStandards.value = ((standardsWithCatRes.data || []) as any[]).map((s: any) => ({
+    const rawStandards = (standardsWithCatRes.data || []) as any[];
+    console.log('[excel-config-modal] fetchShopCategoriesWithStandard raw data count:', rawStandards.length, 'sample:', rawStandards[0]);
+    if (!standardsWithCatRes.error && rawStandards.length === 0) {
+      window.$message?.warning('该门店未配置标准模板或模板下没有部位，请先配置门店标准模板');
+    }
+    shopCategoryStandards.value = rawStandards.map((s: any) => ({
       id: s.categoryId || s.category?.id || '',
       name: s.alias || s.category?.name || '',
       alias: s.alias || '',
       paintCount: Number(s.coefficient) || 0,
       newPartAddition: Number(s.newPartAddition) || 0
     }));
+    console.log('[excel-config-modal] shopCategoryStandards count:', shopCategoryStandards.value.length);
+
+    // 自动按名称匹配填充部位映射（仅在用户没有手动配置过时）
+    autoFillAliasMap();
   } catch (e: any) {
     window.$message?.error(e.message || '加载配置失败');
   } finally {
@@ -105,6 +188,20 @@ async function handleTemplateDetectFile(e: Event) {
   if (data) {
     templateConfig.value = data;
     window.$message?.success(`自动识别成功，检测到 ${data.items?.length || 0} 个项目列`);
+
+    // 应用后端返回的建议别名映射（如 前头盖 -> 机盖）
+    if (data.suggestedAliasMap) {
+      for (const [key, ids] of Object.entries(data.suggestedAliasMap)) {
+        if (Array.isArray(ids) && ids.length > 0) {
+          aliasMapData.value[key] = ids.filter((id): id is string => typeof id === 'string');
+        }
+      }
+    }
+
+    // 如果当前已在映射步骤，继续按名称精确匹配兜底
+    if (step.value === 2) {
+      autoFillAliasMap();
+    }
   }
 }
 
@@ -113,6 +210,8 @@ function goToAliasMapStep() {
     window.$message?.warning('请先上传或配置Excel模板');
     return;
   }
+  // 进入第二步时再次触发自动匹配（兼容先上传/修改模板后再进入映射步骤）
+  autoFillAliasMap();
   step.value = 2;
 }
 
@@ -137,10 +236,19 @@ async function handleSave() {
 function handleUpdateShow(value: boolean) {
   if (value) {
     step.value = 1;
-    loadConfig();
+    // 确保 props.shopId 已经由父组件同步更新后再发起请求
+    nextTick(() => loadConfig());
   }
   emit('update:show', value);
 }
+
+// 父组件在不关闭弹窗的情况下切换门店时，主动重新加载配置
+watch(() => props.shopId, (newId, oldId) => {
+  if (props.show && newId && newId !== oldId) {
+    step.value = 1;
+    loadConfig();
+  }
+});
 </script>
 
 <template>
@@ -202,6 +310,14 @@ function handleUpdateShow(value: boolean) {
               <NAlert type="info" :bordered="false">
                 当门店导出模板中的部位名称与系统实际部位不一致时，可在此处建立映射关系。同系数的部位会标 ⭐ 提示。
               </NAlert>
+              <NAlert
+                v-if="!loading && shopCategoryStandards.length === 0"
+                type="warning"
+                :bordered="false"
+                title="未获取到门店系统部位"
+              >
+                该门店尚未关联标准模板或模板下没有配置部位，请先到【门店管理】为门店选择标准模板并配置部位标准。
+              </NAlert>
               <NForm label-placement="left" label-width="140px" class="alias-map-form">
                 <NFormItem v-for="(item, idx) in templateCategories" :key="idx" :label="item.categoryName">
                   <NSelect
@@ -212,6 +328,13 @@ function handleUpdateShow(value: boolean) {
                     placeholder="请选择对应的系统部位"
                     style="width: 100%"
                   />
+                  <NText
+                    v-if="!loading && shopCategoryStandards.length > 0 && getCategoryOptions(item.categoryName).length === 0"
+                    depth="3"
+                    style="font-size: 12px; color: #f0a020;"
+                  >
+                    所有系统部位已被其他列映射
+                  </NText>
                 </NFormItem>
                 <NEmpty v-if="templateCategories.length === 0" description="暂无模板部位配置" />
               </NForm>

@@ -11,3 +11,74 @@ body,
 html {
   overflow-x: hidden;
 }
+
+:root {
+  /* ===== 品牌视觉令牌（与 mobile-h5 的 var.less 对齐，单一真相源见 DESIGN_TOKENS.md） ===== */
+  --brand-radius: 8px;
+  --brand-shadow-1: 0 2px 8px rgba(0, 0, 0, 0.08);
+  --brand-shadow-2: 0 4px 16px rgba(0, 0, 0, 0.12);
+  --brand-shadow-3: 0 8px 24px rgba(0, 0, 0, 0.16);
+  --brand-spacing-mini: 4px;
+  --brand-spacing-small: 8px;
+  --brand-spacing-middle: 16px;
+  --brand-spacing-large: 24px;
+
+  /* ===== 语义色令牌（单一真相源：theme/settings.ts 的 themeColor / otherColor） ===== */
+  --color-primary: #2563eb;
+  --color-info: #2080f0;
+  --color-success: #52c41a;
+  --color-warning: #faad14;
+  --color-error: #f5222d;
+
+  /* 语义色浅底（状态高亮背景 / 边框，浅色模式） */
+  --color-success-bg: #f6ffed;
+  --color-success-bg-strong: #e8f5e9;
+  --color-success-border: #c8e6c9;
+  --color-success-deep: #2e7d32;
+  --color-warning-bg: #fffbe6;
+  --color-error-bg: #fff1f0;
+  --color-info-bg: #e6f4ff;
+
+  /* ===== 中性灰阶令牌（背景 / 边框 / 次要文字） ===== */
+  --neutral-50: #fafafa;
+  --neutral-100: #f5f5f5;
+  --neutral-150: #f0f0f0;
+  --neutral-200: #e8e8e8;
+  --neutral-220: #e5e7eb;
+  --neutral-300: #e0e0e0;
+  --neutral-350: #cdcde6;
+  --neutral-400: #c2c2c2;
+
+  /* 反色文字（浅色容器上的深色文字，inverted 场景） */
+  --text-invert: #1f1f1f;
+
+  /* 常规标题文字（替代散落的 #333 等） */
+  --text-strong: #333333;
+}
+
+html.dark {
+  --brand-shadow-1: 0 2px 8px rgba(0, 0, 0, 0.36);
+  --brand-shadow-2: 0 4px 16px rgba(0, 0, 0, 0.48);
+  --brand-shadow-3: 0 8px 24px rgba(0, 0, 0, 0.56);
+
+  /* 语义色浅底（暗色模式改用半透明叠加） */
+  --color-success-bg: rgba(82, 196, 26, 0.16);
+  --color-success-bg-strong: rgba(82, 196, 26, 0.24);
+  --color-success-border: rgba(82, 196, 26, 0.4);
+  --color-success-deep: #4caf50;
+  --color-warning-bg: rgba(250, 173, 20, 0.16);
+  --color-error-bg: rgba(245, 34, 45, 0.16);
+  --color-info-bg: rgba(32, 128, 240, 0.16);
+
+  /* 中性灰阶（暗色模式反向映射） */
+  --neutral-50: #1f1f23;
+  --neutral-100: #26262b;
+  --neutral-150: #2e2e34;
+  --neutral-200: #38383f;
+  --neutral-220: #303038;
+  --neutral-300: #45454d;
+  --neutral-350: #3a3a42;
+  --neutral-400: #5a5a64;
+
+  --text-strong: #e6e6e6;
+}

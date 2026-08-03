@@ -19,6 +19,7 @@ export interface OcrResult {
   customerName: string;
   phone: string;
   carModel: string;
+  carSeries: string;
   vin: string;
   brand: string;
   date: string;
@@ -28,6 +29,16 @@ export interface OcrResult {
   vinCorrected?: boolean;      // VIN 是否被自动修正（O→0、I→1、Q→0 等）
   vinOriginal?: string;        // VIN 修正前的原始值
   items?: OcrItem[];
+}
+
+/** 门店OCR品牌/车型映射配置 */
+export interface OcrShopConfig {
+  /** 车型来源：carModel=用车型字段(默认); carSeries=用车系当车型; carModelThenSeries=车型优先,空则用系列 */
+  carModelSource?: 'carModel' | 'carSeries' | 'carModelThenSeries';
+  /** 品牌来源：auto=用OCR品牌(默认); fixed=固定品牌; fromCarModel=按车型名反推; none=不填 */
+  brandSource?: 'auto' | 'fixed' | 'fromCarModel' | 'none';
+  /** brandSource=fixed 时的固定品牌，如宏现图片无品牌→"比亚迪" */
+  fixedBrand?: string;
 }
 
 @Injectable()
@@ -62,6 +73,7 @@ export class OcrService {
         customerName: llmResult.customerName,
         phone: llmResult.phone,
         carModel: llmResult.carModel,
+        carSeries: llmResult.carSeries,
         vin: llmResult.vin,
         brand: llmResult.brand,
         date: llmResult.date,
@@ -85,6 +97,11 @@ export class OcrService {
       // 保留工单号规则校验
       if (shopId && wantBasic) {
         result = await this.applyOrderNoCorrection(shopId, result);
+      }
+
+      // 按门店OCR配置映射品牌/车型（解决不同门店图片"车系/车型/品牌"语义不一致）
+      if (shopId && wantBasic) {
+        result = await this.applyOcrShopMapping(shopId, result);
       }
 
       // 将大模型返回的 items 匹配到系统 categoryId（仅 items 模式或 all 模式）
@@ -246,6 +263,95 @@ export class OcrService {
       result.vinCorrected = false;
     }
     return result;
+  }
+
+  /**
+   * 按门店 OCR 配置映射品牌/车型来源。
+   * 不同门店工单图片上"车系/车型/品牌"字段语义不一致：
+   *  - 宏现：无品牌栏、车系是具体型号（无用）
+   *  - 有些门店：车系栏才是系统"车型"（如"宋PLUS DM-i"写在车系栏）
+   * 通过 PaintShop.ocrConfig 指定来源，无配置时使用智能默认。
+   */
+  private async applyOcrShopMapping(shopId: string, result: OcrResult): Promise<OcrResult> {
+    let config: OcrShopConfig = {};
+    const shop = await this.prisma.paintShop.findUnique({
+      where: { id: shopId },
+      select: { ocrConfig: true },
+    });
+    if (shop?.ocrConfig) {
+      try {
+        config = JSON.parse(shop.ocrConfig) as OcrShopConfig;
+      } catch {
+        config = {};
+      }
+    }
+
+    const carModelSource = config.carModelSource || 'carModelThenSeries'; // 默认：车型优先，空则用车系兜底
+    const brandSource = config.brandSource || 'auto';
+
+    // 1) 车型映射
+    const llmCarModel = (result.carModel || '').trim();
+    const llmCarSeries = (result.carSeries || '').trim();
+    if (carModelSource === 'carSeries') {
+      result.carModel = llmCarSeries;
+    } else if (carModelSource === 'carModel') {
+      result.carModel = llmCarModel;
+    } else {
+      // carModelThenSeries（默认）：车型为空时用系列兜底
+      result.carModel = llmCarModel || llmCarSeries;
+    }
+
+    // 2) 品牌映射
+    const llmBrand = (result.brand || '').trim();
+    if (brandSource === 'none') {
+      result.brand = '';
+    } else if (brandSource === 'fixed') {
+      result.brand = (config.fixedBrand || '').trim();
+    } else if (brandSource === 'fromCarModel') {
+      result.brand = llmBrand || this.inferBrand(result.carModel);
+    } else {
+      // auto（默认）：优先OCR品牌，缺失则按车型反推
+      result.brand = llmBrand || this.inferBrand(result.carModel);
+    }
+
+    return result;
+  }
+
+  /** 按车型名反推品牌（覆盖常见国产品牌，用于图片无品牌栏的场景） */
+  private inferBrand(carModel: string): string {
+    const m = (carModel || '').trim();
+    if (!m) return '';
+    const map: Array<[string[], string]> = [
+      [['宋', '汉', '唐', '元', '秦', '海豹', '海豚', '驱逐舰', '护卫舰', '腾势', '仰望', '方程豹', 'f0', 'f3', 'e6', '王朝', '比亚迪'], '比亚迪'],
+      [['凯美瑞', '汉兰达', '卡罗拉', '亚洲龙', '荣放', 'rav4', '威兰达', '雷凌', '丰田'], '丰田'],
+      [['雅阁', 'crv', '飞度', '思域', '冠道', '本田', '皓影'], '本田'],
+      [['轩逸', '天籁', '奇骏', '逍客', '日产', '骐达'], '日产'],
+      [['朗逸', '帕萨特', '迈腾', '速腾', '宝来', '大众', '途观', '探岳'], '大众'],
+      [['哈弗', 'h6', '魏', '坦克', '欧拉', '长城'], '长城'],
+      [['博越', '星越', '缤越', '帝豪', '吉利', '领克', '银河'], '吉利'],
+      [['cs', 'univ', '逸动', '长安', '深蓝', '启源'], '长安'],
+      [['宏光', '五菱'], '五菱'],
+      [['埃安', 'aion', '传祺', 'gs', '广汽'], '广汽'],
+      [['理想'], '理想'],
+      [['蔚来'], '蔚来'],
+      [['小鹏'], '小鹏'],
+      [['问界', '赛力斯'], '问界'],
+      [['极氪'], '极氪'],
+      [['宝马'], '宝马'],
+      [['奔驰', '梅赛德斯'], '奔驰'],
+      [['奥迪'], '奥迪'],
+      [['现代'], '现代'],
+      [['起亚'], '起亚'],
+      [['马自达'], '马自达'],
+      [['别克'], '别克'],
+      [['雪佛兰'], '雪佛兰'],
+      [['福特'], '福特'],
+    ];
+    const lower = m.toLowerCase();
+    for (const [keys, brand] of map) {
+      if (keys.some(k => lower.includes(k))) return brand;
+    }
+    return '';
   }
 
   private normalizeDateFormat(dateStr: string): string {

@@ -2,6 +2,7 @@
 import { ref } from 'vue';
 import type { Ref } from 'vue';
 import { NButton, NPopconfirm, NTag } from 'naive-ui';
+import EmptyState from '@/components/common/EmptyState.vue';
 import { useBoolean } from '@sa/hooks';
 import { yesOrNoRecord } from '@/constants/common';
 import { enableStatusRecord, menuTypeRecord } from '@/constants/business';
@@ -250,7 +251,11 @@ const allPages = ref<string[]>([]);
         :row-key="row => row.id"
         remote
         class="sm:h-full"
-      />
+      >
+        <template #empty>
+          <EmptyState description="暂无菜单数据" />
+        </template>
+      </NDataTable>
       <MenuOperateModal
         v-model:visible="visible"
         :operate-type="operateType"

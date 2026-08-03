@@ -110,6 +110,10 @@ function formatCount(val: number | undefined) {
 
 const maxDailyPaint = computed(() => Math.max(...dailyData.value.map(d => d.paintCount || 0), 1))
 const maxCategoryPaint = computed(() => Math.max(...categoryData.value.map(c => c.totalPaintCount || c.paintCount || 0), 1))
+const categoryTotalPaint = computed(() => categoryData.value.reduce((s, c) => s + (c.totalPaintCount || c.paintCount || 0), 0) || 1)
+function getCategoryPercent(count: number) {
+  return Math.round((count / categoryTotalPaint.value) * 100)
+}
 
 function getDailyBarHeight(count: number) {
   const percent = Math.round((count / maxDailyPaint.value) * 100)
@@ -145,12 +149,12 @@ onMounted(async () => {
             </div>
             <div class="header-actions">
               <div class="action-pill" @click="showMonthPicker = true">
-                <van-icon name="calendar-o" color="#fff" size="13" />
+                <van-icon name="calendar-o" color="var(--color-surface)" size="13" />
                 <span>{{ selectedMonth }}</span>
                 <van-icon name="arrow-down" color="rgba(255,255,255,0.7)" size="10" />
               </div>
               <div class="action-pill" @click="showShopPicker = true">
-                <van-icon name="shop-o" color="#fff" size="13" />
+                <van-icon name="shop-o" color="var(--color-surface)" size="13" />
                 <span>{{ selectedShopId ? shops.find(s => s.id === selectedShopId)?.name : '全部门店' }}</span>
                 <van-icon name="arrow-down" color="rgba(255,255,255,0.7)" size="10" />
               </div>
@@ -280,7 +284,7 @@ onMounted(async () => {
           </div>
           <div class="bar-chart-scroll">
             <div class="bar-chart" :style="{ width: `${Math.max(dailyData.length * 36, 100)}px` }">
-              <div v-for="item in dailyData" :key="item.date" class="bar-item">
+              <div v-for="item in dailyData" :key="item.date" class="bar-item" :class="{ 'is-peak': item.paintCount === maxDailyPaint }">
                 <div class="bar-value">
                   {{ item.paintCount }}
                 </div>
@@ -304,7 +308,10 @@ onMounted(async () => {
             <div v-for="cat in categoryData" :key="cat.categoryId" class="category-item">
               <div class="category-header">
                 <span class="category-name">{{ cat.categoryName }}</span>
-                <span class="category-count">{{ formatCount(cat.totalPaintCount || cat.paintCount || 0) }} 幅</span>
+                <span class="category-count">
+                  {{ formatCount(cat.totalPaintCount || cat.paintCount || 0) }} 幅
+                  <span class="category-percent">{{ getCategoryPercent(cat.totalPaintCount || cat.paintCount || 0) }}%</span>
+                </span>
               </div>
               <div class="progress-bar">
                 <div class="progress-fill" :style="{ width: getCategoryBarWidth(cat.totalPaintCount || cat.paintCount || 0) }" />
@@ -374,15 +381,15 @@ onMounted(async () => {
 <style lang="less" scoped>
 .stats-page {
   min-height: 100vh;
-  background: #f5f7fa;
+  background: var(--color-bg);
   padding-bottom: 80px;
 }
 
 .header {
-  background: linear-gradient(135deg, #1677ff 0%, #4096ff 100%);
+  background: linear-gradient(135deg, var(--color-primary) 0%, color-mix(in srgb, var(--color-primary) 60%, #fff) 100%);
   border-radius: 0 0 24px 24px;
   padding: 44px 16px 24px;
-  color: #fff;
+  color: var(--color-surface);
 }
 
 .header-top {
@@ -418,7 +425,7 @@ onMounted(async () => {
   border-radius: 16px;
   padding: 5px 10px;
   font-size: 12px;
-  color: #fff;
+  color: var(--color-surface);
   backdrop-filter: blur(10px);
 }
 
@@ -457,13 +464,13 @@ onMounted(async () => {
 .skeleton-wrap {
   margin: 16px;
   padding: 16px;
-  background: #fff;
+  background: var(--color-surface);
   border-radius: 16px;
 }
 
 .section {
   margin: 16px;
-  background: #fff;
+  background: var(--color-surface);
   border-radius: 16px;
   padding: 16px;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.03);
@@ -479,14 +486,14 @@ onMounted(async () => {
 .section-title {
   font-size: 16px;
   font-weight: 600;
-  color: #333;
+  color: var(--text-regular);
 }
 
 .empty-mini {
   text-align: center;
   padding: 24px 0;
   font-size: 13px;
-  color: #999;
+  color: var(--text-tertiary);
 }
 
 .status-grid {
@@ -502,34 +509,34 @@ onMounted(async () => {
 }
 
 .status-card.pending {
-  background: #fff7e6;
+  background: var(--color-warning-bg);
 }
 
 .status-card.audited {
-  background: #e6f7ff;
+  background: var(--color-info-bg);
 }
 
 .status-card.settled {
-  background: #f6ffed;
+  background: var(--color-success-bg);
 }
 
 .status-card.abnormal {
-  background: #fff1f0;
+  background: var(--color-error-bg);
 }
 
 .status-card.rework {
-  background: #fff0f3;
+  background: var(--color-error-bg);
 }
 
 .status-value {
   font-size: 18px;
   font-weight: 700;
-  color: #333;
+  color: var(--text-regular);
 }
 
 .status-label {
   font-size: 11px;
-  color: #666;
+  color: var(--text-secondary);
   margin-top: 2px;
 }
 
@@ -538,7 +545,7 @@ onMounted(async () => {
   justify-content: space-around;
   padding-top: 14px;
   margin-top: 14px;
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--color-border);
 }
 
 .rate-item {
@@ -550,13 +557,13 @@ onMounted(async () => {
 
 .rate-label {
   font-size: 12px;
-  color: #999;
+  color: var(--text-tertiary);
 }
 
 .rate-value {
   font-size: 16px;
   font-weight: 700;
-  color: #1677ff;
+  color: var(--color-primary);
 }
 
 .bar-chart-scroll {
@@ -583,13 +590,18 @@ onMounted(async () => {
 
 .bar-value {
   font-size: 10px;
-  color: #666;
+  color: var(--text-secondary);
+}
+
+.bar-item.is-peak .bar-value {
+  color: var(--color-success);
+  font-weight: 700;
 }
 
 .bar-wrap {
   width: 20px;
   height: 90px;
-  background: #f0f0f0;
+  background: var(--color-border);
   border-radius: 10px;
   position: relative;
   overflow: hidden;
@@ -600,13 +612,17 @@ onMounted(async () => {
   bottom: 0;
   left: 0;
   right: 0;
-  background: linear-gradient(180deg, #1677ff 0%, #4096ff 100%);
+  background: linear-gradient(180deg, var(--color-primary) 0%, color-mix(in srgb, var(--color-primary) 60%, #fff) 100%);
   border-radius: 10px 10px 0 0;
+}
+
+.bar-item.is-peak .bar {
+  background: linear-gradient(180deg, #52c41a 0%, #95de64 100%);
 }
 
 .bar-label {
   font-size: 10px;
-  color: #999;
+  color: var(--text-tertiary);
 }
 
 .category-list {
@@ -629,25 +645,32 @@ onMounted(async () => {
 
 .category-name {
   font-size: 13px;
-  color: #333;
+  color: var(--text-regular);
 }
 
 .category-count {
   font-size: 13px;
   font-weight: 600;
-  color: #1677ff;
+  color: var(--color-primary);
+
+  .category-percent {
+    font-size: 11px;
+    font-weight: 400;
+    color: var(--color-text-secondary);
+    margin-left: 4px;
+  }
 }
 
 .progress-bar {
   height: 8px;
-  background: #f0f0f0;
+  background: var(--color-border);
   border-radius: 4px;
   overflow: hidden;
 }
 
 .progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, #1677ff 0%, #4096ff 100%);
+  background: linear-gradient(90deg, var(--color-primary) 0%, color-mix(in srgb, var(--color-primary) 60%, #fff) 100%);
   border-radius: 4px;
 }
 
@@ -662,7 +685,7 @@ onMounted(async () => {
   align-items: center;
   gap: 12px;
   padding: 14px;
-  background: #f8fafc;
+  background: var(--color-bg);
   border-radius: 12px;
 }
 
@@ -670,8 +693,8 @@ onMounted(async () => {
   width: 24px;
   height: 24px;
   border-radius: 12px;
-  background: #e8e8e8;
-  color: #999;
+  background: var(--neutral-200);
+  color: var(--text-tertiary);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -681,8 +704,8 @@ onMounted(async () => {
 }
 
 .shop-rank.top {
-  background: #1677ff;
-  color: #fff;
+  background: var(--color-primary);
+  color: var(--color-surface);
 }
 
 .shop-main {
@@ -703,12 +726,12 @@ onMounted(async () => {
 .shop-name {
   font-size: 14px;
   font-weight: 600;
-  color: #333;
+  color: var(--text-regular);
 }
 
 .shop-sub {
   font-size: 12px;
-  color: #999;
+  color: var(--text-tertiary);
 }
 
 .shop-count {
@@ -720,11 +743,11 @@ onMounted(async () => {
 .count-value {
   font-size: 18px;
   font-weight: 700;
-  color: #1677ff;
+  color: var(--color-primary);
 }
 
 .count-unit {
   font-size: 11px;
-  color: #999;
+  color: var(--text-tertiary);
 }
 </style>

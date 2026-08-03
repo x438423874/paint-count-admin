@@ -27,6 +27,7 @@ import { RedisUtility } from '@lib/shared/redis/redis.util';
 import { isDevEnvironment, isMainProcess } from '@lib/utils/env';
 
 import { AppModule } from './app.module';
+import { UPLOAD_DIR } from './api/paint/service/upload-root';
 
 interface ValidationErrors {
   [key: string]: string[] | ValidationErrors;
@@ -121,7 +122,7 @@ async function bootstrap() {
   });
 
   // 静态文件服务 - 提供上传图片访问
-  const uploadsDir = path.join(process.cwd(), 'uploads');
+  const uploadsDir = UPLOAD_DIR;
   if (!fs.existsSync(uploadsDir)) {
     fs.mkdirSync(uploadsDir, { recursive: true });
   }

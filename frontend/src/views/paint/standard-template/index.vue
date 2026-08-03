@@ -1,5 +1,6 @@
 <script setup lang="tsx">
 import { NButton, NPopconfirm, NTag, NSpace } from 'naive-ui';
+import EmptyState from '@/components/common/EmptyState.vue';
 import { ref } from 'vue';
 import { fetchStandardTemplateList, fetchStandardTemplateById, deleteStandardTemplate } from '@/service/api';
 import TemplateOperateDrawer from './modules/template-operate-drawer.vue';
@@ -146,7 +147,11 @@ const columns = [
         :flex-height="true"
         :row-key="(row: any) => row.id"
         class="sm:h-full"
-      />
+      >
+        <template #empty>
+          <EmptyState description="暂无标准模板数据" />
+        </template>
+      </NDataTable>
 
       <TemplateOperateDrawer
         v-model:visible="drawerVisible"

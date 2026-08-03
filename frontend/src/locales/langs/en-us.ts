@@ -180,7 +180,8 @@ const local: App.I18n.Schema = {
     'paint_work-order': 'Work Order',
     'paint_work-order_reconcile': 'Work Order Reconcile',
     paint_statistics: 'Statistics',
-    'paint_scheduled-task': 'Scheduled Tasks'
+    'paint_scheduled-task': 'Scheduled Tasks',
+    'paint_pending-image': 'Pending Image'
   },
   page: {
     login: {

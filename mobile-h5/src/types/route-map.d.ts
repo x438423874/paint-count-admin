@@ -52,6 +52,13 @@ declare module 'vue-router/auto-routes' {
       Record<never, never>,
       | never
     >,
+    'PendingImage': RouteRecordInfo<
+      'PendingImage',
+      '/pending-image',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
     'Profile': RouteRecordInfo<
       'Profile',
       '/profile',
@@ -140,6 +147,14 @@ declare module 'vue-router/auto-routes' {
     'src/pages/login/index.vue': {
       routes:
         | 'Login'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
+    'src/pages/pending-image/index.vue': {
+      routes:
+        | 'PendingImage'
       views:
         | never
       pathParamNames:

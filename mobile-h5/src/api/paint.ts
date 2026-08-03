@@ -19,6 +19,10 @@ import type {
   VehicleHistorySummary,
   YearOverview,
   StatisticsOverview,
+  PaintPendingImage,
+  PendingImageStatus,
+  PendingImageStatusCounts,
+  PagePendingImageDto,
 } from './types/paint'
 
 // ===== 门店 API =====
@@ -260,3 +264,69 @@ export function deletePaintVehicle(id: string) {
 export function fetchVehicleById(id: string) {
   return request.get<PaintVehicle>(`/paint/vehicle/${id}`)
 }
+
+// ===== 图片池 API =====
+
+export function getPendingImagePage(params: PagePendingImageDto) {
+  return request.get<PageResult<PaintPendingImage>>('/paint/pending-image/page', { params })
+}
+
+export function getPendingImageStatusCounts(shopId?: string, settlementMonth?: string) {
+  return request.get<PendingImageStatusCounts>('/paint/pending-image/status-counts', { params: { shopId, settlementMonth } })
+}
+
+export function getPendingImageDetail(id: string) {
+  return request.get<PaintPendingImage>(`/paint/pending-image/${id}`)
+}
+
+export function getPendingImageCandidates(id: string) {
+  return request.get<any[]>(`/paint/pending-image/${id}/candidates`)
+}
+
+/** 上传单张图片到图片池（同步 OCR + 自动匹配）
+ * @param source 图片来源：POOL=图片池直接上传（用于匹配已有工单）；CREATE=新建工单时带图上传
+ */
+export function uploadPendingImage(file: File, shopId: string, settlementMonth?: string, source: 'POOL' | 'CREATE' = 'POOL') {
+  const formData = new FormData()
+  formData.append('file', file)
+  formData.append('shopId', shopId)
+  if (settlementMonth) formData.append('settlementMonth', settlementMonth)
+  formData.append('source', source)
+  return request.post<PaintPendingImage>('/paint/pending-image/upload', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 120000,
+  })
+}
+
+export function autoMatchPendingImage(id: string) {
+  return request.post<{ status: PendingImageStatus; matchedOrderId?: string; remark?: string }>(`/paint/pending-image/${id}/auto-match`)
+}
+
+/** 上传图片直接关联到指定工单（作为 BEFORE 图，不进图片池）。用于创建工单页“直接创建工单”模式。 */
+export function uploadPendingImageToOrder(file: File, shopId: string, orderId: string) {
+  const formData = new FormData()
+  formData.append('file', file)
+  formData.append('shopId', shopId)
+  formData.append('orderId', orderId)
+  return request.post<PaintOrderImage>('/paint/pending-image/attach-to-order', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 120000,
+  })
+}
+
+export function manualMatchPendingImage(id: string, orderId: string) {
+  return request.post<PaintPendingImage>(`/paint/pending-image/${id}/match`, { orderId })
+}
+
+export function createOrderFromPending(id: string, settlementMonth?: string) {
+  return request.post<PaintPendingImage>(`/paint/pending-image/${id}/create-order`, { settlementMonth })
+}
+
+export function retryOcrPendingImage(id: string) {
+  return request.post<PaintPendingImage>(`/paint/pending-image/${id}/retry-ocr`, {}, { timeout: 120000 })
+}
+
+export function deletePendingImage(id: string) {
+  return request.delete(`/paint/pending-image/${id}`)
+}
+

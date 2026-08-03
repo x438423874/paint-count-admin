@@ -31,3 +31,22 @@ const active = computed(() => {
     </van-tabbar-item>
   </van-tabbar>
 </template>
+
+<style lang="less" scoped>
+:deep(.van-tabbar-item) {
+  color: var(--color-text-secondary);
+
+  &--active {
+    color: var(--color-primary);
+
+    .van-tabbar-item__icon {
+      transform: scale(1.12);
+      transition: transform 0.2s ease;
+    }
+
+    .van-tabbar-item__text {
+      font-weight: 600;
+    }
+  }
+}
+</style>

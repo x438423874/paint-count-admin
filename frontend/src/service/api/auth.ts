@@ -1,3 +1,4 @@
+import type { AxiosRequestConfig } from 'axios';
 import { request } from '../request';
 
 /**
@@ -27,13 +28,14 @@ export function fetchGetUserInfo() {
  *
  * @param refreshToken Refresh token
  */
-export function fetchRefreshToken(refreshToken: string) {
+export function fetchRefreshToken(refreshToken: string, config?: AxiosRequestConfig) {
   return request<Api.Auth.LoginToken>({
     url: '/auth/refreshToken',
     method: 'post',
     data: {
       refreshToken
-    }
+    },
+    ...config
   });
 }
 
@@ -45,4 +47,15 @@ export function fetchRefreshToken(refreshToken: string) {
  */
 export function fetchCustomBackendError(code: string, msg: string) {
   return request({ url: '/auth/error', params: { code, msg } });
+}
+
+/**
+ * Logout
+ *
+ * Revoke the current refresh token on the backend and clear the role cache.
+ *
+ * @param refreshToken Current refresh token
+ */
+export function fetchLogout(refreshToken?: string) {
+  return request({ url: '/auth/logout', method: 'post', data: { refreshToken } });
 }

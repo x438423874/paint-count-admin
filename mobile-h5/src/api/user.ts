@@ -30,8 +30,8 @@ export function login(data: LoginData) {
   return request.post<LoginRes>('/auth/login', data)
 }
 
-export function logout() {
-  return request.get('/auth/logout')
+export function logout(refreshToken?: string) {
+  return request.post('/auth/logout', { refreshToken })
 }
 
 export function getUserInfo() {

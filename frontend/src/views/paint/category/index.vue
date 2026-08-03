@@ -1,5 +1,6 @@
 <script setup lang="tsx">
 import { NButton, NPopconfirm, NTag, NSpace } from 'naive-ui';
+import EmptyState from '@/components/common/EmptyState.vue';
 import { ref } from 'vue';
 import { fetchPaintCategoryList, deletePaintCategory } from '@/service/api';
 import CategoryOperateDrawer from './modules/category-operate-drawer.vue';
@@ -125,7 +126,11 @@ const columns = [
         :flex-height="true"
         :row-key="(row: any) => row.id"
         class="sm:h-full"
-      />
+      >
+        <template #empty>
+          <EmptyState description="暂无漆面类目数据" />
+        </template>
+      </NDataTable>
 
     </NCard>
 

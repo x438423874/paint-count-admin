@@ -19,7 +19,16 @@ export const request = createFlatRequest<App.Service.Response, RequestInstanceSt
   },
   {
     async onRequest(config) {
-      await tryProactiveRefresh();
+      // 刷新接口自身不走主动刷新，否则会递归触发刷新
+      if (config.url !== '/auth/refreshToken') {
+        const refreshed = await tryProactiveRefresh();
+        if (!refreshed) {
+          // 主动刷新失败（token 已失效），终止本次请求，避免发送无 token 的脏请求
+          const authAbort = new Error('token 刷新失败，请求已中止');
+          (authAbort as Record<string, unknown>).__authAbort = true;
+          throw authAbort;
+        }
+      }
       const Authorization = getAuthorization();
       Object.assign(config.headers, { Authorization });
 
@@ -80,9 +89,10 @@ export const request = createFlatRequest<App.Service.Response, RequestInstanceSt
 
       // when the backend response code is in `expiredTokenCodes`, it means the token is expired, and refresh token
       // the api `refreshToken` can not return error code in `expiredTokenCodes`, otherwise it will be a dead loop, should return `logoutCodes` or `modalLogoutCodes`
+      // 注意：refreshToken 自身的 401 不能再次触发刷新，否则会死循环；其失败由 handleRefreshToken 内部登出处理
       const expiredTokenCodes = import.meta.env.VITE_SERVICE_EXPIRED_TOKEN_CODES?.split(',') || [];
-      if (expiredTokenCodes.includes(responseCode) || httpStatus === 401) {
-        const success = await handleExpiredRequest(request.state);
+      if ((expiredTokenCodes.includes(responseCode) || httpStatus === 401) && response.config.url !== '/auth/refreshToken') {
+        const success = await handleExpiredRequest();
         if (success) {
           const Authorization = getAuthorization();
           Object.assign(response.config.headers, { Authorization });
@@ -98,6 +108,11 @@ export const request = createFlatRequest<App.Service.Response, RequestInstanceSt
     },
     onError(error) {
       // when the request is fail, you can show error message
+
+      // 主动刷新失败已登出，中止请求时不再提示
+      if ((error as Record<string, unknown>).__authAbort) {
+        return;
+      }
 
       let message = error.response?.data.message ?? error.message;
       let backendErrorCode = '';

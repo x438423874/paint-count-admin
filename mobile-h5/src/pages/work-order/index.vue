@@ -284,6 +284,19 @@ function clearListState() {
   sessionStorage.removeItem(LIST_STATE_KEY)
 }
 
+// 首页等携带状态筛选跳转（key 由首页设置，读取后清除）
+const STATUS_QUERY_KEY = 'work-order-status-query'
+function applyStatusFromSession(): boolean {
+  const q = sessionStorage.getItem(STATUS_QUERY_KEY)
+  if (!q) return false
+  sessionStorage.removeItem(STATUS_QUERY_KEY)
+  const idx = statusOptions.findIndex(o => o.value === q)
+  if (idx === -1) return false
+  activeStatus.value = idx
+  searchForm.status = q as PaintOrderStatus
+  return true
+}
+
 /**
  * onMounted 首次加载：尝试从 sessionStorage 恢复（如页面刷新场景），否则全新加载
  */
@@ -298,6 +311,7 @@ function initOnMounted() {
     }
   }
   clearListState()
+  applyStatusFromSession()
   loadOrders(true)
   loadStatusCounts()
 }
@@ -693,35 +707,50 @@ onActivated(() => {
   }
   // 已初始化的重新激活：从详情页返回时刷新状态计数+恢复滚动+重设 observer
   const fromDetail = sessionStorage.getItem('work-order-detail-from-list') === '1'
-  reactivateOnActivated(fromDetail)
+  if (!fromDetail && applyStatusFromSession()) {
+    // 从首页携带状态筛选进入，重新加载列表
+    loadOrders(true)
+    loadStatusCounts()
+  }
+  else {
+    reactivateOnActivated(fromDetail)
+  }
 })
 </script>
 
 <template>
   <div class="order-page">
-    <!-- 顶部搜索 -->
-    <div class="search-header">
-      <van-search
-        v-model="searchForm.plateNumber"
-        placeholder="搜索车牌号 / 工单号"
-        shape="round"
-        clearable
-        @search="onSearch"
-        @clear="onSearch"
-      />
-      <div class="filter-trigger" @click="showFilterPopup = true">
-        <van-icon name="filter-o" size="20" color="#1677ff" />
-        <span class="filter-text">筛选</span>
+    <!-- 顶部搜索与快捷操作 -->
+    <div class="top-bar">
+      <div class="search-row">
+        <van-search
+          v-model="searchForm.plateNumber"
+          placeholder="搜索车牌号 / 工单号"
+          shape="round"
+          clearable
+          @search="onSearch"
+          @clear="onSearch"
+        />
       </div>
-      <div class="filter-trigger" @click="router.push({ name: 'Vehicle' })">
-        <van-icon name="car-o" size="20" color="#1677ff" />
-        <span class="filter-text">车辆</span>
-      </div>
-      <div v-if="allowBatchOcr" class="filter-trigger" @click="toggleSelectionMode">
-        <van-icon name="checked" size="20" :color="selectionMode ? '#52c41a' : '#1677ff'" />
-        <span class="filter-text" :style="{ color: selectionMode ? '#52c41a' : '#1677ff' }">
-          {{ selectionMode ? '取消' : '选择' }}
-        </span>
+      <div class="action-row">
+        <div class="filter-trigger" @click="showFilterPopup = true">
+          <van-icon name="filter-o" size="20" color="var(--color-primary)" />
+          <span class="filter-text">筛选</span>
+        </div>
+        <div class="filter-trigger" @click="router.push({ name: 'Vehicle' })">
+          <van-icon name="logistics" size="20" color="var(--color-primary)" />
+          <span class="filter-text">车辆</span>
+        </div>
+        <div class="filter-trigger" @click="router.push({ name: 'PendingImage' })">
+          <van-icon name="photo-o" size="20" color="var(--color-primary)" />
+          <span class="filter-text">图片池</span>
+        </div>
+        <div v-if="allowBatchOcr" class="filter-trigger" @click="toggleSelectionMode">
+          <van-icon name="checked" size="20" :color="selectionMode ? '#52c41a' : 'var(--color-primary)'" />
+          <span class="filter-text" :style="{ color: selectionMode ? '#52c41a' : 'var(--color-primary)' }">
+            {{ selectionMode ? '取消' : '选择' }}
+          </span>
+        </div>
       </div>
     </div>
 
@@ -758,9 +787,10 @@ onActivated(() => {
           v-for="order in orders"
           :key="order.id"
           class="order-card"
-          :class="{ checked: selectionMode && checkedOrderIds.includes(order.id) }"
+          :class="{ checked: selectionMode && checkedOrderIds.includes(order.id), selecting: selectionMode }"
           @click="onCardClick(order)"
         >
+          <div class="status-stripe" :class="`stripe-${getStatusType(order.status)}`" />
           <van-checkbox
             v-if="selectionMode"
             :model-value="checkedOrderIds.includes(order.id)"
@@ -771,8 +801,8 @@ onActivated(() => {
           <div class="card-body">
             <div class="card-top">
               <div class="plate-wrap" @click.stop="goVehicleHistory(order)">
-                <van-icon name="car-o" size="16" color="#1677ff" />
-                <span class="plate-number">{{ order.plateNumber || '未识别车牌' }}</span>
+              <van-icon name="logistics" size="16" color="var(--color-primary)" />
+              <span class="plate-number">{{ order.plateNumber || '未识别车牌' }}</span>
               </div>
               <div class="card-tags">
                 <van-tag v-if="canMerge(order)" type="danger" size="medium" @click.stop="openMergePopup(order)">
@@ -812,7 +842,7 @@ onActivated(() => {
 
             <div class="card-bottom">
               <div class="customer">
-                <van-icon name="user-o" size="12" color="#999" />
+                <van-icon name="user-o" size="12" color="var(--text-tertiary)" />
                 <span>{{ order.customerName || '-' }}</span>
               </div>
               <div class="paint-count">
@@ -869,7 +899,7 @@ onActivated(() => {
       <div class="filter-popup">
         <div class="filter-popup-header">
           <span class="filter-popup-title">筛选条件</span>
-          <van-icon name="cross" size="20" color="#999" @click="showFilterPopup = false" />
+          <van-icon name="cross" size="20" color="var(--text-tertiary)" @click="showFilterPopup = false" />
         </div>
         <div class="filter-popup-body">
           <div class="filter-group">
@@ -1024,7 +1054,7 @@ onActivated(() => {
       <div class="merge-popup">
         <div class="merge-popup-header">
           <span class="merge-popup-title">合并重复工单</span>
-          <van-icon name="cross" size="20" color="#999" @click="showMergePopup = false" />
+          <van-icon name="cross" size="20" color="var(--text-tertiary)" @click="showMergePopup = false" />
         </div>
         <div v-if="mergeLoading && mergeCandidates.length === 0" class="merge-loading">
           <van-loading size="24px">加载中...</van-loading>
@@ -1099,22 +1129,29 @@ onActivated(() => {
 <style lang="less" scoped>
 .order-page {
   min-height: 100vh;
-  background: #f5f7fa;
+  background: var(--color-bg);
   padding-bottom: 120px;
 }
 
-.search-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  background: #fff;
+.top-bar {
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.search-row {
+  padding: 8px 12px 0;
 
   :deep(.van-search) {
-    flex: 1;
     padding: 0;
     background: transparent;
   }
+}
+
+.action-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  padding: 6px 8px 10px;
 }
 
 .filter-trigger {
@@ -1122,20 +1159,20 @@ onActivated(() => {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 0 8px;
+  flex: 1;
   gap: 2px;
 }
 
 .filter-text {
   font-size: 11px;
-  color: #1677ff;
+  color: var(--color-primary);
 }
 
 .status-tabs-wrapper {
-  background: #fff;
+  background: var(--color-surface);
 
   :deep(.van-tabs__wrap) {
-    border-bottom: 1px solid #f0f0f0;
+    border-bottom: 1px solid var(--color-border);
   }
 
   :deep(.van-tab) {
@@ -1155,15 +1192,15 @@ onActivated(() => {
   padding: 0 5px;
   margin-left: 4px;
   font-size: 11px;
-  color: #999;
-  background: #f0f0f0;
+  color: var(--text-tertiary);
+  background: var(--color-border);
   border-radius: 8px;
   text-align: center;
 }
 
 :deep(.van-tab--active) .tab-count {
   color: #fff;
-  background: #1677ff;
+  background: var(--color-primary);
 }
 
 .summary-bar {
@@ -1171,9 +1208,9 @@ onActivated(() => {
   justify-content: space-between;
   align-items: center;
   padding: 10px 16px;
-  background: #f5f7fa;
+  background: var(--color-bg);
   font-size: 13px;
-  color: #666;
+  color: var(--text-secondary);
 }
 
 .order-list {
@@ -1184,22 +1221,42 @@ onActivated(() => {
 }
 
 .order-card {
-  background: #fff;
+  position: relative;
+  overflow: hidden;
+  background: var(--color-surface);
   border-radius: 12px;
-  padding: 14px;
+  padding: 14px 14px 14px 18px;
   display: flex;
-  gap: 10px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.03);
+  box-shadow: var(--shadow-card);
 }
 
 .order-card.checked {
-  background: #e6f4ff;
-  border: 1px solid #1677ff;
+  background: var(--color-info-bg);
+  border: 1px solid var(--color-primary);
+}
+
+.order-card.selecting .card-top {
+  padding-right: 30px;
+}
+
+.status-stripe {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+
+  &.stripe-primary { background: var(--color-primary); }
+  &.stripe-success { background: var(--color-success); }
+  &.stripe-warning { background: var(--color-warning); }
+  &.stripe-danger { background: var(--color-danger); }
 }
 
 .card-checkbox {
-  flex-shrink: 0;
-  align-self: center;
+  position: absolute;
+  top: 12px;
+  right: 10px;
+  z-index: 2;
 }
 
 .card-body {
@@ -1232,7 +1289,7 @@ onActivated(() => {
 .plate-number {
   font-size: 16px;
   font-weight: 700;
-  color: #1677ff;
+  color: var(--color-primary);
 }
 
 .card-tags {
@@ -1257,12 +1314,12 @@ onActivated(() => {
 
 .info-label {
   font-size: 11px;
-  color: #999;
+  color: var(--text-tertiary);
 }
 
 .info-value {
   font-size: 13px;
-  color: #333;
+  color: var(--text-regular);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1273,7 +1330,7 @@ onActivated(() => {
   justify-content: space-between;
   align-items: center;
   padding-top: 10px;
-  border-top: 1px solid #f5f5f5;
+  border-top: 1px solid var(--neutral-100);
 }
 
 .customer {
@@ -1281,7 +1338,7 @@ onActivated(() => {
   align-items: center;
   gap: 4px;
   font-size: 12px;
-  color: #666;
+  color: var(--text-secondary);
 }
 
 .paint-count {
@@ -1293,12 +1350,12 @@ onActivated(() => {
 .count-value {
   font-size: 18px;
   font-weight: 700;
-  color: #1677ff;
+  color: var(--color-primary);
 }
 
 .count-unit {
   font-size: 11px;
-  color: #999;
+  color: var(--text-tertiary);
 }
 
 .loading-wrap {
@@ -1311,7 +1368,7 @@ onActivated(() => {
   text-align: center;
   padding: 20px 0;
   font-size: 12px;
-  color: #999;
+  color: var(--text-tertiary);
 }
 
 .scroll-sentinel {
@@ -1325,7 +1382,7 @@ onActivated(() => {
   width: 52px;
   height: 52px;
   border-radius: 26px;
-  background: linear-gradient(135deg, #1677ff, #4096ff);
+  background: linear-gradient(135deg, var(--color-primary), color-mix(in srgb, var(--color-primary) 60%, #fff));
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1343,7 +1400,7 @@ onActivated(() => {
   gap: 8px;
   padding: 10px 16px;
   padding-bottom: calc(10px + env(safe-area-inset-bottom));
-  background: #fff;
+  background: var(--color-surface);
   box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.05);
   z-index: 101;
 }
@@ -1367,15 +1424,15 @@ onActivated(() => {
 
 .select-all-text {
   font-size: 14px;
-  color: #333;
+  color: var(--text-regular);
 }
 
 .selection-info {
   font-size: 14px;
-  color: #666;
+  color: var(--text-secondary);
 
   .count {
-    color: #1677ff;
+    color: var(--color-primary);
     font-weight: 600;
   }
 }
@@ -1384,7 +1441,7 @@ onActivated(() => {
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: #f5f7fa;
+  background: var(--color-bg);
 }
 
 .filter-popup-header {
@@ -1392,13 +1449,13 @@ onActivated(() => {
   justify-content: space-between;
   align-items: center;
   padding: 16px;
-  background: #fff;
+  background: var(--color-surface);
 }
 
 .filter-popup-title {
   font-size: 16px;
   font-weight: 600;
-  color: #333;
+  color: var(--text-regular);
 }
 
 .filter-popup-body {
@@ -1408,7 +1465,7 @@ onActivated(() => {
 }
 
 .filter-group {
-  background: #fff;
+  background: var(--color-surface);
   border-radius: 12px;
   padding: 16px;
   margin-bottom: 12px;
@@ -1417,7 +1474,7 @@ onActivated(() => {
 .filter-group-title {
   font-size: 14px;
   font-weight: 600;
-  color: #333;
+  color: var(--text-regular);
   margin-bottom: 12px;
 }
 
@@ -1429,23 +1486,23 @@ onActivated(() => {
 
 .filter-option {
   padding: 8px 14px;
-  background: #f5f7fa;
+  background: var(--color-bg);
   border-radius: 16px;
   font-size: 13px;
-  color: #666;
+  color: var(--text-secondary);
 }
 
 .filter-option.active {
-  background: #e6f4ff;
-  color: #1677ff;
+  background: var(--color-info-bg);
+  color: var(--color-primary);
 }
 
 .filter-popup-footer {
   display: flex;
   gap: 12px;
   padding: 12px 16px;
-  background: #fff;
-  border-top: 1px solid #f0f0f0;
+  background: var(--color-surface);
+  border-top: 1px solid var(--color-border);
 }
 
 .batch-ocr-popup {
@@ -1466,14 +1523,14 @@ onActivated(() => {
 
 .batch-ocr-desc {
   font-size: 13px;
-  color: #666;
+  color: var(--text-secondary);
   margin-bottom: 16px;
 }
 
 .batch-ocr-section-title {
   font-size: 13px;
   font-weight: 600;
-  color: #333;
+  color: var(--text-regular);
   margin-bottom: 8px;
 }
 
@@ -1483,7 +1540,7 @@ onActivated(() => {
 
 .batch-ocr-pending {
   font-size: 14px;
-  color: #333;
+  color: var(--text-regular);
   margin-bottom: 16px;
 }
 
@@ -1495,7 +1552,7 @@ onActivated(() => {
   display: flex;
   justify-content: flex-end;
   font-size: 12px;
-  color: #999;
+  color: var(--text-tertiary);
   margin-bottom: 6px;
 }
 
@@ -1508,7 +1565,7 @@ onActivated(() => {
 .batch-ocr-result {
   max-height: 200px;
   overflow-y: auto;
-  background: #f5f7fa;
+  background: var(--color-bg);
   border-radius: 8px;
   padding: 12px;
   margin-bottom: 16px;
@@ -1516,17 +1573,17 @@ onActivated(() => {
 
 .result-summary {
   font-size: 14px;
-  color: #52c41a;
+  color: var(--color-success);
   margin-bottom: 8px;
 }
 
 .result-summary.has-failed {
-  color: #ff4d4f;
+  color: var(--color-error);
 }
 
 .detail-line {
   font-size: 12px;
-  color: #666;
+  color: var(--text-secondary);
   line-height: 1.6;
 }
 
@@ -1547,13 +1604,13 @@ onActivated(() => {
   justify-content: space-between;
   align-items: center;
   padding: 16px;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid var(--color-border);
 }
 
 .merge-popup-title {
   font-size: 17px;
   font-weight: 600;
-  color: #333;
+  color: var(--text-regular);
 }
 
 .merge-loading,
@@ -1561,7 +1618,7 @@ onActivated(() => {
   padding: 40px 16px;
   text-align: center;
   font-size: 14px;
-  color: #999;
+  color: var(--text-tertiary);
 }
 
 .merge-body {
@@ -1572,8 +1629,8 @@ onActivated(() => {
 
 .merge-tip {
   font-size: 12px;
-  color: #fa8c16;
-  background: #fff7e6;
+  color: var(--color-warning);
+  background: var(--color-warning-bg);
   border-radius: 8px;
   padding: 10px 12px;
   line-height: 1.5;
@@ -1581,7 +1638,7 @@ onActivated(() => {
 }
 
 .merge-target {
-  background: #f5f7fa;
+  background: var(--color-bg);
   border-radius: 10px;
   padding: 12px;
   margin-bottom: 16px;
@@ -1589,26 +1646,26 @@ onActivated(() => {
 
 .merge-target-title {
   font-size: 12px;
-  color: #999;
+  color: var(--text-tertiary);
   margin-bottom: 6px;
 }
 
 .merge-target-plate {
   font-size: 16px;
   font-weight: 700;
-  color: #333;
+  color: var(--text-regular);
   margin-bottom: 4px;
 }
 
 .merge-target-no {
   font-size: 13px;
-  color: #666;
+  color: var(--text-secondary);
 }
 
 .merge-candidates-title {
   font-size: 14px;
   font-weight: 600;
-  color: #333;
+  color: var(--text-regular);
   margin-bottom: 10px;
 }
 
@@ -1618,12 +1675,12 @@ onActivated(() => {
   gap: 10px;
   padding: 12px;
   border-radius: 10px;
-  background: #f8fafc;
+  background: var(--color-bg);
   margin-bottom: 8px;
 }
 
 .merge-candidate.selected {
-  background: #e6f7ff;
+  background: var(--color-info-bg);
 }
 
 .merge-candidate-checkbox {
@@ -1638,17 +1695,17 @@ onActivated(() => {
 .merge-candidate-plate {
   font-size: 15px;
   font-weight: 600;
-  color: #333;
+  color: var(--text-regular);
   margin-bottom: 4px;
 }
 
 .merge-candidate-meta {
   font-size: 12px;
-  color: #999;
+  color: var(--text-tertiary);
 }
 
 .merge-actions {
   padding: 12px 16px 24px;
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--color-border);
 }
 </style>

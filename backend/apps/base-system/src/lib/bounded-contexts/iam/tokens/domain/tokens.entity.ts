@@ -1,8 +1,5 @@
 import { AggregateRoot } from '@nestjs/cqrs';
 
-import { TokenStatus } from '../constants';
-
-import { RefreshTokenUsedEvent } from './events/refreshtoken-used.event';
 import { TokensProperties } from './tokens.read.model';
 
 export interface ITokens {
@@ -27,15 +24,5 @@ export class TokensEntity extends AggregateRoot implements ITokens {
   constructor(properties: TokensProperties) {
     super();
     Object.assign(this, properties);
-  }
-
-  async refreshTokenCheck() {
-    if (this.status !== TokenStatus.UNUSED) {
-      throw new Error('Token has already been used.');
-    } else {
-      this.apply(
-        new RefreshTokenUsedEvent(this.refreshToken, TokenStatus.USED),
-      );
-    }
   }
 }

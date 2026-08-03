@@ -3,6 +3,7 @@ import { watch } from 'vue';
 import { useAppStore } from '@/store/modules/app';
 import { useEcharts } from '@/hooks/common/echarts';
 import { $t } from '@/locales';
+import { getChartPalette } from '@/utils/chart';
 
 defineOptions({
   name: 'PieChart'
@@ -10,29 +11,32 @@ defineOptions({
 
 const appStore = useAppStore();
 
-const { domRef, updateOptions } = useEcharts(() => ({
-  tooltip: {
-    trigger: 'item'
-  },
-  legend: {
-    bottom: '1%',
-    left: 'center',
-    itemStyle: {
-      borderWidth: 0
-    }
-  },
-  series: [
-    {
-      color: ['#5da8ff', '#8e9dff', '#fedc69', '#26deca'],
-      name: $t('page.home.schedule'),
-      type: 'pie',
-      radius: ['45%', '75%'],
-      avoidLabelOverlap: false,
+const { domRef, updateOptions } = useEcharts(() => {
+  const palette = getChartPalette();
+
+  return {
+    tooltip: {
+      trigger: 'item'
+    },
+    legend: {
+      bottom: '1%',
+      left: 'center',
       itemStyle: {
-        borderRadius: 10,
-        borderColor: '#fff',
-        borderWidth: 1
-      },
+        borderWidth: 0
+      }
+    },
+    series: [
+      {
+        color: palette.series,
+        name: $t('page.home.schedule'),
+        type: 'pie',
+        radius: ['45%', '75%'],
+        avoidLabelOverlap: false,
+        itemStyle: {
+          borderRadius: 8,
+          borderColor: palette.border,
+          borderWidth: 1
+        },
       label: {
         show: false,
         position: 'center'
@@ -49,7 +53,8 @@ const { domRef, updateOptions } = useEcharts(() => ({
       data: [] as { name: string; value: number }[]
     }
   ]
-}));
+});
+});
 
 async function mockData() {
   await new Promise(resolve => {

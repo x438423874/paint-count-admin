@@ -180,7 +180,8 @@ const local: App.I18n.Schema = {
     'paint_work-order': '工单管理',
     'paint_work-order_reconcile': '工单对账',
     paint_statistics: '幅数统计',
-    'paint_scheduled-task': '定时任务'
+    'paint_scheduled-task': '定时任务',
+    'paint_pending-image': '图片池'
   },
   page: {
     login: {

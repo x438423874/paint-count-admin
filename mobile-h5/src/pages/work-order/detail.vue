@@ -8,6 +8,7 @@ import {
 import type { PaintWorkOrder, PaintShop, PaintStandard, PaintSpecialPaint, PaintVehicle, CreateWorkOrderItemDto } from '@/api/types/paint'
 import type { OrderNoRule } from '@/api/paint'
 import { compressImage } from '@/utils/image-compress'
+import { resolveImageUrl } from '@/utils/image-url'
 import { canAudit, canDelete, canEdit } from '@/utils/permission'
 import { analyzeOrderNoErrors } from '@/utils/order-no-rule'
 
@@ -25,6 +26,34 @@ const shops = ref<PaintShop[]>([])
 const isEditing = ref(false)
 const saving = ref(false)
 const ocrCorrectionMode = ref(false)
+
+// 详情页操作栏：核心操作随状态常驻，次要操作收进「更多」面板
+const showMoreActions = ref(false)
+const moreActions = computed(() => {
+  const o = order.value
+  const s = o?.status
+  const list: { name: string; color?: string }[] = []
+  if (s && !isUnauditedStatus(s) && allowEdit && o.images && o.images.length) {
+    list.push({ name: '修正OCR', color: 'var(--color-warning)' })
+  }
+  if (s && isAuditedStatus(s) && allowAudit) {
+    list.push({ name: '取消审核', color: 'var(--color-warning)' })
+    list.push({ name: '标记异常', color: 'var(--color-warning)' })
+  }
+  if (s && isUnauditedStatus(s) && allowDelete) {
+    list.push({ name: '删除', color: 'var(--color-danger)' })
+  }
+  return list
+})
+function onMoreSelect(action: { name: string }) {
+  showMoreActions.value = false
+  switch (action.name) {
+    case '修正OCR': enterOcrCorrection(); break
+    case '取消审核': handleUnaudit(); break
+    case '标记异常': openAbnormalPopup(); break
+    case '删除': handleDelete(); break
+  }
+}
 
 // OCR 识别状态
 const ocrLoading = ref(false)
@@ -551,7 +580,7 @@ async function doOcrRecognizeByUrl(imageUrl: string) {
   ocrLoading.value = true
   try {
     // 获取工单图片并转为 File
-    const resp = await fetch(imageUrl)
+    const resp = await fetch(resolveImageUrl(imageUrl))
     if (!resp.ok) throw new Error('获取图片失败')
     const blob = await resp.blob()
     const file = new File([blob], 'image.jpg', { type: blob.type || 'image/jpeg' })
@@ -710,6 +739,19 @@ async function saveEdit() {
 
 function removeEditItem(index: number) {
   editForm.items.splice(index, 1)
+}
+
+// 部位数量修改：部位数量为 0 时直接删除该项目；并收敛超过部位数量的新件数量
+function onEditQuantityChange(index: number) {
+  const item = editForm.items[index]
+  if (!item) return
+  if (!item.quantity || item.quantity <= 0) {
+    removeEditItem(index)
+    return
+  }
+  if (item.newPartQuantity && item.newPartQuantity > item.quantity) {
+    item.newPartQuantity = item.quantity
+  }
 }
 
 function addEditItem() {
@@ -910,14 +952,15 @@ function previewImage(url: string) {
   if (isEditing.value) {
     // 编辑模式下使用过滤后的图片列表
     urls = [
-      ...editImages.value.map(img => img.url),
+      ...editImages.value.map(img => resolveImageUrl(img.url)),
       ...editPendingUploads.value.map(item => item.previewUrl),
     ]
   }
   else {
-    urls = (order.value?.images || []).map(img => img.url)
+    urls = (order.value?.images || []).map(img => resolveImageUrl(img.url))
   }
-  showImagePreview({ images: urls, startPosition: Math.max(0, urls.indexOf(url)) })
+  const target = resolveImageUrl(url)
+  showImagePreview({ images: urls, startPosition: Math.max(0, urls.indexOf(target)) })
 }
 
 function deleteImage(imageId: string) {
@@ -997,7 +1040,15 @@ onMounted(() => {
 <template>
   <div class="detail-page">
     <div v-if="loading" class="loading-wrap">
-      <van-loading size="24px">加载中...</van-loading>
+      <div class="skeleton-card">
+        <van-skeleton title avatar :row="2" />
+      </div>
+      <div class="skeleton-card">
+        <van-skeleton title :row="3" />
+      </div>
+      <div class="skeleton-card">
+        <van-skeleton :row="2" />
+      </div>
     </div>
 
     <div v-else-if="order" class="detail-content">
@@ -1066,10 +1117,10 @@ onMounted(() => {
             <span class="info-value">{{ order.settlementMonth || '-' }}</span>
           </div>
           <div v-if="isAbnormalStatus(order.status)" class="info-item" style="grid-column: 1 / -1">
-            <van-notice-bar left-icon="warning" :text="'异常原因: ' + (order.abnormalRemark || '未填写')" background="#fff2f0" color="#ff4d4f" />
+            <van-notice-bar left-icon="warning" :text="'异常原因: ' + (order.abnormalRemark || '未填写')" background="var(--color-error-bg)" color="var(--color-error)" />
           </div>
           <div v-if="order.isRework && order.reworkRemark" class="info-item" style="grid-column: 1 / -1">
-            <van-notice-bar left-icon="warning" :text="'返工原因: ' + order.reworkRemark" background="#fff2f0" color="#ff4d4f" />
+            <van-notice-bar left-icon="warning" :text="'返工原因: ' + order.reworkRemark" background="var(--color-error-bg)" color="var(--color-error)" />
           </div>
         </div>
 
@@ -1105,13 +1156,13 @@ onMounted(() => {
             v-if="vehicleFound"
             left-icon="checked"
             :text="`已匹配历史车辆${vehicleMatchedFields.length ? '，已填充：' + vehicleMatchedFields.join('、') : ''}（累计 ${vehicleFound.totalOrderCount} 单 / ${Number(vehicleFound.totalPaintCount).toFixed(1)} 幅）`"
-            background="#e6f9e6"
-            color="#07c160"
+            background="var(--color-success-bg)"
+            color="var(--color-success)"
             style="margin: 0 16px 8px;"
           />
           <van-field v-model="editForm.carModel" label="车型" placeholder="请输入车型" />
           <van-field v-model="editForm.vin" label="车架号" placeholder="请输入车架号(VIN)" :error-message="editVinError || ocrVinCorrectionMsg" @update:model-value="editVinError = ''; ocrVinCorrectionMsg = ''" />
-          <van-notice-bar v-if="ocrVinCorrectionMsg" left-icon="warning-o" :text="ocrVinCorrectionMsg" background="#fffbe8" color="#ed6a0c" style="margin: 0 16px 8px;" />
+          <van-notice-bar v-if="ocrVinCorrectionMsg" left-icon="warning-o" :text="ocrVinCorrectionMsg" background="var(--color-warning-bg)" color="var(--color-warning)" style="margin: 0 16px 8px;" />
           <van-field v-model="editForm.brand" label="品牌" placeholder="请输入品牌" />
           <van-cell title="工单日期" :value="editForm.orderDate || '请选择日期'" is-link @click="showEditDatePicker = true" />
           <van-cell title="结算月份" :value="editForm.settlementMonth || '请选择月份'" is-link @click="showEditSettlementMonthPicker = true" />
@@ -1183,18 +1234,18 @@ onMounted(() => {
             <div class="edit-item-header">
               <span class="item-name clickable" @click="openCategoryPicker(index)">
                 {{ getEditItemName(index) }}
-                <van-icon name="arrow-down" size="12" color="#1677ff" />
+                <van-icon name="arrow-down" size="12" color="var(--color-primary)" />
               </span>
-              <van-icon name="delete-o" size="18" color="#ff4d4f" @click="removeEditItem(index)" />
+              <van-icon name="delete-o" size="18" color="var(--color-error)" @click="removeEditItem(index)" />
             </div>
             <div class="edit-item-controls">
               <div class="control-group">
                 <span class="control-label">数量</span>
-                <van-stepper v-model="item.quantity" min="0" />
+                <van-stepper v-model="item.quantity" min="0" @change="onEditQuantityChange(index)" />
               </div>
               <div v-if="editStandards.find(s => s.categoryId === item.categoryId && Number(s.newPartAddition) > 0)" class="control-group">
                 <span class="control-label">新件</span>
-                <van-stepper v-model="item.newPartQuantity" min="0" />
+                <van-stepper v-model="item.newPartQuantity" min="0" :max="item.quantity" />
               </div>
               <div class="control-group">
                 <span class="control-label">幅数</span>
@@ -1213,7 +1264,7 @@ onMounted(() => {
                     v-if="item.overridePaintCount !== undefined && item.overridePaintCount !== null"
                     name="close"
                     size="14"
-                    color="#ff4d4f"
+                    color="var(--color-error)"
                     style="margin-left: 4px; cursor: pointer;"
                     @click="item.overridePaintCount = undefined"
                   />
@@ -1264,7 +1315,7 @@ onMounted(() => {
         <div v-if="isEditing && !ocrCorrectionMode" class="image-grid">
           <!-- 已有图片（未标记删除的） -->
           <div v-for="img in editImages" :key="img.id" class="image-item">
-            <van-image :src="img.thumbnailUrl || img.url" fit="cover" class="order-image" @click="previewImage(img.url)" />
+            <van-image :src="resolveImageUrl(img.thumbnailUrl || img.url)" fit="cover" class="order-image" @click="previewImage(img.url)" />
             <div class="delete-image-btn" @click.stop="deleteImage(img.id)">
               <van-icon name="cross" size="12" color="#fff" />
             </div>
@@ -1282,7 +1333,7 @@ onMounted(() => {
             <van-image
               v-for="img in order.images"
               :key="img.id"
-              :src="img.thumbnailUrl || img.url"
+              :src="resolveImageUrl(img.thumbnailUrl || img.url)"
               fit="cover"
               class="order-image"
               @click="previewImage(img.url)"
@@ -1295,43 +1346,54 @@ onMounted(() => {
       <!-- 操作按钮 -->
       <div class="action-bar">
         <template v-if="isEditing">
-          <van-button block @click="cancelEdit">
-            取消
-          </van-button>
-          <van-button type="primary" block :loading="saving" loading-text="保存中..." @click="saveEdit">
-            保存
-          </van-button>
+          <div class="primary-actions">
+            <van-button @click="cancelEdit">
+              取消
+            </van-button>
+            <van-button type="primary" :loading="saving" loading-text="保存中..." @click="saveEdit">
+              保存
+            </van-button>
+          </div>
         </template>
         <template v-else>
-          <van-button v-if="isUnauditedStatus(order.status) && allowEdit" plain type="primary" @click="enterEdit">
-            编辑
-          </van-button>
-          <van-button v-if="!isUnauditedStatus(order.status) && allowEdit && order.images && order.images.length" plain type="warning" @click="enterOcrCorrection">
-            修正OCR
-          </van-button>
-          <van-button v-if="isUnauditedStatus(order.status) && allowAudit" type="primary" @click="handleAudit">
-            审核
-          </van-button>
-          <van-button v-if="isAuditedStatus(order.status) && allowAudit" type="warning" @click="handleUnaudit">
-            取消审核
-          </van-button>
-          <van-button v-if="isAuditedStatus(order.status) && allowAudit" type="success" @click="handleSettle">
-            结算
-          </van-button>
-          <van-button v-if="order.status === 'SETTLED' && allowAudit" type="warning" @click="handleUnsettle">
-            取消结算
-          </van-button>
-          <van-button v-if="isAuditedStatus(order.status) && allowAudit" type="warning" plain @click="openAbnormalPopup">
-            标记异常
-          </van-button>
-          <van-button v-if="isAbnormalStatus(order.status) && allowAudit" type="danger" plain @click="openAbnormalPopup">
-            取消异常
-          </van-button>
-          <van-button v-if="isUnauditedStatus(order.status) && allowDelete" type="danger" plain @click="handleDelete">
-            删除
+          <!-- 核心操作：随状态常驻 -->
+          <div class="primary-actions">
+            <van-button v-if="isUnauditedStatus(order.status) && allowEdit" plain type="primary" @click="enterEdit">
+              编辑
+            </van-button>
+            <van-button v-if="isUnauditedStatus(order.status) && allowAudit" type="primary" @click="handleAudit">
+              审核
+            </van-button>
+            <van-button v-if="isAuditedStatus(order.status) && allowAudit" type="success" @click="handleSettle">
+              结算
+            </van-button>
+            <van-button v-if="order.status === 'SETTLED' && allowAudit" type="warning" @click="handleUnsettle">
+              取消结算
+            </van-button>
+            <van-button v-if="isAbnormalStatus(order.status) && allowAudit" type="danger" plain @click="openAbnormalPopup">
+              取消异常
+            </van-button>
+          </div>
+          <!-- 次要操作：收进更多面板 -->
+          <van-button
+            v-if="moreActions.length"
+            class="more-btn"
+            icon="ellipsis"
+            @click="showMoreActions = true"
+          >
+            更多
           </van-button>
         </template>
       </div>
+
+      <!-- 更多操作面板（次要操作） -->
+      <van-action-sheet
+        v-model:show="showMoreActions"
+        :actions="moreActions"
+        cancel-text="取消"
+        description="更多操作"
+        @select="onMoreSelect"
+      />
     </div>
 
     <!-- 分类选择器 -->
@@ -1372,7 +1434,7 @@ onMounted(() => {
     <van-popup v-model:show="showAbnormalPopup" position="bottom" round :style="{ padding: '20px' }">
       <div class="settle-popup">
         <div class="settle-title">{{ abnormalFlag ? '标记异常' : '取消异常' }}</div>
-        <van-notice-bar v-if="abnormalFlag" left-icon="warning" text="标记异常后该工单将无法结算" background="#fffbe8" color="#ed6a0c" />
+        <van-notice-bar v-if="abnormalFlag" left-icon="warning" text="标记异常后该工单将无法结算" background="var(--color-warning-bg)" color="var(--color-warning)" />
         <van-field v-model="abnormalRemarkInput" label="异常原因" type="textarea" :placeholder="abnormalFlag ? '请输入异常原因' : '备注（选填）'" rows="3" />
         <div class="settle-actions">
           <van-button block @click="showAbnormalPopup = false">取消</van-button>
@@ -1392,7 +1454,7 @@ onMounted(() => {
             class="picker-item"
             @click="onPickImage(img.url)"
           >
-            <van-image :src="img.thumbnailUrl || img.url" fit="cover" class="picker-image" />
+            <van-image :src="resolveImageUrl(img.thumbnailUrl || img.url)" fit="cover" class="picker-image" />
             <div class="picker-index">{{ index + 1 }}</div>
           </div>
           <div
@@ -1420,14 +1482,22 @@ onMounted(() => {
 <style lang="less" scoped>
 .detail-page {
   min-height: 100vh;
-  background: #f5f7fa;
+  background: var(--color-bg);
   padding-bottom: 80px;
 }
 
 .loading-wrap {
+  padding: 16px;
   display: flex;
-  justify-content: center;
-  padding: 60px 0;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.skeleton-card {
+  background: var(--color-surface);
+  border-radius: 12px;
+  padding: 16px;
+  box-shadow: var(--shadow-card);
 }
 
 .status-banner {
@@ -1438,10 +1508,10 @@ onMounted(() => {
   color: #fff;
 
   &.draft { background: linear-gradient(135deg, #8c8c8c, #bfbfbf); }
-  &.pending { background: linear-gradient(135deg, #fa8c16, #ffa940); }
+  &.pending { background: linear-gradient(135deg, var(--color-warning), #ffa940); }
   &.audited { background: linear-gradient(135deg, #52c41a, #73d13d); }
   &.settled { background: linear-gradient(135deg, #1890ff, #40a9ff); }
-  &.abnormal { background: linear-gradient(135deg, #ff4d4f, #ff7875); }
+  &.abnormal { background: linear-gradient(135deg, var(--color-error), color-mix(in srgb, var(--color-error) 65%, #fff)); }
 }
 
 .status-left {
@@ -1462,7 +1532,7 @@ onMounted(() => {
 
 .info-section {
   margin: 12px 16px;
-  background: #fff;
+  background: var(--color-surface);
   border-radius: 10px;
   padding: 14px;
   box-shadow: 0 1px 6px rgba(0, 0, 0, 0.04);
@@ -1471,7 +1541,7 @@ onMounted(() => {
 .section-title {
   font-size: 15px;
   font-weight: 600;
-  color: #1a1a1a;
+  color: var(--text-primary);
   margin-bottom: 12px;
 }
 
@@ -1489,7 +1559,7 @@ onMounted(() => {
   align-items: center;
   gap: 2px;
   font-size: 13px;
-  color: #1677ff;
+  color: var(--color-primary);
 }
 
 .info-grid {
@@ -1506,13 +1576,13 @@ onMounted(() => {
 
 .info-label {
   font-size: 12px;
-  color: #999;
+  color: var(--text-tertiary);
   margin-bottom: 2px;
 }
 
 .info-value {
   font-size: 14px;
-  color: #333;
+  color: var(--text-regular);
 }
 
 .edit-grid {
@@ -1523,7 +1593,7 @@ onMounted(() => {
 
 .ocr-btn-wrap {
   padding: 10px 14px;
-  border-bottom: 1px solid #f5f5f5;
+  border-bottom: 1px solid var(--neutral-100);
   display: flex;
   justify-content: flex-end;
 }
@@ -1574,7 +1644,7 @@ onMounted(() => {
   .picker-cancel {
     text-align: center;
     padding: 16px 0 4px;
-    color: #969799;
+    color: var(--text-tertiary);
     font-size: 14px;
   }
 }
@@ -1587,7 +1657,7 @@ onMounted(() => {
 
 .item-card {
   padding: 10px;
-  background: #f8f9fa;
+  background: var(--color-bg);
   border-radius: 8px;
 }
 
@@ -1601,13 +1671,13 @@ onMounted(() => {
 .item-name {
   font-size: 14px;
   font-weight: 500;
-  color: #333;
+  color: var(--text-regular);
 
   &.clickable {
     display: flex;
     align-items: center;
     gap: 4px;
-    color: #1677ff;
+    color: var(--color-primary);
     cursor: pointer;
   }
 }
@@ -1615,7 +1685,7 @@ onMounted(() => {
 .item-paint {
   font-size: 14px;
   font-weight: 600;
-  color: #1677ff;
+  color: var(--color-primary);
 }
 
 .item-detail {
@@ -1625,7 +1695,7 @@ onMounted(() => {
 
 .item-info {
   font-size: 12px;
-  color: #666;
+  color: var(--text-secondary);
 
   &.special { color: #722ed1; }
 }
@@ -1638,7 +1708,7 @@ onMounted(() => {
 
 .edit-item-card {
   padding: 10px;
-  background: #f8f9fa;
+  background: var(--color-bg);
   border-radius: 8px;
 }
 
@@ -1650,8 +1720,22 @@ onMounted(() => {
 }
 
 .edit-item-controls {
-  display: flex;
-  gap: 20px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px 16px;
+
+  // 幅数（最后一项）独占整行，stepper 撑满更易操作
+  .control-group:last-child {
+    grid-column: 1 / -1;
+
+    .paint-count-control {
+      flex: 1;
+    }
+
+    :deep(.van-stepper) {
+      width: 100%;
+    }
+  }
 }
 
 .control-group {
@@ -1662,7 +1746,7 @@ onMounted(() => {
 
 .control-label {
   font-size: 12px;
-  color: #999;
+  color: var(--text-tertiary);
 }
 
 .paint-count-control {
@@ -1672,11 +1756,11 @@ onMounted(() => {
 
 .paint-count-value {
   font-size: 13px;
-  color: #333;
+  color: var(--text-regular);
   cursor: pointer;
   padding: 2px 6px;
   border-radius: 4px;
-  background: #f7f8fa;
+  background: var(--color-bg);
   min-width: 40px;
   text-align: center;
 }
@@ -1687,9 +1771,9 @@ onMounted(() => {
   justify-content: center;
   gap: 4px;
   padding: 10px;
-  border: 1px dashed #d9d9d9;
+  border: 1px dashed var(--color-border);
   border-radius: 8px;
-  color: #1677ff;
+  color: var(--color-primary);
   font-size: 13px;
   cursor: pointer;
 }
@@ -1700,7 +1784,7 @@ onMounted(() => {
   align-items: center;
   padding-top: 12px;
   margin-top: 12px;
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--color-border);
 }
 
 .total-item {
@@ -1712,16 +1796,16 @@ onMounted(() => {
 
 .total-label {
   font-size: 12px;
-  color: #999;
+  color: var(--text-tertiary);
 }
 
 .total-value {
   font-size: 18px;
   font-weight: 600;
-  color: #333;
+  color: var(--text-regular);
 
   &.highlight {
-    color: #1677ff;
+    color: var(--color-primary);
   }
 }
 
@@ -1764,14 +1848,29 @@ onMounted(() => {
   left: 0;
   right: 0;
   display: flex;
+  align-items: center;
   gap: 10px;
-  padding: 12px 16px;
-  padding-bottom: calc(12px + env(safe-area-inset-bottom));
-  background: #fff;
-  box-shadow: 0 -2px 6px rgba(0, 0, 0, 0.06);
+  padding: 8px 12px;
+  padding-bottom: calc(8px + env(safe-area-inset-bottom));
+  background: var(--color-surface);
+  border-top: 1px solid var(--color-border);
+  box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.04);
+  z-index: 100;
 
-  :deep(.van-button) {
+  .primary-actions {
     flex: 1;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+
+    :deep(.van-button) {
+      flex: 1;
+      min-width: 88px;
+    }
+  }
+
+  .more-btn {
+    flex: 0 0 auto;
   }
 }
 

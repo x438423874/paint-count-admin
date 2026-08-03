@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { createWorkOrder, getShopList, getShopCategoriesWithStandard, quickCreateWorkOrder, ocrRecognizeImage, getSpecialPaintList, fetchOrderNoRules, fetchVehicleByPlate } from '@/api/paint'
+import { createWorkOrder, getShopList, getShopCategoriesWithStandard, uploadPendingImage, uploadPendingImageToOrder, ocrRecognizeImage, getSpecialPaintList, fetchOrderNoRules, fetchVehicleByPlate } from '@/api/paint'
 import type { OrderNoRule } from '@/api/paint'
 import type { PaintShop, PaintStandard, PaintSpecialPaint, PaintVehicle, CreateWorkOrderItemDto } from '@/api/types/paint'
 import { compressImage } from '@/utils/image-compress'
@@ -223,14 +223,15 @@ function getSpecialPaintName(specialPaintId?: string) {
   return sp ? `${sp.name} x${sp.multiplier}` : '无'
 }
 
-async function handleSubmit() {
+async function handleSubmit(opts?: { skipStrict?: boolean }) {
+  const skipStrict = opts?.skipStrict ?? false
   if (!form.shopId) {
     showNotify({ type: 'warning', message: '请选择门店' })
     return
   }
 
-  // 校验工单号规则
-  if (form.orderNo && form.orderNo.trim() && orderNoRules.value.length > 0) {
+  // 校验工单号规则（手动建单校验；图片批量建单放宽：不强制）
+  if (!skipStrict && form.orderNo && form.orderNo.trim() && orderNoRules.value.length > 0) {
     const upper = form.orderNo.trim().toUpperCase()
     let matched = false
     for (const rule of orderNoRules.value) {
@@ -255,14 +256,16 @@ async function handleSubmit() {
     }
   }
 
-  // 校验车牌号
-  if (!form.plateNumber || !form.plateNumber.trim()) {
-    plateNumberError.value = '请输入车牌号'
-    return
-  }
-  if (!plateNumberRegex.test(form.plateNumber.trim().toUpperCase())) {
-    plateNumberError.value = '车牌号格式不正确（普通车牌7位，新能源车牌8位）'
-    return
+  // 校验车牌号（图片批量建单放宽：仅需门店+结算月份）
+  if (!skipStrict) {
+    if (!form.plateNumber || !form.plateNumber.trim()) {
+      plateNumberError.value = '请输入车牌号'
+      return
+    }
+    if (!plateNumberRegex.test(form.plateNumber.trim().toUpperCase())) {
+      plateNumberError.value = '车牌号格式不正确（普通车牌7位，新能源车牌8位）'
+      return
+    }
   }
 
   // 校验车架号（非必填，填了则校验格式）
@@ -278,14 +281,14 @@ async function handleSubmit() {
   }
 
   const validItems = form.items.filter(item => item.quantity > 0)
-  if (validItems.length === 0) {
+  if (!skipStrict && validItems.length === 0) {
     showNotify({ type: 'warning', message: '请至少添加一个喷漆项目' })
     return
   }
 
   submitting.value = true
   try {
-    await createWorkOrder({
+    const created = await createWorkOrder({
       shopId: form.shopId,
       orderNo: form.orderNo || undefined,
       orderDate: form.orderDate || undefined,
@@ -297,7 +300,7 @@ async function handleSubmit() {
       customerName: form.customerName || undefined,
       phone: form.phone || undefined,
       remark: form.remark || undefined,
-      items: validItems.map(it => {
+      items: validItems.length > 0 ? validItems.map((it) => {
         const item: any = {
           categoryId: it.categoryId,
           quantity: it.quantity,
@@ -308,10 +311,12 @@ async function handleSubmit() {
           item.overridePaintCount = it.overridePaintCount
         }
         return item
-      }),
+      }) : undefined,
     })
-    showNotify({ type: 'success', message: '创建成功' })
-    setTimeout(() => router.back(), 1000)
+    // 记录新建工单，供“直接创建工单”模式上传图片使用
+    createdOrderId.value = created?.id || ''
+    createdOrderNo.value = created?.orderNo || ''
+    showNotify({ type: 'success', message: '创建成功，可继续上传该工单图片' })
   }
   catch {
     showNotify({ type: 'danger', message: '创建失败' })
@@ -411,6 +416,29 @@ function handleTakePhoto() {
     showNotify({ type: 'warning', message: '请先选择结算月份' })
     return
   }
+  // 先选择上传模式（直接创建工单 / OCR 创建工单）
+  showUploadModePicker.value = true
+}
+
+// 选择上传模式后进入文件选择
+async function onUploadModeConfirm() {
+  showUploadModePicker.value = false
+  if (uploadMode.value === 'create') {
+    // 直接创建工单：若尚未提交表单建单，则先用当前表单自动创建工单，再上传图片作为 BEFORE 图
+    if (!createdOrderId.value) {
+      // 直接创建工单：仅需门店+结算月份即可建单，车牌/喷漆项目等后续可补
+      await handleSubmit({ skipStrict: true })
+    }
+    if (!createdOrderId.value) {
+      // 建单失败（如门店缺失或后端错误），提示后退出
+      showNotify({ type: 'warning', message: '创建工单失败，请选择门店后重试' })
+      return
+    }
+  }
+  pickFilesAndUpload()
+}
+
+function pickFilesAndUpload() {
   const input = document.createElement('input')
   input.type = 'file'
   input.accept = 'image/*'
@@ -429,27 +457,18 @@ const batchCreating = ref(false)
 const batchProgress = ref({ current: 0, total: 0, success: 0, failed: 0 })
 const batchResults = ref<Array<{ fileName: string; success: boolean; message: string }>>([])
 const showBatchResult = ref(false)
-// 是否启用 OCR 识别（关闭时仅创建带图片的空工单，速度更快）
-const enableOcr = ref(true)
-// OCR 识别模式：basic 仅基础资料 / items 仅部位 / all 全部
+// OCR 识别模式：basic 仅基础资料 / items 仅部位 / all 全部（用于单张图片手动智能识别）
 const ocrMode = ref<'basic' | 'items' | 'all'>('basic')
-const ocrModeOptions = [
-  { label: '仅基础资料', value: 'basic' },
-  { label: '仅部位', value: 'items' },
-  { label: '全部', value: 'all' },
-]
 
-/** 智能选择OCR模式：根据已填字段决定识别范围，节省token */
-const smartOcrMode = computed<'basic' | 'items' | 'all'>(() => {
-  const basicFields = [form.plateNumber, form.orderNo, form.customerName, form.phone, form.carModel, form.vin, form.brand, form.orderDate]
-  const basicFilled = basicFields.some(v => v && String(v).trim())
-  const itemsFilled = form.items.some(it => it.quantity && it.quantity > 0)
-
-  if (basicFilled && itemsFilled) return 'all'
-  if (basicFilled && !itemsFilled) return 'items'
-  if (!basicFilled && itemsFilled) return 'basic'
-  return 'all'
-})
+// 批量上传模式：
+//  'create' = 直接创建工单：图片作为当前工单的 BEFORE 图（需先提交创建工单拿到工单号）
+//  'ocr'    = OCR 创建工单：图片进图片池，OCR 后自动按门店/结算月份 + OCR 资料补建新工单
+const uploadMode = ref<'create' | 'ocr'>('ocr')
+// 提交创建工单成功后记录工单 id，供“直接创建工单”模式上传图片使用
+const createdOrderId = ref<string>('')
+const createdOrderNo = ref<string>('')
+// 上传模式选择弹窗
+const showUploadModePicker = ref(false)
 
 async function batchQuickCreate(files: File[]) {
   batchCreating.value = true
@@ -473,7 +492,14 @@ async function batchQuickCreate(files: File[]) {
     for (let attempt = 0; attempt <= MAX_RETRY; attempt++) {
       try {
         const compressed = await compressImage(file)
-        await quickCreateWorkOrder(compressed, form.shopId, form.settlementMonth || undefined, enableOcr.value, ocrMode.value)
+        if (uploadMode.value === 'create') {
+          // 直接创建工单：图片作为当前工单的 BEFORE 图，不经图片池
+          await uploadPendingImageToOrder(compressed, form.shopId, createdOrderId.value)
+        }
+        else {
+          // OCR 创建工单：上传到图片池，后端 OCR 后自动按门店/结算月份 + OCR 资料补建工单
+          await uploadPendingImage(compressed, form.shopId, form.settlementMonth || undefined, 'CREATE')
+        }
         success = true
         lastErr = null
         break
@@ -498,13 +524,17 @@ async function batchQuickCreate(files: File[]) {
 
     if (success) {
       batchProgress.value.success++
-      batchResults.value.push({ fileName: file.name, success: true, message: '创建成功' })
+      batchResults.value.push({
+        fileName: file.name,
+        success: true,
+        message: uploadMode.value === 'create' ? `已关联到工单 ${createdOrderNo.value || ''}` : '已加入图片池，OCR 后将自动建单',
+      })
     }
     else {
       batchProgress.value.failed++
       const status = lastErr?.response?.status || lastErr?.statusCode
       const responseMsg = lastErr?.response?.data?.message || lastErr?.response?.data?.error?.message || lastErr?.response?.data?.msg
-      let msg = responseMsg || lastErr?.message || '创建失败'
+      let msg = responseMsg || lastErr?.message || '上传失败'
       if (status === 429)
         msg = '请求过于频繁，已重试仍失败'
       else if (status === 401)
@@ -527,12 +557,22 @@ async function batchQuickCreate(files: File[]) {
   showBatchResult.value = true
 }
 
-// 批量创建结果确认：全部成功则返回，有失败则留在当前页
+// 批量结果确认：OCR 模式有成功则前往图片池；直接创建模式图片已关联工单，留在当前页
 function onBatchResultConfirm() {
-  if (batchProgress.value.failed === 0 && batchProgress.value.success > 0) {
-    setTimeout(() => router.back(), 200)
-  }
+  const hasSuccess = batchProgress.value.success > 0
   showBatchResult.value = false
+  if (hasSuccess && uploadMode.value === 'ocr') {
+    router.replace({ name: 'PendingImage' })
+  }
+}
+
+// 部位数量改变时，收敛超过部位数量的新件数量
+function clampNewPart(index: number) {
+  const item = form.items[index]
+  if (!item) return
+  if (item.newPartQuantity && item.newPartQuantity > (item.quantity || 0)) {
+    item.newPartQuantity = item.quantity || 0
+  }
 }
 
 // OCR 识别状态
@@ -668,19 +708,19 @@ onMounted(() => {
         批量上传工单图片
       </div>
       <div class="photo-hint" @click="handleTakePhoto">
-        可拍照或从相册选择，每张图片创建一个工单
+        上传前请选择「直接创建工单」或「OCR 创建工单」
       </div>
-      <div class="ocr-switch-row">
-        <span class="ocr-switch-label">OCR自动识别</span>
-        <van-switch v-model="enableOcr" size="20px" />
-        <span class="ocr-switch-tip">{{ enableOcr ? '开启：自动识别并填充基础资料' : '关闭：仅创建带图片的空工单（更快）' }}</span>
+      <!-- 上传模式选择 -->
+      <div class="upload-mode" @click="handleTakePhoto">
+        <span class="mode-label">上传模式</span>
+        <span class="mode-value">{{ uploadMode === 'create' ? '直接创建工单' : 'OCR 创建工单' }}</span>
+        <van-icon name="arrow" class="mode-arrow" />
       </div>
-      <div v-if="enableOcr" class="ocr-mode-row">
-        <span class="ocr-mode-label">识别模式</span>
-        <van-radio-group v-model="ocrMode" direction="horizontal">
-          <van-radio v-for="opt in ocrModeOptions" :key="opt.value" :name="opt.value">{{ opt.label }}</van-radio>
-        </van-radio-group>
-        <span class="ocr-mode-smart" @click="ocrMode = smartOcrMode">智能推荐</span>
+      <div v-if="uploadMode === 'create'" class="mode-tip">
+        图片将作为工单 {{ createdOrderNo || '（请先提交创建工单）' }} 的施工前照片，直接归入该工单
+      </div>
+      <div v-else class="mode-tip">
+        图片存入图片池，系统后台 OCR 识别后按门店/月份自动补建工单
       </div>
     </div>
 
@@ -720,13 +760,13 @@ onMounted(() => {
         v-if="vehicleFound"
         left-icon="checked"
         :text="`已匹配历史车辆${vehicleMatchedFields.length ? '，已填充：' + vehicleMatchedFields.join('、') : ''}（累计 ${vehicleFound.totalOrderCount} 单 / ${Number(vehicleFound.totalPaintCount).toFixed(1)} 幅）`"
-        background="#e6f9e6"
-        color="#07c160"
+        background="var(--color-success-bg)"
+        color="var(--color-success)"
         style="margin: 0 16px 8px;"
       />
       <van-field v-model="form.carModel" label="车型" placeholder="请输入车型" />
       <van-field v-model="form.vin" label="车架号" placeholder="请输入车架号(VIN)" :error-message="vinError || ocrVinCorrectionMsg" @update:model-value="vinError = ''; ocrVinCorrectionMsg = ''" />
-      <van-notice-bar v-if="ocrVinCorrectionMsg" left-icon="warning-o" :text="ocrVinCorrectionMsg" background="#fffbe8" color="#ed6a0c" style="margin: 0 16px 8px;" />
+      <van-notice-bar v-if="ocrVinCorrectionMsg" left-icon="warning-o" :text="ocrVinCorrectionMsg" background="var(--color-warning-bg)" color="var(--color-warning)" style="margin: 0 16px 8px;" />
       <van-field v-model="form.brand" label="品牌" placeholder="请输入品牌" />
       <van-field v-model="form.customerName" label="客户名称" placeholder="请输入客户名称" />
       <van-field v-model="form.phone" label="联系电话" placeholder="请输入电话" type="tel" :error-message="phoneError" @update:model-value="phoneError = ''" />
@@ -747,11 +787,11 @@ onMounted(() => {
         <div class="item-controls">
           <div class="control-group">
             <span class="control-label">数量</span>
-            <van-stepper v-model="item.quantity" min="0" />
+            <van-stepper v-model="item.quantity" min="0" @change="clampNewPart(index)" />
           </div>
           <div v-if="Number(standards[index]?.newPartAddition) > 0" class="control-group">
             <span class="control-label">新件</span>
-            <van-stepper v-model="item.newPartQuantity" min="0" />
+            <van-stepper v-model="item.newPartQuantity" min="0" :max="item.quantity" />
           </div>
           <div class="control-group">
             <span class="control-label">幅数</span>
@@ -770,7 +810,7 @@ onMounted(() => {
                 v-if="item.overridePaintCount !== undefined && item.overridePaintCount !== null"
                 name="close"
                 size="14"
-                color="#ff4d4f"
+                color="var(--color-error)"
                 style="margin-left: 4px; cursor: pointer;"
                 @click="item.overridePaintCount = undefined"
               />
@@ -829,11 +869,35 @@ onMounted(() => {
       />
     </van-popup>
 
-    <!-- 批量创建结果弹窗 -->
+    <!-- 上传模式选择弹窗 -->
+    <van-popup v-model:show="showUploadModePicker" position="bottom" round>
+      <div class="mode-popup">
+        <div class="mode-popup-title">选择上传方式</div>
+        <div
+          class="mode-option"
+          :class="{ active: uploadMode === 'create' }"
+          @click="uploadMode = 'create'; onUploadModeConfirm()"
+        >
+          <div class="mode-option-name">直接创建工单</div>
+          <div class="mode-option-desc">图片作为当前工单的施工前照片，直接归入工单（需先提交创建工单）</div>
+        </div>
+        <div
+          class="mode-option"
+          :class="{ active: uploadMode === 'ocr' }"
+          @click="uploadMode = 'ocr'; onUploadModeConfirm()"
+        >
+          <div class="mode-option-name">OCR 创建工单</div>
+          <div class="mode-option-desc">图片存入图片池，系统后台 OCR 识别后按门店/月份自动补建新工单</div>
+        </div>
+        <div class="mode-popup-cancel" @click="showUploadModePicker = false">取消</div>
+      </div>
+    </van-popup>
+
+    <!-- 批量上传结果弹窗 -->
     <van-dialog
       v-model:show="showBatchResult"
-      title="批量创建结果"
-      confirm-button-text="完成"
+      :title="batchProgress.success > 0 ? (uploadMode === 'create' ? '已关联到工单' : '已加入图片池') : '上传完成'"
+      :confirm-button-text="batchProgress.success > 0 ? (uploadMode === 'create' ? '继续' : '前往图片池') : '完成'"
       :show-cancel-button="batchProgress.failed > 0"
       cancel-button-text="返回"
       @confirm="onBatchResultConfirm"
@@ -848,12 +912,12 @@ onMounted(() => {
         <div
           v-for="(item, index) in batchResults"
           :key="index"
-          style="display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid #f5f5f5;"
+          style="display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--neutral-100);"
         >
-          <van-icon :name="item.success ? 'success' : 'cross'" :color="item.success ? '#07c160' : '#ee0a24'" />
+          <van-icon :name="item.success ? 'success' : 'cross'" :color="item.success ? 'var(--color-success)' : 'var(--color-error)'" />
           <div style="flex: 1; min-width: 0;">
-            <div style="font-size: 13px; color: #333; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ item.fileName }}</div>
-            <div style="font-size: 12px; color: #969799;">{{ item.message }}</div>
+            <div style="font-size: 13px; color: var(--text-regular); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ item.fileName }}</div>
+            <div style="font-size: 12px; color: var(--text-tertiary);">{{ item.message }}</div>
           </div>
         </div>
       </div>
@@ -871,7 +935,7 @@ onMounted(() => {
 <style lang="less" scoped>
 .create-page {
   min-height: 100vh;
-  background: #f7f8fa;
+  background: var(--color-bg);
   padding-bottom: 80px;
 }
 
@@ -879,7 +943,7 @@ onMounted(() => {
   margin: 12px;
   border-radius: 8px;
   overflow: hidden;
-  background: #fff;
+  background: var(--color-surface);
 }
 
 .photo-entry {
@@ -887,7 +951,7 @@ onMounted(() => {
   flex-direction: column;
   align-items: center;
   padding: 30px 0;
-  background: #fff;
+  background: var(--color-surface);
   margin: 12px 16px;
   border-radius: 10px;
   box-shadow: 0 1px 6px rgba(0, 0, 0, 0.04);
@@ -896,7 +960,7 @@ onMounted(() => {
 .photo-icon-wrap {
   width: 70px;
   height: 70px;
-  background: linear-gradient(135deg, #1677ff, #4096ff);
+  background: linear-gradient(135deg, var(--color-primary), color-mix(in srgb, var(--color-primary) 60%, #fff));
   border-radius: 20px;
   display: flex;
   align-items: center;
@@ -908,64 +972,13 @@ onMounted(() => {
 .photo-text {
   font-size: 16px;
   font-weight: 600;
-  color: #333;
+  color: var(--text-regular);
   margin-bottom: 4px;
 }
 
 .photo-hint {
   font-size: 13px;
-  color: #999;
-}
-
-.ocr-switch-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 16px;
-  padding: 10px 16px;
-  background: #f7f8fa;
-  border-radius: 8px;
-  width: 86%;
-}
-
-.ocr-switch-label {
-  font-size: 14px;
-  font-weight: 500;
-  color: #333;
-  white-space: nowrap;
-}
-
-.ocr-switch-tip {
-  font-size: 12px;
-  color: #969799;
-  flex: 1;
-  line-height: 1.4;
-}
-
-.ocr-mode-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-top: 8px;
-  padding: 10px 16px;
-  background: #f7f8fa;
-  border-radius: 8px;
-  width: 86%;
-}
-
-.ocr-mode-label {
-  font-size: 14px;
-  font-weight: 500;
-  color: #333;
-  white-space: nowrap;
-}
-
-.ocr-mode-smart {
-  font-size: 12px;
-  color: #1989fa;
-  cursor: pointer;
-  white-space: nowrap;
-  margin-left: auto;
+  color: var(--text-tertiary);
 }
 
 .divider-text {
@@ -978,18 +991,18 @@ onMounted(() => {
 .divider-line {
   flex: 1;
   height: 1px;
-  background: #e0e0e0;
+  background: var(--neutral-200);
 }
 
 .divider-label {
   font-size: 13px;
-  color: #999;
+  color: var(--text-tertiary);
   white-space: nowrap;
 }
 
 .form-section {
   margin: 0 16px;
-  background: #fff;
+  background: var(--color-surface);
   border-radius: 10px;
   overflow: hidden;
   box-shadow: 0 1px 6px rgba(0,0,0,0.04);
@@ -997,14 +1010,14 @@ onMounted(() => {
 
 .ocr-btn-wrap {
   padding: 10px 14px;
-  border-bottom: 1px solid #f5f5f5;
+  border-bottom: 1px solid var(--neutral-100);
   display: flex;
   justify-content: flex-end;
 }
 
 .items-section {
   margin: 12px 16px;
-  background: #fff;
+  background: var(--color-surface);
   border-radius: 10px;
   padding: 14px;
   box-shadow: 0 1px 6px rgba(0, 0, 0, 0.04);
@@ -1013,7 +1026,7 @@ onMounted(() => {
 .section-title {
   font-size: 15px;
   font-weight: 600;
-  color: #1a1a1a;
+  color: var(--text-primary);
   margin-bottom: 10px;
   display: flex;
   justify-content: space-between;
@@ -1023,12 +1036,12 @@ onMounted(() => {
 .total-count {
   font-size: 13px;
   font-weight: 500;
-  color: #1677ff;
+  color: var(--color-primary);
 }
 
 .item-row {
   padding: 10px 0;
-  border-bottom: 1px solid #f5f5f5;
+  border-bottom: 1px solid var(--neutral-100);
 
   &:last-child { border-bottom: none; }
 }
@@ -1036,13 +1049,28 @@ onMounted(() => {
 .item-name {
   font-size: 14px;
   font-weight: 500;
-  color: #333;
+  color: var(--text-regular);
   margin-bottom: 8px;
 }
 
 .item-controls {
-  display: flex;
-  gap: 20px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px 16px;
+  margin-top: 4px;
+
+  // 幅数（最后一项）独占整行，stepper 撑满更易操作
+  .control-group:last-child {
+    grid-column: 1 / -1;
+
+    .paint-count-control {
+      flex: 1;
+    }
+
+    :deep(.van-stepper) {
+      width: 100%;
+    }
+  }
 }
 
 .control-group {
@@ -1053,7 +1081,7 @@ onMounted(() => {
 
 .control-label {
   font-size: 12px;
-  color: #999;
+  color: var(--text-tertiary);
 }
 
 .paint-count-control {
@@ -1063,11 +1091,11 @@ onMounted(() => {
 
 .paint-count-value {
   font-size: 13px;
-  color: #333;
+  color: var(--text-regular);
   cursor: pointer;
   padding: 2px 6px;
   border-radius: 4px;
-  background: #f7f8fa;
+  background: var(--color-bg);
   min-width: 40px;
   text-align: center;
 }
@@ -1088,15 +1116,93 @@ onMounted(() => {
   right: 0;
   padding: 10px 16px;
   padding-bottom: calc(10px + env(safe-area-inset-bottom));
-  background: #fff;
+  background: var(--color-surface);
   box-shadow: 0 -2px 6px rgba(0, 0, 0, 0.06);
 
   :deep(.van-button) {
     height: 44px;
     font-size: 16px;
     font-weight: 600;
-    background: linear-gradient(135deg, #1677ff, #4096ff);
+    background: linear-gradient(135deg, var(--color-primary), color-mix(in srgb, var(--color-primary) 60%, #fff));
     border: none;
+  }
+}
+
+// 上传模式选择入口
+.upload-mode {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 14px 24px 0;
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 12px;
+
+  .mode-label {
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.85);
+  }
+  .mode-value {
+    flex: 1;
+    text-align: right;
+    font-size: 14px;
+    font-weight: 600;
+    color: #fff;
+  }
+  .mode-arrow {
+    color: rgba(255, 255, 255, 0.85);
+  }
+}
+
+.mode-tip {
+  margin: 8px 24px 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+// 上传模式选择弹窗
+.mode-popup {
+  padding: 8px 0 16px;
+
+  .mode-popup-title {
+    text-align: center;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-regular);
+    padding: 14px 0;
+  }
+  .mode-option {
+    margin: 0 16px 12px;
+    padding: 14px 16px;
+    border-radius: 12px;
+    border: 1.5px solid var(--neutral-200);
+    background: var(--color-surface);
+
+    &.active {
+      border-color: var(--color-primary);
+      background: var(--color-primary-bg);
+    }
+    .mode-option-name {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+    .mode-option-desc {
+      margin-top: 4px;
+      font-size: 12px;
+      line-height: 1.5;
+      color: var(--text-tertiary);
+    }
+  }
+  .mode-popup-cancel {
+    margin: 4px 16px 0;
+    text-align: center;
+    padding: 13px 0;
+    border-radius: 12px;
+    font-size: 15px;
+    color: var(--text-regular);
+    background: var(--neutral-100);
   }
 }
 </style>

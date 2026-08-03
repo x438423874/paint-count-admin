@@ -1,5 +1,6 @@
 <script setup lang="tsx">
 import { NButton, NPopconfirm, NTag } from 'naive-ui';
+import EmptyState from '@/components/common/EmptyState.vue';
 import { enableStatusRecord } from '@/constants/business';
 import { deleteAccessKey, fetchGetAccessKeyList } from '@/service/api';
 import { useAppStore } from '@/store/modules/app';
@@ -163,7 +164,11 @@ function edit(id: string) {
         :row-key="row => row.id"
         :pagination="mobilePagination"
         class="sm:h-full"
-      />
+      >
+        <template #empty>
+          <EmptyState description="暂无访问密钥数据" />
+        </template>
+      </NDataTable>
       <AccessKeyOperateDrawer
         v-model:visible="drawerVisible"
         :operate-type="operateType"

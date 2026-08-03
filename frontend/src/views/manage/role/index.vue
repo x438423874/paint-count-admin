@@ -1,6 +1,7 @@
 <script setup lang="tsx">
 import { ref } from 'vue';
 import { NButton, NPopconfirm, NTag } from 'naive-ui';
+import EmptyState from '@/components/common/EmptyState.vue';
 import { useBoolean } from '@sa/hooks';
 import { enableStatusRecord } from '@/constants/business';
 import { deleteRole, fetchGetRoleList } from '@/service/api';
@@ -195,7 +196,11 @@ function handleRoleAction(id: string, code: string, action: () => void): void {
         :row-key="row => row.id"
         :pagination="mobilePagination"
         class="sm:h-full"
-      />
+      >
+        <template #empty>
+          <EmptyState description="暂无角色数据" />
+        </template>
+      </NDataTable>
       <RoleOperateDrawer
         v-model:visible="drawerVisible"
         :operate-type="operateType"

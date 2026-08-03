@@ -3,6 +3,9 @@ import { ref, computed, onMounted, watch, nextTick } from 'vue';
 import { NCard, NGrid, NGi, NStatistic, NSelect, NSpace, NTag, NDataTable, NH3, NNumberAnimation, NDatePicker, NButton, NEmpty } from 'naive-ui';
 import { fetchMonthlyStatistics, fetchShopComparison, fetchYearOverview, fetchCategoryBreakdown, fetchPaintShopList, fetchLatestSettlementMonth, fetchStatisticsOverview, exportStatisticsCsv, exportStatisticsExcel, exportStatisticsPdf } from '@/service/api';
 import { useEcharts } from '@/hooks/common/echarts';
+import { getChartPalette, primaryGradient } from '@/utils/chart';
+
+const palette = getChartPalette();
 
 const shops = ref<{ id: string; name: string; code: string }[]>([]);
 const selectedShopId = ref<string | null>(null);
@@ -190,7 +193,8 @@ function updateDailyChart() {
   });
   const dates = [...allDates].sort();
 
-  const colors = ['#5470c6', '#91cc75', '#fac858', '#ee6666', '#73c0de', '#3ba272'];
+  const palette = getChartPalette();
+  const colors = palette.series;
   const series = monthlyData.value.map((shop, idx) => ({
     name: shop.shopName,
     type: 'line' as const,
@@ -211,26 +215,30 @@ function updateDailyChart() {
 }
 
 // 2. 门店对比柱状图
-const { domRef: shopComparisonChartRef, updateOptions: updateShopComparisonChartOptions } = useEcharts(() => ({
-  tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-  legend: { data: ['总幅数', '工单数', '车辆数'], top: 5 },
-  grid: { left: '3%', right: '4%', bottom: '8%', containLabel: true },
-  toolbox: {
-    show: true,
-    right: 10,
-    feature: { saveAsImage: { name: '门店对比' } }
-  },
-  xAxis: { type: 'category', data: [] as string[], axisLabel: { interval: 0, rotate: 0 } },
-  yAxis: [
-    { type: 'value', name: '幅数' },
-    { type: 'value', name: '数量' }
-  ],
-  series: [
-    { name: '总幅数', type: 'bar', data: [] as number[], itemStyle: { color: '#5470c6' }, label: { show: true, position: 'top', formatter: '{c}' } },
-    { name: '工单数', type: 'bar', yAxisIndex: 1, data: [] as number[], itemStyle: { color: '#91cc75' } },
-    { name: '车辆数', type: 'bar', yAxisIndex: 1, data: [] as number[], itemStyle: { color: '#fac858' } }
-  ]
-}));
+const { domRef: shopComparisonChartRef, updateOptions: updateShopComparisonChartOptions } = useEcharts(() => {
+  const palette = getChartPalette();
+
+  return {
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+    legend: { data: ['总幅数', '工单数', '车辆数'], top: 5 },
+    grid: { left: '3%', right: '4%', bottom: '8%', containLabel: true },
+    toolbox: {
+      show: true,
+      right: 10,
+      feature: { saveAsImage: { name: '门店对比' } }
+    },
+    xAxis: { type: 'category', data: [] as string[], axisLabel: { interval: 0, rotate: 0 } },
+    yAxis: [
+      { type: 'value', name: '幅数' },
+      { type: 'value', name: '数量' }
+    ],
+    series: [
+      { name: '总幅数', type: 'bar', data: [] as number[], itemStyle: { color: palette.series[0] }, label: { show: true, position: 'top', formatter: '{c}' } },
+      { name: '工单数', type: 'bar', yAxisIndex: 1, data: [] as number[], itemStyle: { color: palette.series[2] } },
+      { name: '车辆数', type: 'bar', yAxisIndex: 1, data: [] as number[], itemStyle: { color: palette.series[3] } }
+    ]
+  };
+});
 
 function updateShopComparisonChart() {
   if (!shopComparison.value.length) return;
@@ -250,27 +258,31 @@ function updateShopComparisonChart() {
 }
 
 // 3. 年度趋势折线图
-const { domRef: yearTrendChartRef, updateOptions: updateYearTrendChartOptions } = useEcharts(() => ({
-  tooltip: { trigger: 'axis' },
-  legend: { data: ['总幅数', '工单数', '待审核幅数', '已审核幅数'], top: 5 },
-  grid: { left: '3%', right: '4%', bottom: '8%', containLabel: true },
-  toolbox: {
-    show: true,
-    right: 10,
-    feature: { saveAsImage: { name: '年度趋势' } }
-  },
-  xAxis: { type: 'category', data: [] as string[], name: '月份' },
-  yAxis: [
-    { type: 'value', name: '幅数' },
-    { type: 'value', name: '工单数' }
-  ],
-  series: [
-    { name: '总幅数', type: 'line', smooth: true, data: [] as number[], itemStyle: { color: '#5470c6' }, areaStyle: { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: 'rgba(84,112,198,0.3)' }, { offset: 1, color: 'rgba(84,112,198,0.05)' }] } } },
-    { name: '工单数', type: 'line', smooth: true, yAxisIndex: 1, data: [] as number[], itemStyle: { color: '#91cc75' } },
-    { name: '待审核幅数', type: 'bar', stack: 'audit', data: [] as number[], itemStyle: { color: '#f0a020' }, barWidth: 16 },
-    { name: '已审核幅数', type: 'bar', stack: 'audit', data: [] as number[], itemStyle: { color: '#18a058' }, barWidth: 16 }
-  ]
-}));
+const { domRef: yearTrendChartRef, updateOptions: updateYearTrendChartOptions } = useEcharts(() => {
+  const palette = getChartPalette();
+
+  return {
+    tooltip: { trigger: 'axis' },
+    legend: { data: ['总幅数', '工单数', '待审核幅数', '已审核幅数'], top: 5 },
+    grid: { left: '3%', right: '4%', bottom: '8%', containLabel: true },
+    toolbox: {
+      show: true,
+      right: 10,
+      feature: { saveAsImage: { name: '年度趋势' } }
+    },
+    xAxis: { type: 'category', data: [] as string[], name: '月份' },
+    yAxis: [
+      { type: 'value', name: '幅数' },
+      { type: 'value', name: '工单数' }
+    ],
+    series: [
+      { name: '总幅数', type: 'line', smooth: true, data: [] as number[], itemStyle: { color: palette.primary }, areaStyle: primaryGradient(0.3, 0.05) },
+      { name: '工单数', type: 'line', smooth: true, yAxisIndex: 1, data: [] as number[], itemStyle: { color: palette.series[1] } },
+      { name: '待审核幅数', type: 'bar', stack: 'audit', data: [] as number[], itemStyle: { color: palette.series[3] }, barWidth: 16 },
+      { name: '已审核幅数', type: 'bar', stack: 'audit', data: [] as number[], itemStyle: { color: palette.series[2] }, barWidth: 16 }
+    ]
+  };
+});
 
 function updateYearTrendChart() {
   if (!yearOverview.value.length) return;
@@ -292,28 +304,33 @@ function updateYearTrendChart() {
 }
 
 // 4. 项目类别饼图
-const { domRef: categoryChartRef, updateOptions: updateCategoryChartOptions } = useEcharts(() => ({
-  tooltip: { trigger: 'item', formatter: '{b}: {c}幅 ({d}%)' },
-  legend: { orient: 'vertical', left: 'left', type: 'scroll', top: 20 },
-  toolbox: {
-    show: true,
-    right: 10,
-    feature: { saveAsImage: { name: '项目类别分布' } }
-  },
-  series: [{
-    type: 'pie',
-    radius: ['40%', '70%'],
-    center: ['60%', '55%'],
-    avoidLabelOverlap: true,
-    itemStyle: { borderRadius: 6, borderColor: '#fff', borderWidth: 2 },
-    label: { show: true, formatter: '{b}\n{d}%' },
-    emphasis: {
-      label: { show: true, fontSize: 14, fontWeight: 'bold' },
-      itemStyle: { shadowBlur: 10, shadowOffsetX: 0, shadowColor: 'rgba(0, 0, 0, 0.5)' }
+const { domRef: categoryChartRef, updateOptions: updateCategoryChartOptions } = useEcharts(() => {
+  const palette = getChartPalette();
+
+  return {
+    tooltip: { trigger: 'item', formatter: '{b}: {c}幅 ({d}%)' },
+    legend: { orient: 'vertical', left: 'left', type: 'scroll', top: 20 },
+    toolbox: {
+      show: true,
+      right: 10,
+      feature: { saveAsImage: { name: '项目类别分布' } }
     },
-    data: [] as { name: string; value: number }[]
-  }]
-}));
+    series: [{
+      type: 'pie',
+      color: palette.series,
+      radius: ['40%', '70%'],
+      center: ['60%', '55%'],
+      avoidLabelOverlap: true,
+      itemStyle: { borderRadius: 8, borderColor: palette.border, borderWidth: 2 },
+      label: { show: true, formatter: '{b}\n{d}%' },
+      emphasis: {
+        label: { show: true, fontSize: 14, fontWeight: 'bold' },
+        itemStyle: { shadowBlur: 10, shadowOffsetX: 0, shadowColor: 'rgba(0, 0, 0, 0.5)' }
+      },
+      data: [] as { name: string; value: number }[]
+    }]
+  };
+});
 
 function updateCategoryChart() {
   if (!categoryBreakdown.value.length) return;
@@ -495,14 +512,14 @@ async function handleExportPdf() {
     <!-- 返工统计 -->
     <NGrid :cols="3" :x-gap="16" :y-gap="16">
       <NGi>
-        <NCard :bordered="true" size="small" style="border-left: 3px solid #d03050;">
+        <NCard :bordered="true" size="small" :style="{ borderLeft: '3px solid ' + palette.error }">
           <NStatistic label="返工工单数" :value="totalStats.reworkOrders">
             <template #prefix><icon-ic-round-warning /></template>
           </NStatistic>
         </NCard>
       </NGi>
       <NGi>
-        <NCard :bordered="true" size="small" style="border-left: 3px solid #d03050;">
+        <NCard :bordered="true" size="small" :style="{ borderLeft: '3px solid ' + palette.error }">
           <NStatistic label="返工车辆数" :value="totalStats.reworkVehicles">
             <template #prefix><icon-ic-outline-directions-car /></template>
             <template #suffix>台</template>
@@ -510,7 +527,7 @@ async function handleExportPdf() {
         </NCard>
       </NGi>
       <NGi>
-        <NCard :bordered="true" size="small" style="border-left: 3px solid #d03050;">
+        <NCard :bordered="true" size="small" :style="{ borderLeft: '3px solid ' + palette.error }">
           <NStatistic label="返工幅数" :value="totalStats.reworkPaintCount" :precision="1">
             <template #prefix><icon-ic-outline-format-paint /></template>
             <template #suffix>幅</template>
@@ -522,7 +539,7 @@ async function handleExportPdf() {
     <!-- 待审核/已审核统计 -->
     <NGrid :cols="2" :x-gap="16">
       <NGi>
-        <NCard title="待审核" :bordered="true" size="small" style="border-left: 3px solid #f0a020;">
+        <NCard title="待审核" :bordered="true" size="small" :style="{ borderLeft: `3px solid ${palette.series[3]}` }">
           <NGrid :cols="3" :x-gap="12">
             <NGi>
               <NStatistic label="工单数">
@@ -545,7 +562,7 @@ async function handleExportPdf() {
         </NCard>
       </NGi>
       <NGi>
-        <NCard title="已审核" :bordered="true" size="small" style="border-left: 3px solid #18a058;">
+        <NCard title="已审核" :bordered="true" size="small" :style="{ borderLeft: `3px solid ${palette.series[2]}` }">
           <NGrid :cols="3" :x-gap="12">
             <NGi>
               <NStatistic label="工单数">
@@ -572,7 +589,7 @@ async function handleExportPdf() {
     <!-- 异常 / 结算 / 审核率统计 -->
     <NGrid v-if="overview" :cols="4" :x-gap="16">
       <NGi>
-        <NCard title="异常工单" :bordered="true" size="small" style="border-left: 3px solid #d03050;">
+        <NCard title="异常工单" :bordered="true" size="small" :style="{ borderLeft: '3px solid ' + palette.error }">
           <NGrid :cols="2" :x-gap="12">
             <NGi>
               <NStatistic label="工单数">
@@ -589,7 +606,7 @@ async function handleExportPdf() {
         </NCard>
       </NGi>
       <NGi>
-        <NCard title="已结算" :bordered="true" size="small" style="border-left: 3px solid #2080f0;">
+        <NCard title="已结算" :bordered="true" size="small" :style="{ borderLeft: '3px solid ' + palette.info }">
           <NGrid :cols="2" :x-gap="12">
             <NGi>
               <NStatistic label="工单数">
@@ -606,7 +623,7 @@ async function handleExportPdf() {
         </NCard>
       </NGi>
       <NGi>
-        <NCard title="审核率" :bordered="true" size="small" style="border-left: 3px solid #18a058;">
+        <NCard title="审核率" :bordered="true" size="small" :style="{ borderLeft: `3px solid ${palette.series[2]}` }">
           <NStatistic label="已审占比">
             <NNumberAnimation :value="overview.auditRate" :precision="1" />
             <template #suffix>%</template>
@@ -614,7 +631,7 @@ async function handleExportPdf() {
         </NCard>
       </NGi>
       <NGi>
-        <NCard title="结算率" :bordered="true" size="small" style="border-left: 3px solid #2080f0;">
+        <NCard title="结算率" :bordered="true" size="small" :style="{ borderLeft: '3px solid ' + palette.info }">
           <NStatistic label="已结占比">
             <NNumberAnimation :value="overview.settlementRate" :precision="1" />
             <template #suffix>%</template>
@@ -626,12 +643,12 @@ async function handleExportPdf() {
     <!-- 每日幅数趋势图 + 门店对比图 -->
     <NGrid :cols="2" :x-gap="16">
       <NGi>
-        <NCard title="每日幅数趋势" :bordered="false" size="small">
+        <NCard title="每日幅数趋势" :bordered="false" size="small" class="brand-card">
           <div ref="dailyChartRef" class="h-360px overflow-hidden"></div>
         </NCard>
       </NGi>
       <NGi>
-        <NCard title="门店对比" :bordered="false" size="small">
+        <NCard title="门店对比" :bordered="false" size="small" class="brand-card">
           <div ref="shopComparisonChartRef" class="h-360px overflow-hidden"></div>
         </NCard>
       </NGi>
@@ -640,12 +657,12 @@ async function handleExportPdf() {
     <!-- 年度趋势图 + 类别分布饼图 -->
     <NGrid :cols="2" :x-gap="16">
       <NGi>
-        <NCard title="年度趋势 (按结算月)" :bordered="false" size="small">
+        <NCard title="年度趋势 (按结算月)" :bordered="false" size="small" class="brand-card">
           <div ref="yearTrendChartRef" class="h-360px overflow-hidden"></div>
         </NCard>
       </NGi>
       <NGi>
-        <NCard title="项目类别分布" :bordered="false" size="small">
+        <NCard title="项目类别分布" :bordered="false" size="small" class="brand-card">
           <div ref="categoryChartRef" class="h-360px overflow-hidden"></div>
         </NCard>
       </NGi>
@@ -717,4 +734,13 @@ async function handleExportPdf() {
   </div>
 </template>
 
-<style scoped></style>
+<style scoped>
+.brand-card {
+  box-shadow: var(--brand-shadow-1);
+  transition: box-shadow 0.2s;
+}
+
+.brand-card:hover {
+  box-shadow: var(--brand-shadow-2);
+}
+</style>

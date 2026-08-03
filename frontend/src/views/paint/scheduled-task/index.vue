@@ -1,5 +1,6 @@
 <script setup lang="tsx">
 import { NButton, NTag, NSpace } from 'naive-ui';
+import EmptyState from '@/components/common/EmptyState.vue';
 import { ref, onMounted } from 'vue';
 import { fetchScheduledTasks, toggleScheduledTask } from '@/service/api';
 
@@ -146,7 +147,11 @@ onMounted(() => {
         :loading="loading"
         :row-key="(row: TaskInfo) => row.name"
         class="sm:h-full"
-      />
+      >
+        <template #empty>
+          <EmptyState description="暂无定时任务数据" />
+        </template>
+      </NDataTable>
     </NCard>
   </div>
 </template>

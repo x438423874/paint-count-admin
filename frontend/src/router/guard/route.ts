@@ -6,7 +6,7 @@ import type {
   Router
 } from 'vue-router';
 import type { RouteKey, RoutePath } from '@elegant-router/types';
-import { useAuthStore } from '@/store/modules/auth';
+import { useAuthStore, setInGuardInit } from '@/store/modules/auth';
 import { useRouteStore } from '@/store/modules/route';
 import { localStg } from '@/utils/storage';
 import { getRouteName } from '@/router/elegant/transform';
@@ -18,7 +18,15 @@ import { getRouteName } from '@/router/elegant/transform';
  */
 export function createRouteGuard(router: Router) {
   router.beforeEach(async (to, from, next) => {
-    const location = await initRoute(to);
+    setInGuardInit(true);
+
+    let location: RouteLocationRaw | null;
+
+    try {
+      location = await initRoute(to);
+    } finally {
+      setInGuardInit(false);
+    }
 
     if (location) {
       next(location);

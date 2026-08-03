@@ -327,6 +327,7 @@ model PaintShop {
   excelTemplateConfig String? @map("excel_template_config") @db.Text  // JSON: 门店专属Excel模板列映射配置
   categoryAliasMap    String? @map("category_alias_map") @db.Text     // JSON: 门店部位别名映射（模板部位名称 -> 系统部位ID）
   orderNoRules        String? @map("order_no_rules") @db.Text          // JSON: 门店工单号规则数组
+  ocrConfig          String? @map("ocr_config") @db.Text               // JSON: 门店OCR品牌/车型映射配置
   createdAt         DateTime @default(now()) @map("created_at")
   updatedAt         DateTime? @updatedAt @map("updated_at")
 
@@ -336,6 +337,7 @@ model PaintShop {
   categories      PaintItemCategory[]
   settlementMonths PaintSettlementMonth[]
   userShops       SysUserShop[]
+  pendingImages   PaintPendingImage[]
 
   @@map("paint_shop")
 }
@@ -410,6 +412,7 @@ model PaintWorkOrder {
   vehicle PaintVehicle?     @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
   items   PaintWorkOrderItem[]
   images  PaintWorkOrderImage[]
+  pendingImages PaintPendingImage[]
 
   @@index([shopId, settlementMonth])
   @@index([shopId, settlementMonth, status])
@@ -515,4 +518,73 @@ model PaintVehicle {
   @@index([lastShopId])
   @@index([lastOrderAt])
   @@map("paint_vehicle")
+}
+
+// 图片池：上传但尚未归类到工单的图片，OCR 识别后自动匹配/人工指派
+model PaintPendingImage {
+  id              String   @id @default(cuid())
+  shopId          String   @map("shop_id")
+  // 上传时指定的结算月份（可选，未指定时在该门店全局匹配）
+  settlementMonth String?  @map("settlement_month") @db.VarChar(7)
+  url             String
+  thumbnailUrl    String?  @map("thumbnail_url")
+  fileSize        Int?     @map("file_size")
+  fileHash        String?  @map("file_hash") @db.VarChar(64)
+
+  // OCR 识别结果快照（基础资料，不含部位/幅数）
+  ocrOrderNo      String?  @map("ocr_order_no")
+  ocrPlateNumber  String?  @map("ocr_plate_number")
+  ocrVin          String?  @map("ocr_vin")
+  ocrCarModel     String?  @map("ocr_car_model")
+  ocrBrand        String?  @map("ocr_brand")
+  ocrCustomerName String?  @map("ocr_customer_name")
+  ocrPhone        String?  @map("ocr_phone")
+  ocrDate         String?  @map("ocr_date")
+  ocrRawJson      String?  @map("ocr_raw_json") @db.Text
+
+  // 匹配状态
+  status          PendingImageStatus @default(PENDING)
+  matchedOrderId  String?  @map("matched_order_id")
+  matchRemark     String?  @map("match_remark") @db.VarChar(500)
+  uploadedBy      String?  @map("uploaded_by") @db.VarChar(100)
+  createdAt       DateTime @default(now()) @map("created_at")
+  matchedAt       DateTime? @map("matched_at")
+
+  // OCR 生命周期状态（与匹配 status 解耦）：上传后异步识别，用户可离开页面
+  ocrStatus       OcrStatus @default(PENDING) @map("ocr_status")
+
+  // 图片来源：POOL=图片池直接上传（用于匹配已有工单）；CREATE=新建工单时带图上传
+  source          PendingImageSource @default(POOL) @map("source")
+
+  shop  PaintShop @relation(fields: [shopId], references: [id])
+  order PaintWorkOrder? @relation(fields: [matchedOrderId], references: [id], onDelete: SetNull)
+
+  @@index([shopId, settlementMonth, status])
+  @@index([shopId, status])
+  @@index([ocrOrderNo])
+  @@index([ocrPlateNumber])
+  @@index([status])
+  @@index([ocrStatus])
+  @@map("paint_pending_image")
+}
+
+enum PendingImageStatus {
+  PENDING       // 待匹配（OCR 完成，未自动命中）
+  MATCHED       // 已自动归类成功
+  NEEDS_REVIEW  // 有多个候选，待人工确认
+  MANUAL        // 人工已指派
+  FAILED        // OCR 失败或无法识别
+}
+
+// 图片来源：图片池直接上传（用于匹配已有工单） vs 新建工单时带图上传
+enum PendingImageSource {
+  POOL    // 图片池直接上传，用于匹配已有工单
+  CREATE  // 新建工单时带图上传
+}
+
+enum OcrStatus {
+  PENDING     // 已上传，尚未开始 OCR
+  PROCESSING  // OCR 识别中
+  DONE        // OCR 完成
+  FAILED      // OCR 失败
 }

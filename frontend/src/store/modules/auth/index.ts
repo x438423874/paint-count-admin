@@ -1,8 +1,7 @@
 import { computed, reactive, ref } from 'vue';
-import { useRoute } from 'vue-router';
 import { defineStore } from 'pinia';
 import { useLoading } from '@sa/hooks';
-import { fetchGetUserInfo, fetchLogin } from '@/service/api';
+import { fetchGetUserInfo, fetchLogin, fetchLogout } from '@/service/api';
 import { useRouterPush } from '@/hooks/common/router';
 import { localStg } from '@/utils/storage';
 import { SetupStoreId } from '@/enum';
@@ -11,8 +10,19 @@ import { useRouteStore } from '../route';
 import { useTabStore } from '../tab';
 import { clearAuthStorage, getToken } from './shared';
 
+/** Module-level flag to prevent concurrent logout calls */
+let isLoggingOut = false;
+
+/** 标记当前是否处于路由守卫初始化流程（首屏 initUserInfo 失败）中。
+ *  该场景下由守卫的 !isLogin 分支统一重定向登录页，避免 resetStore 在守卫内
+ *  再发起一次 router.push 造成嵌套导航 / "No match" 未捕获异常。 */
+let inGuardInit = false;
+
+export function setInGuardInit(value: boolean) {
+  inGuardInit = value;
+}
+
 export const useAuthStore = defineStore(SetupStoreId.Auth, () => {
-  const route = useRoute();
   const routeStore = useRouteStore();
   const tabStore = useTabStore();
   const { toLogin, redirectFromLogin } = useRouterPush(false);
@@ -41,12 +51,26 @@ export const useAuthStore = defineStore(SetupStoreId.Auth, () => {
   async function resetStore() {
     const authStore = useAuthStore();
 
+    // 调用后端登出接口吊销 refresh token（仅在仍有 token 时、且避免并发重复调用）
+    if (token.value && !isLoggingOut) {
+      isLoggingOut = true;
+      try {
+        await fetchLogout(localStg.get('refreshToken') || '');
+      } catch {
+        // 后端退出失败不影响前端本地清理
+      } finally {
+        isLoggingOut = false;
+      }
+    }
+
     clearAuthStorage();
 
     authStore.$reset();
 
-    if (!route.meta.constant) {
-      await toLogin();
+    // 仅在非路由守卫初始化流程中自行跳转登录页；首屏 initUserInfo 失败由守卫的
+    // !isLogin 分支统一重定向（避免守卫内嵌套 router.push 造成 "No match" 异常）。
+    if (!inGuardInit) {
+      toLogin();
     }
 
     tabStore.cacheTabs();

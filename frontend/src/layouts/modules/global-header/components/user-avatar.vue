@@ -51,6 +51,7 @@ function logout() {
     negativeText: $t('common.cancel'),
     onPositiveClick: () => {
       authStore.resetStore();
+      toLogin();
     }
   });
 }

@@ -180,6 +180,15 @@ export const generatedRoutes: GeneratedRoute[] = [
         }
       },
       {
+        name: 'paint_pending-image',
+        path: '/paint/pending-image',
+        component: 'view.paint_pending-image',
+        meta: {
+          title: 'paint_pending-image',
+          i18nKey: 'route.paint_pending-image'
+        }
+      },
+      {
         name: 'paint_scheduled-task',
         path: '/paint/scheduled-task',
         component: 'view.paint_scheduled-task',

@@ -5,6 +5,7 @@ import { fetchGetLoginLogList } from '@/service/api';
 import { useAppStore } from '@/store/modules/app';
 import { useTable } from '@/hooks/common/table';
 import { $t } from '@/locales';
+import EmptyState from '@/components/common/EmptyState.vue';
 import LoginLogSearch from './modules/login-log-search.vue';
 
 dayjs.extend(utc);
@@ -107,7 +108,11 @@ const { columns, data, getData, getDataByPage, loading, mobilePagination, search
         :row-key="row => row.id"
         :pagination="mobilePagination"
         class="sm:h-full"
-      />
+      >
+        <template #empty>
+          <EmptyState description="暂无登录日志" />
+        </template>
+      </NDataTable>
     </NCard>
   </div>
 </template>

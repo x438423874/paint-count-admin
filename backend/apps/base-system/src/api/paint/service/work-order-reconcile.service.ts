@@ -128,7 +128,8 @@ export class WorkOrderReconcileService {
     const excelMap = new Map<string, ReconcileExcelRow[]>();
     const excelPlateMap = new Map<string, ReconcileExcelRow[]>();
     for (const row of excelRows) {
-      const key = row.orderNo;
+      // 分组键：优先工单号，无工单号时用车牌（兼容宏现等无工单号台账，靠车牌对账）
+      const key = row.orderNo || row.plateNumber;
       if (!excelMap.has(key)) excelMap.set(key, []);
       excelMap.get(key)!.push(row);
 
@@ -189,7 +190,7 @@ export class WorkOrderReconcileService {
         for (const row of excelGroup) {
           items.push({
             type: 'missing_in_system',
-            orderNo: row.orderNo,
+            orderNo: row.orderNo || row.plateNumber,
             plateNumber: row.plateNumber,
             excelPaintCount: row.paintCount,
             remark: row.remark,
@@ -357,6 +358,7 @@ export class WorkOrderReconcileService {
     let plateNumberColIndex = -1;
     let paintCountColIndex = -1;
     let remarkColIndex = -1;
+    let headerRow = config?.headerRow !== undefined ? config.headerRow : 0;
     let startRow = 0;
 
     if (config && config.fields) {
@@ -368,22 +370,16 @@ export class WorkOrderReconcileService {
     }
 
     if (orderNoColIndex === -1) {
-      const headerRow = config?.headerRow !== undefined ? config.headerRow : 0;
-      const headers = jsonData[headerRow] || [];
-      for (let i = 0; i < headers.length; i++) {
-        const header = String(headers[i] || '').toLowerCase().trim();
-        if (header.includes('工单') || header.includes('单号') || header.includes('订单号')) {
-          orderNoColIndex = i;
-        } else if (header.includes('车牌') || header.includes('牌照') || header.includes('车号')) {
-          plateNumberColIndex = i;
-        } else if (header.includes('幅数') || header.includes('面积') || header.includes('数量') || header.includes('总计') || header.includes('油漆') || header.includes('涂料') || header.includes('喷漆')) {
-          paintCountColIndex = i;
-        } else if (header.includes('备注') || header.includes('说明')) {
-          remarkColIndex = i;
-        }
-      }
-
-      if (orderNoColIndex === -1) {
+      // 自动识别表头行：支持"台账"格式（含标题/合计行、系数行）与汇总格式
+      const detected = this.detectReconcileHeader(jsonData);
+      if (detected) {
+        headerRow = detected.headerRow;
+        orderNoColIndex = detected.orderNoColIndex;
+        plateNumberColIndex = detected.plateNumberColIndex;
+        paintCountColIndex = detected.paintCountColIndex;
+        remarkColIndex = detected.remarkColIndex;
+      } else {
+        const headers = jsonData[0] || [];
         if (headers.length >= 2) {
           orderNoColIndex = 1;
           if (plateNumberColIndex === -1) plateNumberColIndex = 2;
@@ -407,9 +403,11 @@ export class WorkOrderReconcileService {
       if (!row) continue;
 
       const orderNo = String(row[orderNoColIndex] || '').trim();
-      if (!orderNo) continue;
-
       const plateNumber = plateNumberColIndex >= 0 ? String(row[plateNumberColIndex] || '').trim() : '';
+
+      // 允许"无工单号但有车牌"的行参与对账（如宏现台账：工单号/车架号列为空，靠车牌匹配系统工单）
+      if (!orderNo && !plateNumber) continue;
+
       const paintCountRaw = paintCountColIndex >= 0 ? row[paintCountColIndex] : undefined;
       const remark = remarkColIndex >= 0 ? (row[remarkColIndex] ? String(row[remarkColIndex]) : undefined) : undefined;
 
@@ -433,5 +431,83 @@ export class WorkOrderReconcileService {
     }
 
     return rows;
+  }
+
+  /**
+   * 自动定位表头行并识别关键列（工单号/车牌/总幅数/备注）。
+   * 兼容两类台账：
+   *  - 明细台账：含标题行、合计行、部位列、系数行（如"江门瑞华比亚迪喷漆维修台账"）
+   *  - 汇总台账：仅含"工单号/车牌/总幅数"等少量列
+   * 只要某行同时出现"工单号"与"总幅数/副数"类表头，即视为表头行；
+   * 数据起始行自动设为表头行 + 1（系数行因工单号为空会被自动跳过）。
+   */
+  private detectReconcileHeader(jsonData: any[][]): {
+    headerRow: number;
+    orderNoColIndex: number;
+    plateNumberColIndex: number;
+    paintCountColIndex: number;
+    remarkColIndex: number;
+  } | null {
+    const maxRow = Math.min(20, jsonData.length);
+    let best: {
+      headerRow: number;
+      score: number;
+      orderNo: number;
+      plate: number;
+      paint: number;
+      remark: number;
+    } | null = null;
+
+    for (let r = 0; r < maxRow; r++) {
+      const headers = jsonData[r] || [];
+      let orderNo = -1;
+      let plate = -1;
+      let paint = -1;
+      let remark = -1;
+      for (let c = 0; c < headers.length; c++) {
+        const h = String(headers[c] || '').toLowerCase().trim();
+        if (h.includes('工单') || h.includes('单号') || h.includes('订单号') || h.includes('维修单')) {
+          if (orderNo === -1) orderNo = c;
+        } else if (h.includes('车牌') || h.includes('牌照') || h.includes('车号')) {
+          if (plate === -1) plate = c;
+        } else if (
+          h.includes('副数') ||
+          h.includes('幅数') ||
+          h.includes('总幅') ||
+          h.includes('总计') ||
+          h.includes('面积') ||
+          h.includes('油漆') ||
+          h.includes('涂料') ||
+          h.includes('喷漆') ||
+          h.includes('数量')
+        ) {
+          // 优先匹配"副数/幅数/总幅"等总幅数列，'数量'作为兜底
+          if (paint === -1) paint = c;
+        } else if (h.includes('备注') || h.includes('说明')) {
+          if (remark === -1) remark = c;
+        }
+      }
+
+      // 表头行必须同时具备工单号与总幅数列
+      if (orderNo === -1 || paint === -1) continue;
+
+      const score =
+        (orderNo !== -1 ? 1 : 0) +
+        (plate !== -1 ? 1 : 0) +
+        (paint !== -1 ? 1 : 0) +
+        (remark !== -1 ? 1 : 0);
+      if (!best || score > best.score) {
+        best = { headerRow: r, score, orderNo, plate, paint, remark };
+      }
+    }
+
+    if (!best) return null;
+    return {
+      headerRow: best.headerRow,
+      orderNoColIndex: best.orderNo,
+      plateNumberColIndex: best.plate,
+      paintCountColIndex: best.paint,
+      remarkColIndex: best.remark,
+    };
   }
 }

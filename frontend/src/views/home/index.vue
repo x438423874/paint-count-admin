@@ -6,8 +6,11 @@ import {
   fetchShopComparison,
   fetchYearOverview
 } from '@/service/api/paint';
+import { getChartPalette } from '@/utils/chart';
 
 defineOptions({ name: 'Home' });
+
+const palette = getChartPalette();
 
 const loading = ref(false);
 const currentMonth = ref('');
@@ -42,10 +45,10 @@ const summaryCards = computed(() => {
   const totalPaintCount = monthlyStats.value.reduce((s: number, m: any) => s + m.totalPaintCount, 0);
   const avgPaint = totalOrders > 0 ? +(totalPaintCount / totalOrders).toFixed(2) : 0;
   return [
-    { title: '工单总数', value: totalOrders, icon: 'ant-design:file-text-outlined', color: '#ec4786' },
-    { title: '总幅数', value: totalPaintCount, icon: 'ant-design:dashboard-outlined', color: '#56cdf3' },
-    { title: '平均幅数', value: avgPaint, icon: 'ant-design:bar-chart-outlined', color: '#865ec0' },
-    { title: '门店数', value: monthlyStats.value.length, icon: 'ant-design:shop-outlined', color: '#fcbc25' }
+    { title: '工单总数', value: totalOrders, icon: 'ant-design:file-text-outlined', color: palette.primary },
+    { title: '总幅数', value: totalPaintCount, icon: 'ant-design:dashboard-outlined', color: palette.series[6] },
+    { title: '平均幅数', value: avgPaint, icon: 'ant-design:bar-chart-outlined', color: palette.series[2] },
+    { title: '门店数', value: monthlyStats.value.length, icon: 'ant-design:shop-outlined', color: palette.series[3] }
   ];
 });
 
@@ -155,8 +158,8 @@ onMounted(() => {
                   :percentage="barData.length > 0 ? (item.paintCount / Math.max(...barData.map(d => d.paintCount))) * 100 : 0"
                   :show-indicator="false"
                   :height="16"
-                  :color="'#56cdf3'"
-                  rail-color="#f0f0f0"
+                  :color="palette.series[6]"
+                  rail-color="var(--neutral-150)"
                 />
               </div>
               <span class="text-14px font-medium w-80px text-right">{{ item.paintCount }} 幅</span>
@@ -176,8 +179,8 @@ onMounted(() => {
                 :percentage="pieData.length > 0 ? (item.value / Math.max(...pieData.map(d => d.value))) * 100 : 0"
                 :show-indicator="false"
                 :height="10"
-                :color="['#ec4786','#56cdf3','#865ec0','#fcbc25','#56d48f','#f68057','#719de3','#b955a4','#5144b4','#fcbc25'][idx % 10]"
-                rail-color="#f0f0f0"
+                :color="palette.series[idx % palette.series.length]"
+                rail-color="var(--neutral-150)"
                 style="max-width: 120px"
               />
               <span class="text-13px font-medium w-60px text-right">{{ item.value }}</span>
@@ -202,7 +205,7 @@ onMounted(() => {
               class="w-full rd-4px-t"
               :style="{
                 height: yearLineData.length > 0 ? Math.max((item.paintCount / Math.max(...yearLineData.map(d => d.paintCount || 1))) * 160, 2) + 'px' : '2px',
-                background: 'linear-gradient(to top, #56cdf3, #719de3)',
+                background: `linear-gradient(to top, ${palette.series[6]}, ${palette.primary})`,
                 minHeight: '2px'
               }"
             />
@@ -222,6 +225,11 @@ onMounted(() => {
 
 <style scoped>
 .card-wrapper {
+  box-shadow: var(--brand-shadow-1);
   transition: box-shadow 0.2s;
+}
+
+.card-wrapper:hover {
+  box-shadow: var(--brand-shadow-2);
 }
 </style>

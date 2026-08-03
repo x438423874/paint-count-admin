@@ -209,7 +209,7 @@ export class WorkOrderController {
           fileName: file.filename,
           thumbnail: '',
           result: {
-            plateNumber: '', orderNo: '', customerName: '', phone: '', carModel: '', vin: '', brand: '', date: '', rawText: '', items: [],
+            plateNumber: '', orderNo: '', customerName: '', phone: '', carModel: '', carSeries: '', vin: '', brand: '', date: '', rawText: '', items: [],
           },
           warnings: [msg],
           valid: false,
@@ -709,7 +709,7 @@ export class WorkOrderController {
     // 数据权限：校验用户是否有权访问该门店
     await this.userShopService.assertShopAccess((request as any).user?.uid, shopId);
 
-    const config = await this.excelService.detectTemplateConfig(fileBuffer, shopId);
+    const config = await this.excelService.detectTemplateConfig(fileBuffer);
     return ApiRes.success(config);
   }
 
@@ -764,6 +764,27 @@ export class WorkOrderController {
     if (!Array.isArray(body.rules)) throw new BadRequestException('rules 必须是数组');
     await this.userShopService.assertShopAccess(req.user.uid, body.shopId);
     await this.noRuleService.saveRules(body.shopId, body.rules);
+    return ApiRes.ok();
+  }
+
+  @Get('ocr-config')
+  @ApiOperation({ summary: '获取门店OCR品牌/车型映射配置' })
+  async getOcrConfig(@Query('shopId') shopId: string, @Request() req: AuthenticatedRequest) {
+    if (!shopId) throw new BadRequestException('请指定门店');
+    await this.userShopService.assertShopAccess(req.user.uid, shopId);
+    const config = await this.workOrderService.getShopOcrConfig(shopId);
+    return ApiRes.success(config);
+  }
+
+  @Post('save-ocr-config')
+  @ApiOperation({ summary: '保存门店OCR品牌/车型映射配置' })
+  async saveOcrConfig(
+    @Body() body: { shopId: string; config: any },
+    @Request() req: AuthenticatedRequest,
+  ) {
+    if (!body.shopId || !body.config) throw new BadRequestException('参数不完整');
+    await this.userShopService.assertShopAccess(req.user.uid, body.shopId);
+    await this.workOrderService.saveShopOcrConfig(body.shopId, body.config);
     return ApiRes.ok();
   }
 

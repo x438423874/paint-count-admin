@@ -227,9 +227,9 @@ async function handleSave() {
   min-width: 0;
 }
 .image-section {
-  border: 1px solid #e8e8e8;
+  border: 1px solid var(--neutral-200);
   border-radius: 8px;
-  background: #fafafa;
+  background: var(--neutral-50);
   overflow: hidden;
 }
 .image-toolbar {
@@ -238,7 +238,7 @@ async function handleSave() {
   justify-content: center;
   gap: 10px;
   padding: 10px 12px;
-  border-bottom: 1px solid #e8e8e8;
+  border-bottom: 1px solid var(--neutral-200);
   background: #fff;
 }
 .zoom-text {

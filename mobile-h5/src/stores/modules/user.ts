@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import type { LoginData, UserState } from '@/api/user'
-import { clearToken, setRefreshToken, setToken } from '@/utils/auth'
+import { clearToken, getRefreshToken, setRefreshToken, setToken } from '@/utils/auth'
 import {
   getUserInfo,
   login as userLogin,
@@ -54,7 +54,7 @@ export const useUserStore = defineStore('user', () => {
 
   const logout = async () => {
     try {
-      await userLogout()
+      await userLogout(getRefreshToken())
     }
     catch {
       // 即使后端退出接口报错，也继续本地清理

@@ -326,7 +326,7 @@ onActivated(() => {
         @clear="onSearch"
       />
       <div class="filter-trigger" @click="showFilterPopup = true">
-        <van-icon name="filter-o" size="20" color="#1677ff" />
+        <van-icon name="filter-o" size="20" color="var(--color-primary)" />
         <span class="filter-text">筛选</span>
       </div>
     </div>
@@ -350,7 +350,7 @@ onActivated(() => {
           <div class="vehicle-card" @click="goToEdit(v.id)">
             <div class="card-top">
               <div class="plate-wrap">
-                <van-icon name="car-o" size="16" color="#1677ff" />
+                <van-icon name="logistics" size="16" color="var(--color-primary)" />
                 <span class="plate-number">{{ v.plateNumber }}</span>
               </div>
               <div class="card-tags">
@@ -430,7 +430,7 @@ onActivated(() => {
       <div class="filter-popup">
         <div class="filter-popup-header">
           <span class="filter-popup-title">筛选条件</span>
-          <van-icon name="cross" size="20" color="#999" @click="showFilterPopup = false" />
+          <van-icon name="cross" size="20" color="var(--text-tertiary)" @click="showFilterPopup = false" />
         </div>
         <div class="filter-popup-body">
           <van-cell-group inset>
@@ -464,7 +464,7 @@ onActivated(() => {
 <style lang="less" scoped>
 .vehicle-page {
   min-height: 100vh;
-  background: #f5f7fa;
+  background: var(--color-bg);
   padding-bottom: 120px;
 }
 
@@ -473,7 +473,7 @@ onActivated(() => {
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
-  background: #fff;
+  background: var(--color-surface);
 
   :deep(.van-search) {
     flex: 1;
@@ -493,7 +493,7 @@ onActivated(() => {
 
 .filter-text {
   font-size: 11px;
-  color: #1677ff;
+  color: var(--color-primary);
 }
 
 .summary-bar {
@@ -501,9 +501,9 @@ onActivated(() => {
   justify-content: space-between;
   align-items: center;
   padding: 10px 16px;
-  background: #f5f7fa;
+  background: var(--color-bg);
   font-size: 13px;
-  color: #666;
+  color: var(--text-secondary);
 }
 
 .vehicle-list {
@@ -514,7 +514,7 @@ onActivated(() => {
 }
 
 .vehicle-card {
-  background: #fff;
+  background: var(--color-surface);
   border-radius: 12px;
   padding: 14px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.03);
@@ -536,7 +536,7 @@ onActivated(() => {
 .plate-number {
   font-size: 16px;
   font-weight: 700;
-  color: #333;
+  color: var(--text-regular);
 }
 
 .card-tags {
@@ -560,19 +560,19 @@ onActivated(() => {
 
 .info-label {
   font-size: 11px;
-  color: #999;
+  color: var(--text-tertiary);
 }
 
 .info-value {
   font-size: 13px;
-  color: #333;
+  color: var(--text-regular);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .paint-count {
-  color: #1677ff;
+  color: var(--color-primary);
   font-weight: 600;
 }
 
@@ -581,15 +581,15 @@ onActivated(() => {
   justify-content: space-between;
   align-items: center;
   padding-top: 10px;
-  border-top: 1px solid #f5f5f5;
+  border-top: 1px solid var(--neutral-100);
 }
 
 .visit-info {
   font-size: 12px;
-  color: #999;
+  color: var(--text-tertiary);
 
   .shop-name {
-    color: #666;
+    color: var(--text-secondary);
   }
 }
 
@@ -607,7 +607,7 @@ onActivated(() => {
   text-align: center;
   padding: 20px 0;
   font-size: 12px;
-  color: #999;
+  color: var(--text-tertiary);
 }
 
 .scroll-sentinel {
@@ -621,7 +621,7 @@ onActivated(() => {
   width: 52px;
   height: 52px;
   border-radius: 26px;
-  background: linear-gradient(135deg, #1677ff, #4096ff);
+  background: linear-gradient(135deg, var(--color-primary), color-mix(in srgb, var(--color-primary) 60%, #fff));
   display: flex;
   align-items: center;
   justify-content: center;
@@ -633,7 +633,7 @@ onActivated(() => {
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: #f5f7fa;
+  background: var(--color-bg);
 }
 
 .filter-popup-header {
@@ -641,13 +641,13 @@ onActivated(() => {
   justify-content: space-between;
   align-items: center;
   padding: 16px;
-  background: #fff;
+  background: var(--color-surface);
 }
 
 .filter-popup-title {
   font-size: 16px;
   font-weight: 600;
-  color: #333;
+  color: var(--text-regular);
 }
 
 .filter-popup-body {
@@ -660,7 +660,7 @@ onActivated(() => {
   display: flex;
   gap: 12px;
   padding: 12px 16px;
-  background: #fff;
-  border-top: 1px solid #f0f0f0;
+  background: var(--color-surface);
+  border-top: 1px solid var(--color-border);
 }
 </style>

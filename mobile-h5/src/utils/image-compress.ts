@@ -14,13 +14,30 @@ export async function compressImage(
   maxSize = 1920,
   quality = 0.8,
 ): Promise<File> {
-  const bitmap = await createImageBitmap(file)
-  const canvas = resizeCanvas(bitmap, maxSize)
-  const blob = await canvasToBlob(canvas, quality)
-  bitmap.close()
-  canvas.width = 0
-  canvas.height = 0
-  return new File([blob], file.name, { type: 'image/jpeg' })
+  const originalSize = file.size
+  try {
+    // 先尝试按图片自带方向解码（修复微信/iOS 图片被旋转或解码异常的坑）
+    let bitmap: ImageBitmap
+    try {
+      bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' })
+    } catch {
+      bitmap = await createImageBitmap(file)
+    }
+    const canvas = resizeCanvas(bitmap, maxSize)
+    const blob = await canvasToBlob(canvas, quality)
+    bitmap.close()
+    canvas.width = 0
+    canvas.height = 0
+
+    // 压缩产物异常（如移动端把微信图压成 1x1 空白）时，回退使用原图，避免存成空白图
+    if (!blob || blob.size === 0) return file
+    const isTiny = originalSize > 50 * 1024 && blob.size < 3 * 1024
+    if (isTiny) return file
+    return new File([blob], file.name, { type: 'image/jpeg' })
+  } catch {
+    // 压缩失败（如浏览器不支持 createImageBitmap），直接用原图
+    return file
+  }
 }
 
 function resizeCanvas(bitmap: ImageBitmap, maxSize: number): HTMLCanvasElement {

@@ -113,7 +113,7 @@ async function handleLogin() {
 <style lang="less" scoped>
 .login-page {
   min-height: 100vh;
-  background: #f5f7fa;
+  background: var(--color-bg);
 }
 
 .login-header {
@@ -128,7 +128,7 @@ async function handleLogin() {
   left: 0;
   right: 0;
   bottom: 0;
-  background: linear-gradient(135deg, #1677ff 0%, #4096ff 50%, #69b1ff 100%);
+  background: linear-gradient(135deg, var(--color-primary) 0%, color-mix(in srgb, var(--color-primary) 60%, #fff) 50%, #fff 100%);
   border-radius: 0 0 30px 30px;
 }
 
@@ -173,7 +173,7 @@ async function handleLogin() {
 }
 
 .form-card {
-  background: #fff;
+  background: var(--color-surface);
   border-radius: 12px;
   overflow: hidden;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
@@ -183,7 +183,7 @@ async function handleLogin() {
   }
 
   :deep(.van-field + .van-field) {
-    border-top: 1px solid #f5f5f5;
+    border-top: 1px solid var(--neutral-100);
   }
 }
 
@@ -193,7 +193,7 @@ async function handleLogin() {
   font-size: 17px;
   font-weight: 600;
   letter-spacing: 4px;
-  background: linear-gradient(135deg, #1677ff, #4096ff);
+  background: linear-gradient(135deg, var(--color-primary), color-mix(in srgb, var(--color-primary) 60%, #fff));
   border: none;
   box-shadow: 0 4px 12px rgba(22, 119, 255, 0.35);
 }

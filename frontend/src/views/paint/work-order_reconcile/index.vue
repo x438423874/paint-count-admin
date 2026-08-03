@@ -24,6 +24,7 @@ import {
   useMessage,
   useDialog
 } from 'naive-ui';
+import EmptyState from '@/components/common/EmptyState.vue';
 import {
   fetchPaintShopList,
   reconcileWorkOrderExcel,
@@ -281,7 +282,7 @@ const columns = [
     width: 100,
     render: (row: ReconcileItem) => {
       if (row.diff === undefined) return '-';
-      return <span style={{ color: Math.abs(row.diff) < 0.001 ? '#18a058' : '#d03050' }}>{row.diff > 0 ? `+${row.diff.toFixed(2)}` : row.diff.toFixed(2)}</span>;
+      return <span style={{ color: Math.abs(row.diff) < 0.001 ? 'var(--color-success)' : 'var(--color-error)' }}>{row.diff > 0 ? `+${row.diff.toFixed(2)}` : row.diff.toFixed(2)}</span>;
     }
   },
   {
@@ -529,7 +530,11 @@ loadShops();
             size="small"
             :scroll-x="980"
             :row-class-name="(row: ReconcileItem) => row.type"
-          />
+          >
+            <template #empty>
+              <EmptyState description="暂无对账明细" />
+            </template>
+          </NDataTable>
         </template>
         <NEmpty v-else description="请选择门店、月份并上传 Excel 对账表" class="py-60px" />
       </NSpin>
@@ -541,18 +546,18 @@ loadShops();
 
 <style scoped>
 :deep(.diff) {
-  background-color: #fff0f0;
+  background-color: var(--color-error-bg);
 }
 :deep(.missing_in_system) {
-  background-color: #fff7e6;
+  background-color: var(--color-warning-bg);
 }
 :deep(.extra_in_system) {
-  background-color: #e6f7ff;
+  background-color: var(--color-info-bg);
 }
 :deep(.duplicate) {
-  background-color: #f6ffed;
+  background-color: var(--color-success-bg);
 }
 :deep(.matched) {
-  background-color: #f9fff9;
+  background-color: var(--color-success-bg);
 }
 </style>

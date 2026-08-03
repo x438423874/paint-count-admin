@@ -208,7 +208,7 @@ onMounted(() => {
       @click-left="router.back()"
     >
       <template v-if="mode === 'edit' && vehicleId" #right>
-        <van-icon name="orders-o" size="20" color="#1677ff" @click="goHistory" />
+        <van-icon name="orders-o" size="20" color="var(--color-primary)" @click="goHistory" />
       </template>
     </van-nav-bar>
 
@@ -218,57 +218,81 @@ onMounted(() => {
 
     <template v-else>
       <div class="form-section">
-        <van-cell-group inset>
-          <van-field
-            v-model="form.plateNumber"
-            label="车牌号"
-            placeholder="如：粤B12345"
-            required
-            :error-message="plateError"
-            @blur="onPlateNumberBlur"
-          />
-          <van-field
-            v-model="form.vin"
-            label="车架号"
-            placeholder="17位VIN（选填）"
-            :error-message="vinError"
-          />
-          <van-field
-            v-model="form.carModel"
-            label="车型"
-            placeholder="如：别克英朗"
-          />
-          <van-field
-            v-model="form.brand"
-            label="品牌"
-            placeholder="如：别克"
-          />
-          <van-field
-            v-model="form.customerName"
-            label="客户名称"
-            placeholder="客户名称"
-          />
-          <van-field
-            v-model="form.phone"
-            label="电话"
-            placeholder="联系电话"
-            type="tel"
-            :error-message="phoneError"
-          />
-          <van-field
-            v-model="form.contactPerson"
-            label="联系人"
-            placeholder="联系人"
-          />
-          <van-field
-            v-model="form.remark"
-            label="备注"
-            placeholder="备注"
-            type="textarea"
-            rows="2"
-            autosize
-          />
-        </van-cell-group>
+        <!-- 车辆信息 -->
+        <div class="form-group">
+          <div class="group-title">
+            车辆信息
+          </div>
+          <van-cell-group inset>
+            <van-field
+              v-model="form.plateNumber"
+              label="车牌号"
+              placeholder="如：粤B12345"
+              required
+              :error-message="plateError"
+              @blur="onPlateNumberBlur"
+            />
+            <van-field
+              v-model="form.vin"
+              label="车架号"
+              placeholder="17位VIN（选填）"
+              :error-message="vinError"
+            />
+            <van-field
+              v-model="form.carModel"
+              label="车型"
+              placeholder="如：别克英朗"
+            />
+            <van-field
+              v-model="form.brand"
+              label="品牌"
+              placeholder="如：别克"
+            />
+          </van-cell-group>
+        </div>
+
+        <!-- 客户信息 -->
+        <div class="form-group">
+          <div class="group-title">
+            客户信息
+          </div>
+          <van-cell-group inset>
+            <van-field
+              v-model="form.customerName"
+              label="客户名称"
+              placeholder="客户名称"
+            />
+            <van-field
+              v-model="form.phone"
+              label="电话"
+              placeholder="联系电话"
+              type="tel"
+              :error-message="phoneError"
+            />
+            <van-field
+              v-model="form.contactPerson"
+              label="联系人"
+              placeholder="联系人"
+            />
+          </van-cell-group>
+        </div>
+
+        <!-- 备注 -->
+        <div class="form-group">
+          <div class="group-title">
+            备注
+          </div>
+          <van-cell-group inset>
+            <van-field
+              v-model="form.remark"
+              label="备注"
+              placeholder="备注"
+              type="textarea"
+              rows="2"
+              autosize
+            />
+          </van-cell-group>
+        </div>
       </div>
 
       <!-- 车牌查重提示 -->
@@ -278,6 +302,9 @@ onMounted(() => {
 
       <!-- 统计信息（编辑模式） -->
       <div v-if="mode === 'edit' && vehicleData" class="stats-section">
+        <div class="group-title">
+          车辆统计
+        </div>
         <van-cell-group inset>
           <van-cell title="累计工单" :value="`${vehicleData.totalOrderCount} 单`" />
           <van-cell title="累计幅数" :value="`${Number(vehicleData.totalPaintCount).toFixed(1)} 幅`" />
@@ -324,7 +351,7 @@ onMounted(() => {
 <style lang="less" scoped>
 .vehicle-edit-page {
   min-height: 100vh;
-  background: #f5f7fa;
+  background: var(--color-bg);
   padding-bottom: 100px;
 }
 
@@ -336,6 +363,39 @@ onMounted(() => {
 
 .form-section {
   margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.group-title {
+  display: flex;
+  align-items: center;
+  padding: 0 16px 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+
+  &::before {
+    content: '';
+    display: inline-block;
+    width: 3px;
+    height: 13px;
+    margin-right: 6px;
+    border-radius: 2px;
+    background: var(--color-primary);
+  }
+}
+
+.stats-section {
+  .group-title {
+    padding-top: 4px;
+  }
 }
 
 .conflict-tip {

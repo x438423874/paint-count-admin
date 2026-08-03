@@ -1,5 +1,5 @@
 <script setup lang="tsx">
-import { NButton, NPopconfirm, NTag, NSpace, NSelect } from 'naive-ui';
+import { NButton, NPopconfirm, NTag, NSpace, NSelect, NInput, NText, NEmpty } from 'naive-ui';
 import { ref } from 'vue';
 import { fetchPaintShopPage, deletePaintShop, fetchStandardTemplateList, applyTemplateToShop } from '@/service/api';
 import { useTable, useTableOperate } from '@/hooks/common/table';
@@ -120,6 +120,7 @@ const {
       title: '操作',
       align: 'center',
       width: 420,
+      fixed: 'right',
       render: (row: any) => (
         <div class="flex-center gap-8px">
           {allowManageShop && (
@@ -246,6 +247,33 @@ async function handleDelete(id: string) {
         </TableHeaderOperation>
       </template>
 
+      <NSpace align="center" :wrap="true" :size="[16, 12]" class="mb-12px">
+        <NSpace align="center" :size="6">
+          <NText depth="3" style="white-space: nowrap;">门店名称</NText>
+          <NInput
+            :value="searchParams.name || ''"
+            placeholder="搜索门店名称"
+            clearable
+            style="width: 180px"
+            @update:value="(val: string) => { searchParams.name = val || undefined; }"
+            @keyup.enter="getDataByPage()"
+          />
+        </NSpace>
+        <NSpace align="center" :size="6">
+          <NText depth="3" style="white-space: nowrap;">品牌</NText>
+          <NInput
+            :value="searchParams.brand || ''"
+            placeholder="搜索品牌"
+            clearable
+            style="width: 140px"
+            @update:value="(val: string) => { searchParams.brand = val || undefined; }"
+            @keyup.enter="getDataByPage()"
+          />
+        </NSpace>
+        <NButton type="primary" @click="getDataByPage()">搜索</NButton>
+        <NButton @click="resetSearchParams(); getDataByPage()">重置</NButton>
+      </NSpace>
+
       <NAlert type="info" class="mb-12px">
         未关联模板的门店可直接点击"关联"按钮一键选择模板，无需进入编辑页面。
       </NAlert>
@@ -255,14 +283,25 @@ async function handleDelete(id: string) {
         :columns="columns"
         :data="data"
         size="small"
+        striped
         :flex-height="true"
         :scroll-x="1000"
         :loading="loading"
         remote
         :row-key="(row: any) => row.id"
         :pagination="mobilePagination"
-        class="sm:h-full"
-      />
+        class="sm:h-full paint-table"
+      >
+        <template #empty>
+          <EmptyState description="暂无门店数据">
+            <template #action>
+              <NButton v-if="allowManageShop" text type="primary" size="small" @click="handleAdd">
+                点击新增门店
+              </NButton>
+            </template>
+          </EmptyState>
+        </template>
+      </NDataTable>
 
       <ShopOperateDrawer
         v-model:visible="drawerVisible"
@@ -286,4 +325,8 @@ async function handleDelete(id: string) {
   </div>
 </template>
 
-<style scoped></style>
+<style scoped>
+.paint-table :deep(.n-data-table-tr:hover .n-data-table-td) {
+  background-color: color-mix(in srgb, rgb(var(--primary-color)) 8%, transparent);
+}
+</style>

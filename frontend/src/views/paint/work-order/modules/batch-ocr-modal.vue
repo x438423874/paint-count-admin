@@ -161,7 +161,7 @@ const columns = [
               <NTag
                 size="tiny"
                 type={it.matched ? 'success' : 'warning'}
-                style={it.matched ? '' : 'color:#ee0a24'}
+                style={it.matched ? '' : 'color: var(--color-error)'}
               >
                 {it.matched ? label : `${it.rawText}→${label}`}
               </NTag>

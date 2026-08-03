@@ -2,10 +2,13 @@
 import { computed } from 'vue';
 import { createReusableTemplate } from '@vueuse/core';
 import { $t } from '@/locales';
+import { getChartPalette } from '@/utils/chart';
 
 defineOptions({
   name: 'CardData'
 });
+
+const palette = getChartPalette();
 
 interface CardData {
   key: string;
@@ -26,8 +29,8 @@ const cardData = computed<CardData[]>(() => [
     value: 9725,
     unit: '',
     color: {
-      start: '#ec4786',
-      end: '#b955a4'
+      start: palette.primary,
+      end: palette.series[1]
     },
     icon: 'ant-design:bar-chart-outlined'
   },
@@ -37,8 +40,8 @@ const cardData = computed<CardData[]>(() => [
     value: 1026,
     unit: '$',
     color: {
-      start: '#865ec0',
-      end: '#5144b4'
+      start: palette.series[2],
+      end: palette.series[7]
     },
     icon: 'ant-design:money-collect-outlined'
   },
@@ -48,8 +51,8 @@ const cardData = computed<CardData[]>(() => [
     value: 970925,
     unit: '',
     color: {
-      start: '#56cdf3',
-      end: '#719de3'
+      start: palette.series[6],
+      end: palette.primary
     },
     icon: 'carbon:document-download'
   },
@@ -59,8 +62,8 @@ const cardData = computed<CardData[]>(() => [
     value: 9527,
     unit: '',
     color: {
-      start: '#fcbc25',
-      end: '#f68057'
+      start: palette.series[3],
+      end: palette.series[8]
     },
     icon: 'ant-design:trademark-circle-outlined'
   }

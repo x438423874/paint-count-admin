@@ -118,6 +118,20 @@ function goToStatistics() {
   router.push({ name: 'Statistics' })
 }
 
+function goToVehicle() {
+  router.push({ name: 'Vehicle' })
+}
+
+function goToImagePool() {
+  router.push({ name: 'PendingImage' })
+}
+
+// 携带状态筛选跳转工单列表（工单页 onMounted/onActivated 读取该标记）
+function goToOrderListWithStatus(status?: string) {
+  if (status) sessionStorage.setItem('work-order-status-query', status)
+  router.push({ name: 'WorkOrder' })
+}
+
 function formatOrderDate(dateStr?: string) {
   if (!dateStr) return '-'
   return dateStr.slice(0, 10)
@@ -221,36 +235,58 @@ onMounted(async () => {
         </div>
       </div>
 
-      <!-- 快捷入口 -->
-      <div class="quick-actions">
-        <div class="quick-card create" @click="goToCreate">
-          <div class="quick-icon">
-            <van-icon name="photograph" size="26" color="#fff" />
-          </div>
-          <div class="quick-text">
-            <div class="quick-title">
-              拍照建单
-            </div>
-            <div class="quick-desc">
-              自动识别工单信息
-            </div>
-          </div>
-          <van-icon name="arrow" color="rgba(255,255,255,0.8)" size="18" />
+      <!-- 待办横幅 -->
+      <div class="todo-banner">
+        <div class="todo-item" @click="goToOrderListWithStatus('PENDING')">
+          <span class="todo-value todo-warning">{{ overview?.pendingOrders || 0 }}</span>
+          <span class="todo-label">待审核</span>
         </div>
-        <div class="quick-card stats" @click="goToStatistics">
-          <div class="quick-icon">
-            <van-icon name="chart-trending-o" size="26" color="#fff" />
-          </div>
-          <div class="quick-text">
-            <div class="quick-title">
-              数据统计
-            </div>
-            <div class="quick-desc">
-              查看月度分析
-            </div>
-          </div>
-          <van-icon name="arrow" color="rgba(255,255,255,0.8)" size="18" />
+        <div class="todo-divider" />
+        <div class="todo-item" @click="goToOrderListWithStatus('ABNORMAL')">
+          <span class="todo-value todo-danger">{{ overview?.abnormalOrders || 0 }}</span>
+          <span class="todo-label">异常</span>
         </div>
+      </div>
+
+      <!-- 功能宫格 -->
+      <div class="func-grid">
+        <div class="func-item" @click="goToCreate">
+          <div class="func-icon func-primary">
+            <van-icon name="photograph" size="22" color="#fff" />
+          </div>
+          <span class="func-label">拍照建单</span>
+        </div>
+        <div class="func-item" @click="goToOrderList">
+          <div class="func-icon func-info">
+            <van-icon name="orders-o" size="22" color="#fff" />
+          </div>
+          <span class="func-label">工单列表</span>
+        </div>
+        <div class="func-item" @click="goToVehicle">
+          <div class="func-icon func-success">
+            <van-icon name="logistics" size="22" color="#fff" />
+          </div>
+          <span class="func-label">车辆管理</span>
+        </div>
+        <div class="func-item" @click="goToImagePool">
+          <div class="func-icon func-warning">
+            <van-icon name="photo-o" size="22" color="#fff" />
+          </div>
+          <span class="func-label">图片池</span>
+        </div>
+      </div>
+
+      <!-- 数据分析入口 -->
+      <div class="data-card" @click="goToStatistics">
+        <div class="data-text">
+          <div class="data-title">
+            数据统计
+          </div>
+          <div class="data-desc">
+            月度幅数 · 门店 · 部位分析
+          </div>
+        </div>
+        <van-icon name="chart-trending-o" size="28" color="#fff" />
       </div>
 
       <!-- 状态概览 -->
@@ -265,9 +301,9 @@ onMounted(async () => {
           </div>
         </div>
         <div class="overview-grid">
-          <div class="overview-card" @click="goToOrderList">
+          <div class="overview-card" @click="goToOrderListWithStatus('AUDITED')">
             <div class="overview-icon audited">
-              <van-icon name="passed" size="18" color="#1677ff" />
+              <van-icon name="passed" size="18" color="var(--color-primary)" />
             </div>
             <div class="overview-info">
               <div class="overview-value">
@@ -278,7 +314,7 @@ onMounted(async () => {
               </div>
             </div>
           </div>
-          <div class="overview-card" @click="goToOrderList">
+          <div class="overview-card" @click="goToOrderListWithStatus('SETTLED')">
             <div class="overview-icon settled">
               <van-icon name="balance-pay" size="18" color="#52c41a" />
             </div>
@@ -291,9 +327,9 @@ onMounted(async () => {
               </div>
             </div>
           </div>
-          <div class="overview-card" @click="goToOrderList">
+          <div class="overview-card" @click="goToOrderListWithStatus('ABNORMAL')">
             <div class="overview-icon abnormal">
-              <van-icon name="warning-o" size="18" color="#ff4d4f" />
+              <van-icon name="warning-o" size="18" color="var(--color-error)" />
             </div>
             <div class="overview-info">
               <div class="overview-value">
@@ -304,9 +340,9 @@ onMounted(async () => {
               </div>
             </div>
           </div>
-          <div class="overview-card" @click="goToOrderList">
+          <div class="overview-card" @click="goToStatistics">
             <div class="overview-icon rate">
-              <van-icon name="chart-o" size="18" color="#fa8c16" />
+              <van-icon name="chart-o" size="18" color="var(--color-warning)" />
             </div>
             <div class="overview-info">
               <div class="overview-value">
@@ -418,12 +454,12 @@ onMounted(async () => {
 <style lang="less" scoped>
 .home-page {
   min-height: 100vh;
-  background: #f5f7fa;
+  background: var(--color-bg);
   padding-bottom: 80px;
 }
 
 .header {
-  background: linear-gradient(135deg, #1677ff 0%, #4096ff 100%);
+  background: linear-gradient(135deg, var(--color-primary) 0%, color-mix(in srgb, var(--color-primary) 60%, #fff) 100%);
   border-radius: 0 0 24px 24px;
   padding: 44px 16px 24px;
   color: #fff;
@@ -506,54 +542,123 @@ onMounted(async () => {
   margin-top: -10px;
 }
 
-.quick-card {
-  border-radius: 16px;
-  padding: 16px;
+/* 待办横幅 */
+.todo-banner {
   display: flex;
   align-items: center;
+  margin: 0 16px;
+  padding: 14px 8px;
+  background: var(--color-surface);
+  border-radius: 16px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+}
+
+.todo-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.todo-value {
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.todo-warning {
+  color: var(--color-warning);
+}
+
+.todo-danger {
+  color: var(--color-danger);
+}
+
+.todo-label {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.todo-divider {
+  width: 1px;
+  height: 28px;
+  background: var(--color-border);
+}
+
+/* 功能宫格 */
+.func-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
   gap: 12px;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+  padding: 16px;
 }
 
-.quick-card.create {
-  background: linear-gradient(135deg, #52c41a 0%, #95de64 100%);
+.func-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
 }
 
-.quick-card.stats {
-  background: linear-gradient(135deg, #722ed1 0%, #b37feb 100%);
-}
-
-.quick-icon {
-  width: 44px;
-  height: 44px;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.2);
+.func-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
   display: flex;
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
 }
 
-.quick-text {
-  flex: 1;
-  min-width: 0;
+.func-primary {
+  background: linear-gradient(135deg, var(--color-primary) 0%, #fff 100%);
 }
 
-.quick-title {
-  font-size: 15px;
+.func-info {
+  background: linear-gradient(135deg, #13c2c2 0%, #5cdbd3 100%);
+}
+
+.func-success {
+  background: linear-gradient(135deg, #52c41a 0%, #95de64 100%);
+}
+
+.func-warning {
+  background: linear-gradient(135deg, var(--color-warning) 0%, #ffc069 100%);
+}
+
+.func-label {
+  font-size: 12px;
+  color: var(--color-text);
+}
+
+/* 数据分析入口卡 */
+.data-card {
+  margin: 0 16px 16px;
+  padding: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #722ed1 0%, #b37feb 100%);
+  box-shadow: 0 4px 14px rgba(114, 46, 209, 0.2);
+}
+
+.data-title {
+  font-size: 16px;
   font-weight: 600;
   color: #fff;
-  margin-bottom: 2px;
+  margin-bottom: 4px;
 }
 
-.quick-desc {
-  font-size: 11px;
+.data-desc {
+  font-size: 12px;
   color: rgba(255, 255, 255, 0.85);
 }
 
 .section {
   margin: 0 16px 16px;
-  background: #fff;
+  background: var(--color-surface);
   border-radius: 16px;
   padding: 16px;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.03);
@@ -569,7 +674,7 @@ onMounted(async () => {
 .section-title {
   font-size: 16px;
   font-weight: 600;
-  color: #333;
+  color: var(--text-regular);
 }
 
 .section-more {
@@ -577,7 +682,7 @@ onMounted(async () => {
   align-items: center;
   gap: 2px;
   font-size: 13px;
-  color: #1677ff;
+  color: var(--color-primary);
 }
 
 .overview-grid {
@@ -591,7 +696,7 @@ onMounted(async () => {
   align-items: center;
   gap: 12px;
   padding: 14px;
-  background: #f8fafc;
+  background: var(--color-bg);
   border-radius: 12px;
 }
 
@@ -606,23 +711,23 @@ onMounted(async () => {
 }
 
 .overview-icon.audited {
-  background: #e6f4ff;
+  background: var(--color-info-bg);
 }
 
 .overview-icon.settled {
-  background: #f6ffed;
+  background: var(--color-success-bg);
 }
 
 .overview-icon.abnormal {
-  background: #fff1f0;
+  background: var(--color-error-bg);
 }
 
 .overview-icon.rate {
-  background: #fff7e6;
+  background: var(--color-warning-bg);
 }
 
 .overview-icon.rework {
-  background: #fff1f3;
+  background: var(--color-error-bg);
 }
 
 .overview-info {
@@ -632,13 +737,13 @@ onMounted(async () => {
 .overview-value {
   font-size: 18px;
   font-weight: 700;
-  color: #333;
+  color: var(--text-regular);
   margin-bottom: 2px;
 }
 
 .overview-label {
   font-size: 12px;
-  color: #999;
+  color: var(--text-tertiary);
 }
 
 .loading-wrap {
@@ -656,7 +761,7 @@ onMounted(async () => {
   justify-content: space-between;
   align-items: center;
   padding: 14px;
-  background: #f8fafc;
+  background: var(--color-bg);
   border-radius: 12px;
 }
 
@@ -668,13 +773,13 @@ onMounted(async () => {
 .order-plate {
   font-size: 16px;
   font-weight: 700;
-  color: #333;
+  color: var(--text-regular);
   margin-bottom: 4px;
 }
 
 .order-no {
   font-size: 12px;
-  color: #666;
+  color: var(--text-secondary);
   margin-bottom: 6px;
 }
 
@@ -683,7 +788,7 @@ onMounted(async () => {
   align-items: center;
   gap: 6px;
   font-size: 12px;
-  color: #999;
+  color: var(--text-tertiary);
 }
 
 .meta-dot {
@@ -706,11 +811,11 @@ onMounted(async () => {
 .count-value {
   font-size: 18px;
   font-weight: 700;
-  color: #1677ff;
+  color: var(--color-primary);
 }
 
 .count-unit {
   font-size: 11px;
-  color: #999;
+  color: var(--text-tertiary);
 }
 </style>

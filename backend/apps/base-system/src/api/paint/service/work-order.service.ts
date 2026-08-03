@@ -583,73 +583,62 @@ export class WorkOrderService {
       return { current, size, total: 0, records: [] };
     }
 
-    // 并行：1) 轻量字段查询用于重复识别和排序 2) 总幅数聚合 3) 总数 count
-    // 注意：重复工单需全局识别（同 orderNo+settlementMonth 出现>1 次），无法直接数据库分页
-    // 优化点：select 仅必要字段，配合索引；聚合用 _sum 避免 reduce 全量数据到内存
-    const [allOrders, totalPaintCountAgg] = await Promise.all([
-      this.prisma.paintWorkOrder.findMany({
-        where,
-        select: { id: true, orderNo: true, settlementMonth: true, createdAt: true },
-        orderBy: [{ orderNo: 'asc' }, { createdAt: 'asc' }],
-      }),
+    // 总数与总幅数聚合（数据库侧计算，避免全量载入内存）
+    const [total, totalPaintCountAgg] = await Promise.all([
+      this.prisma.paintWorkOrder.count({ where }),
       this.prisma.paintWorkOrder.aggregate({
         where,
         _sum: { totalPaintCount: true },
       }),
     ]);
 
-    // 统计每个 orderNo+settlementMonth 组合出现次数（同号不同月不算重复）
-    const orderNoMonthCount = new Map<string, number>();
-    allOrders.forEach(order => {
-      if (order.orderNo) {
-        const key = `${order.orderNo}|${order.settlementMonth || ''}`;
-        orderNoMonthCount.set(key, (orderNoMonthCount.get(key) || 0) + 1);
+    // 重复工单识别：仅对去重的 orderNo+settlementMonth 组合做 groupBy（结果集远小于全部工单，内存可控），
+    // 避免为全局重复置顶而把全部门店工单一次性载入内存
+    const orderNoMonthGroups = await this.prisma.paintWorkOrder.groupBy({
+      by: ['orderNo', 'settlementMonth'],
+      where,
+      _count: { _all: true },
+    });
+    const duplicateCountMap = new Map<string, number>();
+    for (const g of orderNoMonthGroups) {
+      if (g.orderNo && (g._count._all ?? 0) > 1) {
+        duplicateCountMap.set(`${g.orderNo}|${g.settlementMonth || ''}`, g._count._all);
       }
+    }
+
+    // 数据库侧分页 + 排序（核心优化：不再全量载入）
+    const pageRecords = await this.prisma.paintWorkOrder.findMany({
+      where,
+      include: {
+        items: { include: { category: true, specialPaint: true } },
+        // 列表页仅查询首图，避免图片过多导致响应臃肿
+        images: { orderBy: { createdAt: 'desc' }, take: 1 },
+        shop: { select: { id: true, name: true, code: true } },
+      },
+      orderBy: [{ orderNo: 'asc' }, { createdAt: 'asc' }],
+      skip: (current - 1) * size,
+      take: size,
     });
 
-    // 重复工单全局优先显示，同 orderNo+settlementMonth 按创建时间排序
-    const sortedOrders = allOrders.sort((a, b) => {
-      const aKey = `${a.orderNo}|${a.settlementMonth || ''}`;
-      const bKey = `${b.orderNo}|${b.settlementMonth || ''}`;
-      const aDup = a.orderNo && (orderNoMonthCount.get(aKey) || 0) > 1 ? 0 : 1;
-      const bDup = b.orderNo && (orderNoMonthCount.get(bKey) || 0) > 1 ? 0 : 1;
-      if (aDup !== bDup) return aDup - bDup;
-      if (a.orderNo !== b.orderNo) return (a.orderNo || '').localeCompare(b.orderNo || '');
-      return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
-    });
-
-    const total = sortedOrders.length;
-    const pageIds = sortedOrders
-      .slice((current - 1) * size, current * size)
-      .map(order => order.id);
-
-    const records = pageIds.length > 0
-      ? await this.prisma.paintWorkOrder.findMany({
-          where: { id: { in: pageIds } },
-          include: {
-            items: { include: { category: true, specialPaint: true } },
-            // 列表页仅查询首图，避免图片过多导致响应臃肿
-            images: { orderBy: { createdAt: 'desc' }, take: 1 },
-            shop: { select: { id: true, name: true, code: true } },
-          },
-        })
-      : [];
-
-    // 按排序后的 id 顺序整理记录
-    const recordMap = new Map(records.map(record => [record.id, record]));
-    const orderedRecords = pageIds
-      .map(id => recordMap.get(id))
-      .filter((record): record is NonNullable<typeof record> => !!record);
-
-    const enrichedRecords = orderedRecords.map(record => {
-      const normalized = this.applyDerivedStatus(record);
-      const monthKey = `${record.orderNo || ''}|${record.settlementMonth || ''}`;
-      return {
-        ...normalized,
-        _duplicateCount: orderNoMonthCount.get(monthKey) || 1,
-        _isDuplicate: (orderNoMonthCount.get(monthKey) || 1) > 1,
-      };
-    });
+    // 单页内将重复工单置顶（稳定排序，保持 orderNo/createdAt 顺序），仅对小页数据排序，内存可控
+    const enrichedRecords = pageRecords
+      .map(record => {
+        const normalized = this.applyDerivedStatus(record);
+        const monthKey = `${record.orderNo || ''}|${record.settlementMonth || ''}`;
+        const dupCount = duplicateCountMap.get(monthKey) || 1;
+        return {
+          ...normalized,
+          _duplicateCount: dupCount,
+          _isDuplicate: dupCount > 1,
+        };
+      })
+      .sort((a, b) => {
+        const ad = a._isDuplicate ? 0 : 1;
+        const bd = b._isDuplicate ? 0 : 1;
+        if (ad !== bd) return ad - bd;
+        if ((a.orderNo || '') !== (b.orderNo || '')) return (a.orderNo || '').localeCompare(b.orderNo || '');
+        return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+      });
 
     // 批量查询当前页涉及的所有门店+月份的封单状态
     const shopMonthPairs = new Set<string>();
@@ -847,6 +836,18 @@ export class WorkOrderService {
     const shop = await this.prisma.paintShop.findUnique({ where: { id: shopId }, select: { excelTemplateConfig: true } });
     if (!shop) throw new NotFoundException('门店不存在');
     return shop.excelTemplateConfig ? JSON.parse(shop.excelTemplateConfig) : null;
+  }
+
+  /** 获取门店的 OCR 品牌/车型映射配置 */
+  async getShopOcrConfig(shopId: string): Promise<any | null> {
+    const shop = await this.prisma.paintShop.findUnique({ where: { id: shopId }, select: { ocrConfig: true } });
+    if (!shop) throw new NotFoundException('门店不存在');
+    return shop.ocrConfig ? JSON.parse(shop.ocrConfig) : null;
+  }
+
+  /** 保存门店的 OCR 品牌/车型映射配置 */
+  async saveShopOcrConfig(shopId: string, config: any): Promise<void> {
+    await this.prisma.paintShop.update({ where: { id: shopId }, data: { ocrConfig: JSON.stringify(config) } });
   }
 
   private async generateOrderNo(shopId: string, tx?: Prisma.TransactionClient): Promise<string> {

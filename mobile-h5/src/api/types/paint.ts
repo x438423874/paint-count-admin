@@ -111,6 +111,16 @@ export interface PaintWorkOrder {
   _duplicateCount?: number
 }
 
+export interface PaintOrderImage {
+  id: string
+  orderId: string
+  url: string
+  type: PaintImageType
+  uploaderId?: string
+  uploaderName?: string
+  createdAt: string
+}
+
 export interface CreateWorkOrderDto {
   orderNo?: string
   shopId: string
@@ -366,3 +376,59 @@ export interface SettlementRecord {
   remark?: string
   createdAt: string
 }
+
+// ===== 图片池 =====
+
+export type PendingImageStatus = 'PENDING' | 'MATCHED' | 'NEEDS_REVIEW' | 'MANUAL' | 'FAILED'
+
+/** OCR 生命周期状态（与匹配 status 解耦，支持上传后异步识别） */
+export type OcrStatus = 'PENDING' | 'PROCESSING' | 'DONE' | 'FAILED'
+
+export interface PaintPendingImage {
+  id: string
+  shopId: string
+  settlementMonth?: string | null
+  url: string
+  thumbnailUrl?: string | null
+  fileSize?: number | null
+  ocrOrderNo?: string | null
+  ocrPlateNumber?: string | null
+  ocrVin?: string | null
+  ocrCarModel?: string | null
+  ocrBrand?: string | null
+  ocrCustomerName?: string | null
+  ocrPhone?: string | null
+  ocrDate?: string | null
+  ocrRawJson?: string | null
+  /** OCR 识别生命周期：上传后异步识别，用户可离开页面 */
+  ocrStatus?: OcrStatus
+  /** 图片来源：POOL=图片池直接上传（用于匹配已有工单）；CREATE=新建工单时带图上传 */
+  source?: 'POOL' | 'CREATE'
+  status: PendingImageStatus
+  matchedOrderId?: string | null
+  matchRemark?: string | null
+  uploadedBy?: string | null
+  createdAt: string
+  matchedAt?: string | null
+  shop?: { id: string; name: string; code: string }
+  order?: { id: string; orderNo: string | null; plateNumber: string | null; settlementMonth: string | null; status: string } | null
+}
+
+export interface PendingImageStatusCounts {
+  PENDING: number
+  MATCHED: number
+  NEEDS_REVIEW: number
+  MANUAL: number
+  FAILED: number
+  total: number
+}
+
+export interface PagePendingImageDto {
+  current?: number
+  size?: number
+  shopId?: string
+  settlementMonth?: string
+  status?: PendingImageStatus
+  keyword?: string
+}
+

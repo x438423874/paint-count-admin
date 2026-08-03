@@ -34,7 +34,7 @@ function handleTo() {
     <div class="pb-12px">
       <template v-for="item in options" :key="item.routePath">
         <div
-          class="mt-8px h-56px flex-y-center cursor-pointer justify-between rounded-4px bg-#e5e7eb px-14px dark:bg-dark"
+          class="mt-8px h-56px flex-y-center cursor-pointer justify-between rounded-4px bg-[var(--neutral-220)] px-14px dark:bg-dark"
           :style="{
             background: item.routePath === active ? theme.themeColor : '',
             color: item.routePath === active ? '#fff' : ''

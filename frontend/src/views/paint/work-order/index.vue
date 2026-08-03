@@ -1,5 +1,6 @@
 <script setup lang="tsx">
 import { NButton, NPopconfirm, NTag, NSpace, NImage, NCard, NStatistic, NProgress, NAlert, NDivider, NModal, NEmpty, NText, NRadioGroup, NRadio, NRadioButton, NDescriptions, NDescriptionsItem, NSelect, NForm, NFormItem, NSpin, NDropdown, NInput } from 'naive-ui';
+import EmptyState from '@/components/common/EmptyState.vue';
 
 import { ref, computed, onMounted, h } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -139,7 +140,7 @@ async function handleMerge(sourceIds: string[]) {
 const fileInputRef = ref<HTMLInputElement | null>(null);
 const importLoading = ref(false);
 const showImportResult = ref(false);
-const importResult = ref<{ success: number; failed: number; errors: string[] } | null>(null);
+const importResult = ref<{ success: number; failed: number; errors: string[]; mode?: 'quantity' | 'paintCount' } | null>(null);
 
 function triggerImport() {
   fileInputRef.value?.click();
@@ -158,7 +159,8 @@ async function handleImportFile(e: Event) {
   if (data) {
     importResult.value = data;
     showImportResult.value = true;
-    const msg = `导入完成：成功 ${data.success} 条，失败 ${data.failed} 条`;
+    const modeText = data.mode === 'paintCount' ? '部位幅数' : '数量';
+    const msg = `导入完成：成功 ${data.success} 条，失败 ${data.failed} 条（按${modeText}导入）`;
     if (data.failed > 0) {
       window.$message?.warning(msg);
     } else {
@@ -599,6 +601,7 @@ const {
       title: '操作',
       align: 'center',
       width: 220,
+      fixed: 'right',
       render: (row: any) => {
         const isUnaudited = row.status === 'DRAFT' || row.status === 'PENDING';
         const isAudited = row.status === 'AUDITED';
@@ -1113,14 +1116,25 @@ async function handleBatchQuickUpload({ file }: { file: File }) {
         :columns="columns"
         :data="data"
         size="small"
+        striped
         :flex-height="true"
         :scroll-x="1200"
         :loading="loading"
         remote
         :row-key="(row: any) => row.id"
         :pagination="mobilePagination"
-        class="sm:h-full"
-      />
+        class="sm:h-full paint-table"
+      >
+        <template #empty>
+          <EmptyState description="暂无工单数据">
+            <template #action>
+              <NButton v-if="allowEdit" text type="primary" size="small" @click="handleAdd">
+                点击新建工单
+              </NButton>
+            </template>
+          </EmptyState>
+        </template>
+      </NDataTable>
 
       <WorkOrderOperateDrawer
         v-model:visible="drawerVisible"
@@ -1283,10 +1297,13 @@ async function handleBatchQuickUpload({ file }: { file: File }) {
       <template v-if="importResult">
         <NAlert :type="importResult.failed > 0 ? 'warning' : 'success'" :bordered="false" class="mb-12px">
           成功导入 {{ importResult.success }} 条，失败 {{ importResult.failed }} 条
+          <template v-if="importResult.mode">
+            （部位数值按<strong>{{ importResult.mode === 'paintCount' ? '幅数' : '数量' }}</strong>导入）
+          </template>
         </NAlert>
         <template v-if="importResult.errors?.length > 0">
           <NText strong class="mb-8px" style="display:block">错误详情：</NText>
-          <div style="max-height: 300px; overflow-y: auto; background: #f5f5f5; padding: 12px; border-radius: 4px; font-size: 13px;">
+          <div style="max-height: 300px; overflow-y: auto; background: var(--neutral-100); padding: 12px; border-radius: 4px; font-size: 13px;">
             <div v-for="(err, idx) in importResult.errors" :key="idx" style="padding: 2px 0;">
               <NTag type="error" size="small" style="margin-right: 6px">{{ idx + 1 }}</NTag>
               {{ err }}
@@ -1420,4 +1437,7 @@ async function handleBatchQuickUpload({ file }: { file: File }) {
 </template>
 
 <style scoped>
+.paint-table :deep(.n-data-table-tr:hover .n-data-table-td) {
+  background-color: color-mix(in srgb, rgb(var(--primary-color)) 8%, transparent);
+}
 </style>
