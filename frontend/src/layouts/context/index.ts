@@ -17,7 +17,7 @@ function useMixMenu() {
   }
 
   function getActiveFirstLevelMenuKey() {
-    const [firstLevelRouteName] = selectedKey.value.split('_');
+    const [firstLevelRouteName] = (selectedKey.value || '').split('_');
 
     setActiveFirstLevelMenuKey(firstLevelRouteName);
   }
@@ -74,7 +74,7 @@ export function useMenu() {
 
     const routeName = (hideInMenu ? activeMenu : name) || name;
 
-    return routeName;
+    return routeName || '';
   });
 
   return {

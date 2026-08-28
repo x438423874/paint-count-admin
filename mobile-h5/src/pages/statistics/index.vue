@@ -305,9 +305,15 @@ onMounted(async () => {
             </div>
           </div>
           <div class="category-list">
-            <div v-for="cat in categoryData" :key="cat.categoryId" class="category-item">
+            <div v-for="cat in categoryData" :key="cat.categoryId || cat.categoryName" class="category-item">
               <div class="category-header">
-                <span class="category-name">{{ cat.categoryName }}</span>
+                <div class="category-title">
+                  <span class="category-name">{{ cat.categoryName }}</span>
+                  <span class="category-qty">
+                    数量 {{ formatCount(cat.totalCount || cat.orderCount || 0) }}
+                    <template v-if="cat.totalNewPartQuantity"> · 新件 {{ formatCount(cat.totalNewPartQuantity) }}</template>
+                  </span>
+                </div>
                 <span class="category-count">
                   {{ formatCount(cat.totalPaintCount || cat.paintCount || 0) }} 幅
                   <span class="category-percent">{{ getCategoryPercent(cat.totalPaintCount || cat.paintCount || 0) }}%</span>
@@ -643,9 +649,21 @@ onMounted(async () => {
   align-items: center;
 }
 
+.category-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
 .category-name {
   font-size: 13px;
   color: var(--text-regular);
+}
+
+.category-qty {
+  font-size: 11px;
+  color: var(--text-tertiary);
 }
 
 .category-count {

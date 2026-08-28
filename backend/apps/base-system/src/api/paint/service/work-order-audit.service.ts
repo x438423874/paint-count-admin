@@ -1,13 +1,13 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '@lib/shared/prisma/prisma.service';
 import { AuditWorkOrderDto } from '../work-order/dto/work-order.dto';
-import { SettlementMonthService } from './settlement-month.service';
+import { SealService } from '../seal/seal.service';
 
 @Injectable()
 export class WorkOrderAuditService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly settlementMonthService: SettlementMonthService,
+    private readonly sealService: SealService,
   ) {}
 
   /** 审核工单 */
@@ -18,7 +18,7 @@ export class WorkOrderAuditService {
     if (!existing) throw new NotFoundException('工单不存在');
 
     // 封单校验
-    await this.settlementMonthService.assertOrderNotSealed(dto.id);
+    await this.sealService.assertOrderNotSealed(dto.id);
 
     if (existing.status === 'AUDITED' || existing.status === 'SETTLED' || existing.status === 'ABNORMAL') {
       throw new BadRequestException('工单已审核，不能重复审核');
@@ -43,7 +43,7 @@ export class WorkOrderAuditService {
     if (!existing) throw new NotFoundException('工单不存在');
 
     // 封单校验
-    await this.settlementMonthService.assertOrderNotSealed(id);
+    await this.sealService.assertOrderNotSealed(id);
 
     if (existing.status !== 'AUDITED') {
       throw new BadRequestException('只有已审核且未结算、未异常的工单才能取消审核');

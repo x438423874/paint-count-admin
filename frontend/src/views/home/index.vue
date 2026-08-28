@@ -86,7 +86,7 @@ async function loadData() {
       fetchMonthlyStatistics({ settlementMonth: currentMonth.value }),
       fetchCategoryBreakdown({ settlementMonth: currentMonth.value }),
       fetchShopComparison({ settlementMonth: currentMonth.value }),
-      fetchYearOverview({ year: +currentMonth.value.split('-')[0] })
+      fetchYearOverview({ year: currentMonth.value ? +currentMonth.value.split('-')[0] : new Date().getFullYear() })
     ]);
     monthlyStats.value = (r1.data || []) as any[];
     categoryData.value = (r2.data || []) as any[];

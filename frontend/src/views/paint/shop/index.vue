@@ -1,5 +1,5 @@
 <script setup lang="tsx">
-import { NButton, NPopconfirm, NTag, NSpace, NSelect, NInput, NText, NEmpty } from 'naive-ui';
+import { NButton, NTag, NSpace, NSelect, NInput, NText, NDropdown } from 'naive-ui';
 import { ref } from 'vue';
 import { fetchPaintShopPage, deletePaintShop, fetchStandardTemplateList, applyTemplateToShop } from '@/service/api';
 import { useTable, useTableOperate } from '@/hooks/common/table';
@@ -47,37 +47,40 @@ const {
     {
       key: 'name',
       title: '门店名称',
-      align: 'center',
-      minWidth: 180
+      align: 'left',
+      minWidth: 160,
+      ellipsis: { tooltip: true }
     },
     {
       key: 'code',
       title: '门店编码',
-      align: 'center',
-      width: 140
+      align: 'left',
+      width: 120
     },
     {
       key: 'brand',
       title: '品牌',
-      align: 'center',
-      width: 120
+      align: 'left',
+      width: 100
     },
     {
       key: 'address',
       title: '地址',
+      align: 'left',
       minWidth: 160,
       ellipsis: { tooltip: true }
     },
     {
       key: 'phone',
       title: '电话',
-      align: 'center',
-      width: 130
+      align: 'left',
+      width: 120
     },
     {
       key: 'standardTemplate',
       title: '标准模板',
-      width: 200,
+      align: 'left',
+      width: 180,
       render: (row: any) => {
         if (row.standardTemplate?.name) {
           return <NTag type="success" size="small">{row.standardTemplate.name}</NTag>;
@@ -108,7 +111,7 @@ const {
       key: 'status',
       title: '状态',
       align: 'center',
-      width: 80,
+      width: 90,
       render: (row: any) => (
         <NTag type={row.status === 'ENABLED' ? 'success' : 'warning'}>
           {row.status === 'ENABLED' ? '启用' : '禁用'}
@@ -119,39 +122,29 @@ const {
       key: 'operate',
       title: '操作',
       align: 'center',
-      width: 420,
+      width: 130,
       fixed: 'right',
-      render: (row: any) => (
-        <div class="flex-center gap-8px">
-          {allowManageShop && (
-            <NButton type="primary" ghost size="small" onClick={() => edit(row.id)}>
-              编辑
-            </NButton>
-          )}
-          {allowEditShop && (
-            <NButton type="success" ghost size="small" onClick={() => openExcelConfigEditor(row)}>
-              Excel配置
-            </NButton>
-          )}
-          {allowEditShop && (
-            <NButton type="default" ghost size="small" onClick={() => openOrderNoRulesEditor(row)}>
-              工单号规则
-            </NButton>
-          )}
-          {allowManageShop && (
-            <NPopconfirm onPositiveClick={() => handleDelete(row.id)}>
-              {{
-                default: () => '确认删除此门店？',
-                trigger: () => (
-                  <NButton type="error" ghost size="small">
-                    删除
-                  </NButton>
-                )
-              }}
-            </NPopconfirm>
-          )}
-        </div>
-      )
+      render: (row: any) => {
+        const moreOptions = buildActionOptions(row);
+        return (
+          <div class="flex-center gap-8px">
+            {allowManageShop && (
+              <NButton type="primary" ghost size="small" onClick={() => edit(row.id)}>
+                编辑
+              </NButton>
+            )}
+            {moreOptions.length > 0 && (
+              <NDropdown
+                trigger="click"
+                options={moreOptions}
+                onSelect={(key: string) => handleActionSelect(key, row)}
+              >
+                <NButton size="small">更多</NButton>
+              </NDropdown>
+            )}
+          </div>
+        );
+      }
     }
   ]
 });
@@ -223,6 +216,35 @@ async function handleDelete(id: string) {
   window.$message?.success('删除成功');
   await onDeleted();
 }
+
+// 操作列“更多”下拉项（仅在有权限时展示）
+function buildActionOptions(row: any) {
+  const opts: { label: string; key: string }[] = [];
+  if (allowEditShop) {
+    opts.push({ label: 'Excel 配置', key: 'excel' });
+    opts.push({ label: '工单号规则', key: 'orderNo' });
+  }
+  if (allowManageShop) {
+    opts.push({ label: '删除', key: 'delete' });
+  }
+  return opts;
+}
+
+function handleActionSelect(key: string, row: any) {
+  if (key === 'excel') {
+    openExcelConfigEditor(row);
+  } else if (key === 'orderNo') {
+    openOrderNoRulesEditor(row);
+  } else if (key === 'delete') {
+    (window as any).$dialog?.warning({
+      title: '删除门店',
+      content: `确认删除门店「${row.name}」？该操作不可恢复。`,
+      positiveText: '删除',
+      negativeText: '取消',
+      onPositiveClick: () => handleDelete(row.id)
+    });
+  }
+}
 </script>
 
 <template>
@@ -285,7 +307,7 @@ async function handleDelete(id: string) {
         size="small"
         striped
         :flex-height="true"
-        :scroll-x="1000"
+        :scroll-x="1180"
         :loading="loading"
         remote
         :row-key="(row: any) => row.id"

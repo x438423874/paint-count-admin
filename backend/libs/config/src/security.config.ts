@@ -28,7 +28,7 @@ export const SecurityConfig = registerAs(securityRegToken, () => ({
   jwtSecret: getJwtSecret('JWT_SECRET'),
   jwtExpiresIn: getEnvNumber('JWT_EXPIRE_IN', 60 * 60 * 2),
   refreshJwtSecret: getJwtSecret('REFRESH_TOKEN_SECRET'),
-  refreshJwtExpiresIn: getEnvNumber('REFRESH_TOKEN_EXPIRE_IN', 60 * 60 * 4),
+  refreshJwtExpiresIn: getEnvNumber('REFRESH_TOKEN_EXPIRE_IN', 60 * 60 * 24 * 7),
   signReqTimestampDisparity: getEnvNumber(
     'SIGN_REQ_TIMESTAMP_DISPARITY',
     5 * 60 * 1000,

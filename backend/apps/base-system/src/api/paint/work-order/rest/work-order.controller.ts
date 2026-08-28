@@ -480,6 +480,26 @@ export class WorkOrderController {
     return ApiRes.success(data);
   }
 
+  @Post(':id/void')
+  @ApiOperation({ summary: '作废工单（不计入幅数统计与对账）' })
+  async voidWorkOrder(
+    @Param('id') id: string,
+    @Body() body: { voidReason?: string },
+    @Request() req: AuthenticatedRequest,
+  ) {
+    await this.userShopService.assertWorkOrderAccess(req.user.uid, id);
+    const data = await this.workOrderService.setVoid(id, body?.voidReason, req.user?.uid);
+    return ApiRes.success(data);
+  }
+
+  @Post(':id/unvoid')
+  @ApiOperation({ summary: '恢复已作废工单' })
+  async unvoidWorkOrder(@Param('id') id: string, @Request() req: AuthenticatedRequest) {
+    await this.userShopService.assertWorkOrderAccess(req.user.uid, id);
+    const data = await this.workOrderService.unvoid(id);
+    return ApiRes.success(data);
+  }
+
   @Post('reconcile')
   @Throttle({ default: { limit: 30, ttl: 60000 } })
   @ApiOperation({ summary: '工单对账：上传 Excel 与系统工单进行幅数对比' })

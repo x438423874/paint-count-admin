@@ -44,7 +44,7 @@ export interface PaintShopListItem {
 }
 
 /** 工单状态 */
-export type PaintOrderStatus = 'DRAFT' | 'PENDING' | 'AUDITED' | 'SETTLED' | 'ABNORMAL';
+export type PaintOrderStatus = 'DRAFT' | 'PENDING' | 'AUDITED' | 'SETTLED' | 'ABNORMAL' | 'VOID';
 
 /** 图片类型 */
 export type PaintImageType = 'BEFORE' | 'DURING' | 'AFTER';
@@ -124,11 +124,13 @@ export interface PaintWorkOrder {
   isAbnormal?: boolean | null;
   isRework?: boolean | null;
   reworkRemark?: string | null;
+  isAdjustment?: boolean | null;
   createdAt: string;
   updatedAt?: string | null;
   shop?: PaintShopListItem;
   items?: PaintWorkOrderItem[];
   images?: PaintWorkOrderImage[];
+  _count?: { images: number };
 }
 
 /** 工单创建数据 */
@@ -147,6 +149,7 @@ export interface CreateWorkOrderData {
   description?: string;
   items?: WorkOrderItemInput[];
   remark?: string;
+  isAdjustment?: boolean;
 }
 
 /** 工单更新数据 */
@@ -169,6 +172,7 @@ export interface UpdateWorkOrderData {
   remark?: string;
   isRework?: boolean;
   reworkRemark?: string;
+  isAdjustment?: boolean;
 }
 
 /** 工单项目输入 */
@@ -177,6 +181,8 @@ export interface WorkOrderItemInput {
   quantity?: number;
   newPartQuantity?: number;
   specialPaintId?: string;
+  /** 直接指定幅数（可传负值，用于调整单抵消）；传入后忽略按系数计算 */
+  overridePaintCount?: number;
 }
 
 /** 幅数标准 */
@@ -246,6 +252,7 @@ export interface CategoryBreakdown {
   categoryCode: string;
   totalCount: number;
   totalPaintCount: number;
+  totalNewPartQuantity?: number;
 }
 
 /** 门店对比 */
@@ -379,6 +386,7 @@ export function fetchWorkOrderPage(params: {
   settlementMonth?: string;
   status?: string;
   isRework?: boolean;
+  isAdjustment?: boolean;
   categoryId?: string;
 }) {
   return request<PageResult<PaintWorkOrder>>({
@@ -779,6 +787,21 @@ export function setAbnormal(orderId: string, isAbnormal: boolean, abnormalRemark
   });
 }
 
+export function voidWorkOrder(orderId: string, voidReason?: string) {
+  return request({
+    url: `/paint/work-order/${orderId}/void`,
+    method: 'post',
+    data: { voidReason }
+  });
+}
+
+export function unvoidWorkOrder(orderId: string) {
+  return request({
+    url: `/paint/work-order/${orderId}/unvoid`,
+    method: 'post'
+  });
+}
+
 export interface OrderNoRule {
   pattern: string;
   length: number;
@@ -822,9 +845,10 @@ export interface ReconcileSummary {
   duplicateCount: number;
   reworkExcludedCount: number;
   reworkExcludedPaintCount: number;
+  voidedCount: number;
 }
 
-export type ReconcileItemType = 'matched' | 'diff' | 'missing_in_system' | 'extra_in_system' | 'duplicate';
+export type ReconcileItemType = 'matched' | 'diff' | 'missing_in_system' | 'extra_in_system' | 'duplicate' | 'voided';
 
 export interface ReconcileItem {
   id?: string;
@@ -841,6 +865,7 @@ export interface ReconcileItem {
   count?: number;
   isRework?: boolean | null;
   reworkRemark?: string | null;
+  voidReason?: string | null;
 }
 
 export interface ReconcileResult {
@@ -1021,7 +1046,7 @@ export interface SettlementMonthRecord {
 
 export function sealSettlementMonth(shopId: string, month: string) {
   return request<SettlementMonthRecord>({
-    url: '/paint/settlement-month/seal',
+    url: '/paint/seal/seal',
     method: 'post',
     data: { shopId, month }
   });
@@ -1029,7 +1054,7 @@ export function sealSettlementMonth(shopId: string, month: string) {
 
 export function unsealSettlementMonth(shopId: string, month: string) {
   return request<SettlementMonthRecord>({
-    url: '/paint/settlement-month/unseal',
+    url: '/paint/seal/unseal',
     method: 'post',
     data: { shopId, month }
   });
@@ -1037,9 +1062,41 @@ export function unsealSettlementMonth(shopId: string, month: string) {
 
 export function getSealStatus(shopId: string, month: string) {
   return request<SettlementMonthRecord | null>({
-    url: '/paint/settlement-month/status',
+    url: '/paint/seal/status',
     method: 'get',
     params: { shopId, month }
+  });
+}
+
+// ==================== 封单管理总览 ====================
+
+export interface SealOverviewItem {
+  shopId: string;
+  shopName: string;
+  month: string;
+  orderCount: number;
+  totalPaintCount: number;
+  reworkCount: number;
+  isSealed: boolean;
+  sealedAt: string | null;
+  sealedBy: string | null;
+}
+
+export interface SealOverviewResult {
+  list: SealOverviewItem[];
+  total: number;
+}
+
+export function fetchSealOverview(params: {
+  shopId?: string;
+  month?: string;
+  current?: number;
+  size?: number;
+}) {
+  return request<SealOverviewResult>({
+    url: '/paint/seal/overview',
+    method: 'get',
+    params
   });
 }
 
@@ -1140,7 +1197,7 @@ export function updatePaintVehicle(data: {
   contactPerson?: string;
   remark?: string;
 }) {
-  return request<PaintVehicle>({
+  return request<PaintVehicle & { syncedOrderCount?: number }>({
     url: '/paint/vehicle',
     method: 'put',
     data
@@ -1311,6 +1368,58 @@ export function retryOcrPendingImage(id: string) {
 export function deletePendingImage(id: string) {
   return request({
     url: `/paint/pending-image/${id}`,
+    method: 'delete'
+  });
+}
+
+// ==================== 幅数调整单 API ====================
+
+/** 幅数调整单（用于对已封单月份的统计做追溯扣减/追加） */
+export interface PaintAdjustment {
+  id: string;
+  shopId: string;
+  targetMonth: string;
+  applyMonth: string;
+  categoryId: string | null;
+  paintCount: number;
+  newPartQuantity: number;
+  reason: string | null;
+  operatorId: string | null;
+  operatorName: string | null;
+  createdAt: string;
+  category?: { id: string; name: string; code: string } | null;
+  shop?: { name: string; code: string } | null;
+}
+
+export interface CreateAdjustmentParams {
+  shopId: string;
+  targetMonth: string;
+  applyMonth?: string;
+  categoryId?: string;
+  paintCount: number;
+  newPartQuantity?: number;
+  reason?: string;
+}
+
+export function fetchAdjustmentList(params?: { shopId?: string; applyMonth?: string; targetMonth?: string }) {
+  return request<PaintAdjustment[]>({
+    url: '/paint/adjustment',
+    method: 'get',
+    params
+  });
+}
+
+export function createAdjustment(data: CreateAdjustmentParams) {
+  return request<PaintAdjustment>({
+    url: '/paint/adjustment',
+    method: 'post',
+    data
+  });
+}
+
+export function deleteAdjustment(id: string) {
+  return request({
+    url: `/paint/adjustment/${id}`,
     method: 'delete'
   });
 }

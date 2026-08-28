@@ -5,7 +5,7 @@ import { MetricsService } from '@lib/shared/metrics/metrics.service';
 import { WINSTON_MODULE_PROVIDER } from 'nest-winston';
 import { WorkOrderService } from './work-order.service';
 import { PaintImageService } from './paint-image.service';
-import { SettlementMonthService } from './settlement-month.service';
+import { SealService } from '../seal/seal.service';
 import { PaintVehicleService } from './paint-vehicle.service';
 import { CreateWorkOrderDto } from '../work-order/dto/work-order.dto';
 
@@ -58,7 +58,7 @@ describe('WorkOrderService', () => {
         { provide: PrismaService, useValue: prisma },
         { provide: PaintImageService, useValue: {} },
         {
-          provide: SettlementMonthService,
+          provide: SealService,
           useValue: {
             assertNotSealed: jest.fn().mockResolvedValue(undefined),
             assertOrderNotSealed: jest.fn().mockResolvedValue(undefined),

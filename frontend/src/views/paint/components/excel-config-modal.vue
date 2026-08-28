@@ -39,10 +39,12 @@ function getCategoryOptions(templateName: string) {
   const templateCoefficient = templateStd?.paintCount;
   const currentValues = aliasMapData.value[templateName] || [];
 
-  // 记录每个系统部位被哪些模板列选中了
+  // 记录每个系统部位被哪些模板列选中了（仅统计当前模板中仍存在的列，
+  // 避免已删除/重命名列的残留映射占用系统部位，导致无法重新绑定）
+  const validNames = new Set((templateConfig.value?.items || []).map(i => i.categoryName));
   const selectedByOther = new Map<string, string[]>();
   Object.entries(aliasMapData.value)
-    .filter(([name, ids]) => name !== templateName && Array.isArray(ids))
+    .filter(([name, ids]) => name !== templateName && validNames.has(name) && Array.isArray(ids))
     .forEach(([name, ids]) => {
       for (const id of ids) {
         if (!selectedByOther.has(id)) selectedByOther.set(id, []);
@@ -219,6 +221,33 @@ function goBackToTemplateStep() {
   step.value = 1;
 }
 
+function addItem() {
+  if (!templateConfig.value) return;
+  if (!Array.isArray(templateConfig.value.items)) templateConfig.value.items = [];
+  templateConfig.value.items.push({ col: '', categoryName: '' });
+}
+
+function removeItem(idx: number) {
+  const items = templateConfig.value?.items;
+  if (!items || idx < 0 || idx >= items.length) return;
+  const removed = items[idx];
+  items.splice(idx, 1);
+  // 同步清理该列在部位映射中的残留配置
+  if (removed?.categoryName && aliasMapData.value[removed.categoryName]) {
+    delete aliasMapData.value[removed.categoryName];
+  }
+}
+
+function moveItem(idx: number, dir: -1 | 1) {
+  const items = templateConfig.value?.items;
+  if (!items) return;
+  const target = idx + dir;
+  if (target < 0 || target >= items.length) return;
+  const tmp = items[idx];
+  items[idx] = items[target];
+  items[target] = tmp;
+}
+
 async function handleSave() {
   if (!templateConfig.value) return;
   saving.value = true;
@@ -290,15 +319,30 @@ watch(() => props.shopId, (newId, oldId) => {
                 </NGridItem>
               </NGrid>
 
-              <NText strong class="mb-8px" style="display:block">喷漆项目列映射 ({{ templateConfig.items?.length || 0 }}项)</NText>
-              <NGrid :cols="4" :x-gap="8" :y-gap="8" class="mb-12px">
-                <NGridItem v-for="(item, idx) in templateConfig.items" :key="idx">
+              <div class="mb-8px flex items-center justify-between">
+                <NText strong>喷漆项目列映射 ({{ templateConfig.items?.length || 0 }}项)</NText>
+                <NButton size="tiny" type="primary" secondary @click="addItem">+ 添加项目列</NButton>
+              </div>
+              <NSpace vertical :size="6" class="mb-12px excel-item-list">
+                <div v-for="(item, idx) in templateConfig.items" :key="idx" class="excel-item-row">
                   <NInputGroup>
-                    <NInput v-model:value="item.col" size="small" style="width:50px" placeholder="列" />
-                    <NInput v-model:value="item.categoryName" size="small" placeholder="项目名" />
+                    <NInput v-model:value="item.col" size="small" style="width:54px" placeholder="列" />
+                    <NInput v-model:value="item.categoryName" size="small" placeholder="项目名（系统部位名或别名）" />
                   </NInputGroup>
-                </NGridItem>
-              </NGrid>
+                  <NSpace :size="4" class="excel-item-actions">
+                    <NButton size="tiny" tertiary :disabled="idx === 0" title="上移" @click="moveItem(idx, -1)">↑</NButton>
+                    <NButton
+                      size="tiny"
+                      tertiary
+                      :disabled="idx === templateConfig.items.length - 1"
+                      title="下移"
+                      @click="moveItem(idx, 1)"
+                    >↓</NButton>
+                    <NButton size="tiny" tertiary type="error" title="删除" @click="removeItem(idx)">删</NButton>
+                  </NSpace>
+                </div>
+                <NEmpty v-if="!templateConfig.items || templateConfig.items.length === 0" description="暂无项目列，点击上方按钮添加" />
+              </NSpace>
 
               <NText depth="3" style="font-size:12px">数据起始行: {{ templateConfig.dataStartRow }} | 表头行: {{ templateConfig.headerRow }}</NText>
             </template>
@@ -388,5 +432,20 @@ watch(() => props.shopId, (newId, oldId) => {
 
 .alias-map-form :deep(.n-form-item-label__text) {
   overflow-wrap: break-word;
+}
+
+.excel-item-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.excel-item-row .n-input-group {
+  flex: 1;
+  min-width: 0;
+}
+
+.excel-item-actions {
+  flex-shrink: 0;
 }
 </style>

@@ -1,12 +1,12 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '@lib/shared/prisma/prisma.service';
-import { SettlementMonthService } from './settlement-month.service';
+import { SealService } from '../seal/seal.service';
 
 @Injectable()
 export class WorkOrderSettlementService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly settlementMonthService: SettlementMonthService,
+    private readonly sealService: SealService,
   ) {}
 
   /** 结算工单：只改状态，参照审核逻辑，不修改 settlementMonth */
@@ -17,7 +17,7 @@ export class WorkOrderSettlementService {
     if (!order) throw new NotFoundException('工单不存在');
 
     // 封单校验
-    await this.settlementMonthService.assertOrderNotSealed(orderId);
+    await this.sealService.assertOrderNotSealed(orderId);
 
     const currentStatus = order.status;
 
@@ -61,7 +61,7 @@ export class WorkOrderSettlementService {
     if (!order) throw new NotFoundException('工单不存在');
 
     // 封单校验
-    await this.settlementMonthService.assertOrderNotSealed(orderId);
+    await this.sealService.assertOrderNotSealed(orderId);
 
     const currentStatus = order.status;
 

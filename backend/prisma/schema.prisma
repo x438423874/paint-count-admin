@@ -16,8 +16,8 @@ datasource db {
 
 model SysTokens {
   id           String   @id @default(cuid())
-  accessToken  String   @unique @map("access_token")
-  refreshToken String   @unique @map("refresh_token")
+  accessToken  String   @unique @map("access_token") @db.VarChar(767)
+  refreshToken String   @unique @map("refresh_token") @db.VarChar(767)
   status       String
   userId       String   @map("user_id")
   username     String
@@ -338,6 +338,7 @@ model PaintShop {
   settlementMonths PaintSettlementMonth[]
   userShops       SysUserShop[]
   pendingImages   PaintPendingImage[]
+  adjustments     PaintAdjustment[]
 
   @@map("paint_shop")
 }
@@ -355,6 +356,7 @@ model PaintItemCategory {
   standards PaintStandard[]
   templateItems PaintStandardTemplateItem[]
   items     PaintWorkOrderItem[]
+  adjustments PaintAdjustment[]
 
   @@unique([code, shopId])  // 同一门店内code唯一，全局类别shopId为null时code唯一
   @@map("paint_item_category")
@@ -400,8 +402,13 @@ model PaintWorkOrder {
   auditedBy     String?   @map("audited_by") @db.VarChar(100)
   abnormalRemark String?  @map("abnormal_remark") @db.VarChar(500)
   isRework      Boolean   @default(false) @map("is_rework")
+  isAdjustment  Boolean   @default(false) @map("is_adjustment")
   reworkRemark  String?   @map("rework_remark") @db.VarChar(200)
   remark        String?
+  voidReason    String?   @map("void_reason") @db.VarChar(500)
+  voidedAt      DateTime? @map("voided_at")
+  voidedBy      String?   @map("voided_by") @db.VarChar(100)
+  voidedFromStatus String? @map("voided_from_status") @db.VarChar(20)
   mergeGroupId  String?   @map("merge_group_id") @db.VarChar(50)
   createdAt     DateTime  @default(now()) @map("created_at")
   updatedAt     DateTime? @updatedAt @map("updated_at")
@@ -431,6 +438,7 @@ enum PaintOrderStatus {
   AUDITED   // 已审核
   SETTLED   // 已结算
   ABNORMAL  // 异常
+  VOID      // 作废：不计入幅数统计与对账
 }
 
 // 工单喷漆明细项
@@ -489,6 +497,30 @@ model PaintSettlementMonth {
 
   @@unique([shopId, month])
   @@map("paint_settlement_month")
+}
+
+// 幅数调整单：用于对已封单月份的统计做追溯调整（不影响源工单/车辆/日报）
+// 例：上月已封单且已报送，发现幅数多算 X，则在本月建一条 paintCount = -X 的调整单（applyMonth=本月，targetMonth=上月）
+model PaintAdjustment {
+  id              String    @id @default(cuid())
+  shopId          String    @map("shop_id")
+  targetMonth     String    @map("target_month") @db.VarChar(7)     // 被纠错的结算月份 YYYY-MM
+  applyMonth      String    @map("apply_month") @db.VarChar(7)      // 调整实际计入的结算月份 YYYY-MM（默认当前月）
+  categoryId      String?   @map("category_id")                    // 关联部位；为空表示整体幅数调整
+  paintCount      Decimal   @default(0) @map("paint_count") @db.Decimal(8, 2)   // 幅数调整量（可正可负）
+  newPartQuantity Int       @default(0) @map("new_part_quantity")  // 新件数量调整量（可正可负）
+  reason          String?   @db.Text
+  operatorId      String?   @map("operator_id") @db.VarChar(100)
+  operatorName    String?   @map("operator_name") @db.VarChar(100)
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime? @updatedAt @map("updated_at")
+
+  shop     PaintShop          @relation(fields: [shopId], references: [id])
+  category PaintItemCategory? @relation(fields: [categoryId], references: [id])
+
+  @@index([shopId, applyMonth])
+  @@index([shopId, targetMonth])
+  @@map("paint_adjustment")
 }
 
 // 车辆/客户主数据：按车牌号全局唯一，跨门店共享

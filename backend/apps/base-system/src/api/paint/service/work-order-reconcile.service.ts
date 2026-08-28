@@ -52,11 +52,23 @@ export interface ReconcileDuplicateItem {
   count: number;
 }
 
+export interface ReconcileVoidedItem {
+  type: 'voided';
+  orderNo: string;
+  plateNumber: string;
+  excelPaintCount?: number;
+  systemPaintCount?: number;
+  diff?: number;
+  voidReason?: string | null;
+  remark?: string | null;
+}
+
 export type ReconcileItem =
   | ReconcileMatchedItem
   | ReconcileMissingInSystemItem
   | ReconcileExtraInSystemItem
-  | ReconcileDuplicateItem;
+  | ReconcileDuplicateItem
+  | ReconcileVoidedItem;
 
 export interface ReconcileResult {
   summary: {
@@ -72,6 +84,7 @@ export interface ReconcileResult {
     duplicateCount: number;
     reworkExcludedCount: number;
     reworkExcludedPaintCount: number;
+    voidedCount: number;
   };
   items: ReconcileItem[];
 }
@@ -103,7 +116,7 @@ export class WorkOrderReconcileService {
       where: {
         shopId,
         settlementMonth,
-        status: { notIn: ['DRAFT' as any, 'PENDING' as any] },
+        status: { notIn: ['DRAFT' as any, 'PENDING' as any, 'VOID' as any] },
       },
       select: {
         id: true,
@@ -116,6 +129,19 @@ export class WorkOrderReconcileService {
         reworkRemark: true,
       },
     });
+
+    // 已作废工单：不参与对账统计，但需在对账中展示（标记已作废、不计入对账）
+    const voidOrders = await this.prisma.paintWorkOrder.findMany({
+      where: { shopId, settlementMonth, status: 'VOID' as any },
+      select: { orderNo: true, plateNumber: true, totalPaintCount: true, voidReason: true },
+    });
+    const voidOrderMap = new Map<string, (typeof voidOrders)[number]>();
+    const voidPlateMap = new Map<string, (typeof voidOrders)[number]>();
+    for (const vo of voidOrders) {
+      if (vo.orderNo) voidOrderMap.set(vo.orderNo, vo);
+      if (vo.plateNumber) voidPlateMap.set(vo.plateNumber, vo);
+    }
+    const coveredVoidKeys = new Set<string>();
 
     // 返工工单统计（幅数不计入系统总幅数）
     const reworkExcludedCount = systemOrders.filter(o => o.isRework).length;
@@ -155,13 +181,32 @@ export class WorkOrderReconcileService {
     }
 
     const items: ReconcileItem[] = [];
-    const matchedSystemKeys = new Set<string>();
-    const matchedExcelKeys = new Set<string>();
     const matchedSystemOrderIds = new Set<string>();
-    const matchedSystemPlateKeys = new Set<string>();
-    const matchedExcelPlateKeys = new Set<string>();
 
+    // 将一行 excel 与一条系统工单比对，产出 matched / diff 项
+    const compareRow = (excelRow: ReconcileExcelRow, systemOrder: (typeof systemOrders)[number]) => {
+      const systemPaintCount = Number(systemOrder.totalPaintCount);
+      const diff = +(excelRow.paintCount - systemPaintCount).toFixed(2);
+      matchedSystemOrderIds.add(systemOrder.id);
+      const base = {
+        id: systemOrder.id,
+        orderNo: excelRow.orderNo || systemOrder.orderNo || '',
+        plateNumber: excelRow.plateNumber || systemOrder.plateNumber || '',
+        excelPaintCount: excelRow.paintCount,
+        systemPaintCount,
+        diff,
+        status: systemOrder.status,
+        systemRemark: systemOrder.remark,
+        isRework: systemOrder.isRework,
+        reworkRemark: systemOrder.reworkRemark,
+      };
+      items.push(Math.abs(diff) < 0.001 ? { ...base, type: 'matched' } : { ...base, type: 'diff' });
+    };
+
+    // 阶段1：仅按工单号严格匹配（excel 含工单号的行；有工单号绝不回退车牌）
     for (const [orderNo, excelGroup] of excelMap.entries()) {
+      if (!excelGroup[0].orderNo) continue;
+
       if (excelGroup.length > 1) {
         items.push({
           type: 'duplicate',
@@ -172,36 +217,39 @@ export class WorkOrderReconcileService {
         });
       }
 
-      let systemGroup = systemMap.get(orderNo);
-      let matchedByPlate = false;
-
-      if (!systemGroup || systemGroup.length === 0) {
-        const excelPlate = excelGroup[0].plateNumber;
-        if (excelPlate) {
-          const plateSystemGroup = systemPlateMap.get(excelPlate);
-          if (plateSystemGroup && plateSystemGroup.length > 0) {
-            systemGroup = plateSystemGroup;
-            matchedByPlate = true;
-          }
-        }
-      }
-
-      if (!systemGroup || systemGroup.length === 0) {
+      const systemGroup = systemMap.get(orderNo) || [];
+      if (systemGroup.length === 0) {
+        // 有工单号但系统无此单：若该单已作废则单独标记，否则判定为系统缺失
         for (const row of excelGroup) {
-          items.push({
-            type: 'missing_in_system',
-            orderNo: row.orderNo || row.plateNumber,
-            plateNumber: row.plateNumber,
-            excelPaintCount: row.paintCount,
-            remark: row.remark,
-          });
+          const vo = voidOrderMap.get(row.orderNo);
+          if (vo) {
+            coveredVoidKeys.add(row.orderNo);
+            const sys = +Number(vo.totalPaintCount).toFixed(2);
+            items.push({
+              type: 'voided',
+              orderNo: row.orderNo,
+              plateNumber: row.plateNumber,
+              excelPaintCount: row.paintCount,
+              systemPaintCount: sys,
+              diff: +(row.paintCount - sys).toFixed(2),
+              voidReason: vo.voidReason ?? null,
+              remark: row.remark,
+            });
+          } else {
+            items.push({
+              type: 'missing_in_system',
+              orderNo: row.orderNo,
+              plateNumber: row.plateNumber,
+              excelPaintCount: row.paintCount,
+              remark: row.remark,
+            });
+          }
         }
         continue;
       }
 
       if (systemGroup.length > 1) {
         items.push({
-          id: systemGroup[0].id,
           type: 'duplicate',
           orderNo,
           plateNumber: systemGroup[0].plateNumber || '',
@@ -209,60 +257,76 @@ export class WorkOrderReconcileService {
           count: systemGroup.length,
         });
       }
-
-      const excelRow = excelGroup[0];
-      const systemOrder = systemGroup[0];
-
-      if (matchedByPlate) {
-        const plateKey = excelRow.plateNumber;
-        if (plateKey) {
-          matchedSystemPlateKeys.add(plateKey);
-          matchedExcelPlateKeys.add(plateKey);
-        }
-      } else {
-        matchedSystemKeys.add(orderNo);
-        matchedExcelKeys.add(orderNo);
-      }
-      matchedSystemOrderIds.add(systemOrder.id);
-
-      const systemPaintCount = Number(systemOrder.totalPaintCount);
-      const diff = +(excelRow.paintCount - systemPaintCount).toFixed(2);
-
-      if (Math.abs(diff) < 0.001) {
-        items.push({
-          id: systemOrder.id,
-          type: 'matched',
-          orderNo,
-          plateNumber: excelRow.plateNumber || systemOrder.plateNumber || '',
-          excelPaintCount: excelRow.paintCount,
-          systemPaintCount,
-          diff: 0,
-          status: systemOrder.status,
-          systemRemark: systemOrder.remark,
-          isRework: systemOrder.isRework,
-          reworkRemark: systemOrder.reworkRemark,
-        });
-      } else {
-        items.push({
-          id: systemOrder.id,
-          type: 'diff',
-          orderNo,
-          plateNumber: excelRow.plateNumber || systemOrder.plateNumber || '',
-          excelPaintCount: excelRow.paintCount,
-          systemPaintCount,
-          diff,
-          status: systemOrder.status,
-          systemRemark: systemOrder.remark,
-          isRework: systemOrder.isRework,
-          reworkRemark: systemOrder.reworkRemark,
-        });
+      // 系统同单号多条时逐条比对
+      for (const systemOrder of systemGroup) {
+        compareRow(excelGroup[0], systemOrder);
       }
     }
 
+    // 阶段2：仅按车牌匹配（excel 无工单号、仅有车牌的行）
+    for (const excelGroup of excelMap.values()) {
+      if (excelGroup[0].orderNo) continue;
+      const plate = excelGroup[0].plateNumber;
+      if (!plate) continue;
+
+      if (excelGroup.length > 1) {
+        items.push({
+          type: 'duplicate',
+          orderNo: plate,
+          plateNumber: plate,
+          source: 'excel',
+          count: excelGroup.length,
+        });
+      }
+
+      const systemGroup = systemPlateMap.get(plate) || [];
+      if (systemGroup.length === 0) {
+        for (const row of excelGroup) {
+          const vo = voidPlateMap.get(plate);
+          if (vo) {
+            coveredVoidKeys.add(plate);
+            const sys = +Number(vo.totalPaintCount).toFixed(2);
+            items.push({
+              type: 'voided',
+              orderNo: row.plateNumber,
+              plateNumber: row.plateNumber,
+              excelPaintCount: row.paintCount,
+              systemPaintCount: sys,
+              diff: +(row.paintCount - sys).toFixed(2),
+              voidReason: vo.voidReason ?? null,
+              remark: row.remark,
+            });
+          } else {
+            items.push({
+              type: 'missing_in_system',
+              orderNo: row.plateNumber,
+              plateNumber: row.plateNumber,
+              excelPaintCount: row.paintCount,
+              remark: row.remark,
+            });
+          }
+        }
+        continue;
+      }
+
+      if (systemGroup.length > 1) {
+        items.push({
+          type: 'duplicate',
+          orderNo: plate,
+          plateNumber: systemGroup[0].plateNumber || '',
+          source: 'system',
+          count: systemGroup.length,
+        });
+      }
+      // 系统同车牌多条时逐条比对
+      for (const systemOrder of systemGroup) {
+        compareRow(excelGroup[0], systemOrder);
+      }
+    }
+
+    // 系统有、excel 无匹配项 -> 多出于系统
     const processedSystemOrders = new Set<string>();
     for (const [orderNo, systemGroup] of systemMap.entries()) {
-      if (matchedSystemKeys.has(orderNo)) continue;
-
       if (systemGroup.length > 1 && !orderNo.startsWith('__null_')) {
         const firstOrder = systemGroup[0];
         items.push({
@@ -278,9 +342,6 @@ export class WorkOrderReconcileService {
       for (const systemOrder of systemGroup) {
         if (processedSystemOrders.has(systemOrder.id)) continue;
         if (matchedSystemOrderIds.has(systemOrder.id)) continue;
-        
-        const plateKey = systemOrder.plateNumber || '';
-        if (matchedSystemPlateKeys.has(plateKey)) continue;
 
         processedSystemOrders.add(systemOrder.id);
 
@@ -288,13 +349,26 @@ export class WorkOrderReconcileService {
           id: systemOrder.id,
           type: 'extra_in_system',
           orderNo: systemOrder.orderNo || '',
-          plateNumber: plateKey,
+          plateNumber: systemOrder.plateNumber || '',
           systemPaintCount: Number(systemOrder.totalPaintCount),
           status: systemOrder.status,
           isRework: systemOrder.isRework,
           reworkRemark: systemOrder.reworkRemark,
         });
       }
+    }
+
+    // 系统已作废但 Excel 未出现的工单：一并展示（标记已作废、不计入对账）
+    for (const vo of voidOrders) {
+      const key = vo.orderNo || vo.plateNumber || '';
+      if (key && coveredVoidKeys.has(key)) continue;
+      items.push({
+        type: 'voided',
+        orderNo: vo.orderNo || '',
+        plateNumber: vo.plateNumber || '',
+        systemPaintCount: +Number(vo.totalPaintCount).toFixed(2),
+        voidReason: vo.voidReason ?? null,
+      });
     }
 
     const excelTotal = +excelRows.reduce((sum, r) => sum + r.paintCount, 0).toFixed(2);
@@ -307,6 +381,7 @@ export class WorkOrderReconcileService {
     const missingInSystemCount = items.filter(i => i.type === 'missing_in_system').length;
     const extraInSystemCount = items.filter(i => i.type === 'extra_in_system').length;
     const duplicateCount = items.filter(i => i.type === 'duplicate').length;
+    const voidedCount = items.filter(i => i.type === 'voided').length;
 
     return {
       summary: {
@@ -322,6 +397,7 @@ export class WorkOrderReconcileService {
         duplicateCount,
         reworkExcludedCount,
         reworkExcludedPaintCount,
+        voidedCount,
       },
       items,
     };
@@ -361,7 +437,42 @@ export class WorkOrderReconcileService {
     let headerRow = config?.headerRow !== undefined ? config.headerRow : 0;
     let startRow = 0;
 
+    // 先尝试自动识别表头，供模板不适用时回退使用
+    const detectedHeader = this.detectReconcileHeader(jsonData);
+    let useConfig = false;
+
+    // 门店模板（明细台账）仅适用于符合其结构的文件。若上传的是汇总/对账文件
+    // （如 序号/单号/车牌/副数），直接套用会把列读错（工单号读到空列、副数被当成车牌），
+    // 因此校验配置表头行在 orderNo/paintCount 列上是否出现对应表头文字，否则放弃模板。
     if (config && config.fields) {
+      const hRow = (jsonData[config.headerRow ?? 0] || []) as unknown[];
+      const orderHdrCol = config.fields.orderNo ? XLSX.utils.decode_col(config.fields.orderNo) : -1;
+      const paintHdrCol = config.fields.paintCount ? XLSX.utils.decode_col(config.fields.paintCount) : -1;
+      const orderHeader = orderHdrCol >= 0 ? String(hRow[orderHdrCol] ?? '').toLowerCase() : '';
+      const paintHeader = paintHdrCol >= 0 ? String(hRow[paintHdrCol] ?? '').toLowerCase() : '';
+      const orderOk =
+        orderHeader.includes('工单') ||
+        orderHeader.includes('单号') ||
+        orderHeader.includes('订单号') ||
+        orderHeader.includes('维修单');
+      const paintOk =
+        paintHeader.includes('副数') ||
+        paintHeader.includes('幅数') ||
+        paintHeader.includes('总幅') ||
+        paintHeader.includes('总计') ||
+        paintHeader.includes('面积') ||
+        paintHeader.includes('油漆') ||
+        paintHeader.includes('涂料') ||
+        paintHeader.includes('喷漆') ||
+        paintHeader.includes('数量');
+      if (orderOk && paintOk) {
+        useConfig = true;
+      } else {
+        config = null;
+      }
+    }
+
+    if (useConfig && config && config.fields) {
       if (config.fields.orderNo) orderNoColIndex = XLSX.utils.decode_col(config.fields.orderNo);
       if (config.fields.plateNumber) plateNumberColIndex = XLSX.utils.decode_col(config.fields.plateNumber);
       if (config.fields.paintCount) paintCountColIndex = XLSX.utils.decode_col(config.fields.paintCount);
@@ -371,7 +482,7 @@ export class WorkOrderReconcileService {
 
     if (orderNoColIndex === -1) {
       // 自动识别表头行：支持"台账"格式（含标题/合计行、系数行）与汇总格式
-      const detected = this.detectReconcileHeader(jsonData);
+      const detected = detectedHeader;
       if (detected) {
         headerRow = detected.headerRow;
         orderNoColIndex = detected.orderNoColIndex;

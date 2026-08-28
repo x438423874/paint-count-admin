@@ -209,7 +209,8 @@ function getStatusLabel(status?: string) {
     AUDITED: '已审核',
     SETTLED: '已结算',
     ABNORMAL: '异常',
-    COMPLETED: '已完成'
+    COMPLETED: '已完成',
+    VOID: '作废'
   };
   return map[status || ''] || status || '-';
 }
@@ -290,6 +291,9 @@ const columns = [
     key: 'status',
     width: 120,
     render: (row: ReconcileItem) => {
+      if (row.type === 'voided') {
+        return <NTag size="small" type="error">已作废</NTag>;
+      }
       if (!row.status) return '-';
       const typeMap: Record<string, 'default' | 'warning' | 'success' | 'info' | 'error'> = {
         DRAFT: 'default',
@@ -297,7 +301,8 @@ const columns = [
         AUDITED: 'success',
         SETTLED: 'info',
         ABNORMAL: 'error',
-        COMPLETED: 'success'
+        COMPLETED: 'success',
+        VOID: 'error'
       };
       return <NSpace size={4} align="center">
         <NTag size="small" type={typeMap[row.status] || 'default'}>{getStatusLabel(row.status)}</NTag>
@@ -308,7 +313,13 @@ const columns = [
   {
     title: '备注',
     key: 'remark',
-    ellipsis: { tooltip: true }
+    ellipsis: { tooltip: true },
+    render: (row: ReconcileItem) => {
+      if (row.type === 'voided' && row.voidReason) {
+        return `作废原因：${row.voidReason}`;
+      }
+      return row.remark || row.systemRemark || '';
+    }
   },
   {
     title: '操作',
@@ -316,6 +327,9 @@ const columns = [
     width: 150,
     fixed: 'right' as const,
     render: (row: ReconcileItem) => {
+      if (row.type === 'voided') {
+        return <NTag size="small" type="warning">已作废，不计入对账</NTag>;
+      }
       if (row.type === 'missing_in_system') {
         return (
           <NSpace size={6}>
@@ -342,7 +356,7 @@ const columns = [
   }
 ];
 
-const filterType = ref<'all' | 'diff' | 'missing_in_system' | 'extra_in_system' | 'duplicate' | 'matched'>('all');
+const filterType = ref<'all' | 'diff' | 'missing_in_system' | 'extra_in_system' | 'duplicate' | 'matched' | 'voided'>('all');
 
 const filteredItems = computed(() => {
   if (!result.value) return [];
@@ -374,7 +388,8 @@ function getTypeLabel(type: string) {
     diff: '金额不一致',
     missing_in_system: 'Excel 有系统无',
     extra_in_system: '系统有 Excel 无',
-    duplicate: '重复工单号'
+    duplicate: '重复工单号',
+    voided: '已作废（不计入对账）'
   };
   return map[type] || type;
 }
@@ -492,6 +507,13 @@ loadShops();
                 </template>
               </NStatistic>
             </NCard>
+            <NCard v-if="result.summary.voidedCount > 0" size="small" style="min-width: 200px">
+              <NStatistic label="已作废（不计入对账）">
+                <template #default>
+                  {{ result.summary.voidedCount }} 条
+                </template>
+              </NStatistic>
+            </NCard>
           </NSpace>
 
           <NSpace class="mb-16px" :size="16" align="center">
@@ -520,6 +542,7 @@ loadShops();
             <NTabPane name="extra_in_system" :tab="`系统有 Excel 无 (${result.summary.extraInSystemCount})`" />
             <NTabPane name="duplicate" :tab="`重复 (${result.summary.duplicateCount})`" />
             <NTabPane name="matched" :tab="`一致 (${result.summary.matchedCount})`" />
+            <NTabPane name="voided" :tab="`已作废 (${result.summary.voidedCount})`" />
           </NTabs>
 
           <NDataTable
@@ -559,5 +582,8 @@ loadShops();
 }
 :deep(.matched) {
   background-color: var(--color-success-bg);
+}
+:deep(.voided) {
+  background-color: var(--color-error-bg);
 }
 </style>

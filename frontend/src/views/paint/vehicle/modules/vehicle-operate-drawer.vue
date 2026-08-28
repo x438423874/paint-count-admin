@@ -45,6 +45,7 @@ interface FormModel {
   phone: string;
   contactPerson: string;
   remark: string;
+  syncToOrders: boolean;
 }
 
 const model: FormModel = reactive(createDefaultModel());
@@ -81,7 +82,8 @@ function createDefaultModel(): FormModel {
     customerName: '',
     phone: '',
     contactPerson: '',
-    remark: ''
+    remark: '',
+    syncToOrders: false
   };
 }
 
@@ -132,16 +134,18 @@ async function handleSubmit() {
     customerName: model.customerName.trim() || undefined,
     phone: model.phone.trim() || undefined,
     contactPerson: model.contactPerson.trim() || undefined,
-    remark: model.remark.trim() || undefined
+    remark: model.remark.trim() || undefined,
+    ...(props.operateType === 'edit' ? { syncToOrders: model.syncToOrders } : {})
   };
   if (props.operateType === 'add') {
     const { error } = await createPaintVehicle(payload);
     if (error) return;
     window.$message?.success($t('common.addSuccess'));
   } else {
-    const { error } = await updatePaintVehicle({ id: props.rowData.id, ...payload });
+    const { data, error } = await updatePaintVehicle({ id: props.rowData.id, ...payload });
     if (error) return;
-    window.$message?.success($t('common.updateSuccess'));
+    const synced = data?.syncedOrderCount;
+    window.$message?.success(synced && synced > 0 ? `更新成功，已同步 ${synced} 张历史工单` : $t('common.updateSuccess'));
   }
   closeDrawer();
   emit('submitted');
@@ -190,6 +194,11 @@ watch(visible, () => {
         </NFormItem>
         <NFormItem label="备注">
           <NInput v-model:value="model.remark" type="textarea" placeholder="备注" :rows="2" />
+        </NFormItem>
+        <NFormItem v-if="props.operateType === 'edit'" label=" " :show-feedback="false">
+          <NCheckbox v-model:checked="model.syncToOrders">
+            同步到该车所有历史工单（仅更新本次修改的车辆信息）
+          </NCheckbox>
         </NFormItem>
       </NForm>
       <template #footer>

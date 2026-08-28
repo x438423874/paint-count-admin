@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { onMounted } from 'vue'
 import { useUserStore } from '@/stores'
 
 const router = useRouter()
@@ -9,6 +10,67 @@ const form = reactive({
   identifier: '',
   password: '',
 })
+
+// 记住密码：勾选后在本地保存账号与密码，下次进入自动回填
+const rememberPwd = ref(false)
+const CREDENTIAL_KEY = 'paint-h5-login-credential'
+
+// 轻量可逆加密：XOR 混淆后再 base64，避免密码以明文存于 localStorage
+const PWD_SECRET = 'paint-count-h5@2026'
+
+function encryptPwd(pwd: string): string {
+  if (!pwd) return ''
+  let out = ''
+  for (let i = 0; i < pwd.length; i++) {
+    out += String.fromCharCode(pwd.charCodeAt(i) ^ PWD_SECRET.charCodeAt(i % PWD_SECRET.length))
+  }
+  const bytes = new TextEncoder().encode(out)
+  let bin = ''
+  bytes.forEach(b => (bin += String.fromCharCode(b)))
+  return btoa(bin)
+}
+
+function decryptPwd(cipher: string): string {
+  const bin = atob(cipher)
+  const out = new TextDecoder().decode(Uint8Array.from(bin, c => c.charCodeAt(0)))
+  let text = ''
+  for (let i = 0; i < out.length; i++) {
+    text += String.fromCharCode(out.charCodeAt(i) ^ PWD_SECRET.charCodeAt(i % PWD_SECRET.length))
+  }
+  return text
+}
+
+function safeDecrypt(cipher: string): string {
+  try {
+    return decryptPwd(cipher)
+  } catch (e) {
+    return cipher // 兼容未加密的旧数据
+  }
+}
+
+function loadCredential() {
+  try {
+    const raw = localStorage.getItem(CREDENTIAL_KEY)
+    if (raw) {
+      const cred = JSON.parse(raw)
+      form.identifier = cred.identifier ?? form.identifier
+      if (cred.password) {
+        form.password = safeDecrypt(cred.password)
+      }
+      rememberPwd.value = true
+    }
+  } catch (e) {}
+}
+
+function saveCredential() {
+  if (rememberPwd.value) {
+    localStorage.setItem(CREDENTIAL_KEY, JSON.stringify({ identifier: form.identifier, password: encryptPwd(form.password) }))
+  } else {
+    localStorage.removeItem(CREDENTIAL_KEY)
+  }
+}
+
+onMounted(loadCredential)
 
 async function handleLogin() {
   if (!form.identifier.trim()) {
@@ -31,6 +93,7 @@ async function handleLogin() {
   loading.value = true
   try {
     await userStore.login(form)
+    saveCredential()
     const { redirect } = router.currentRoute.value.query as any
     if (redirect) {
       router.push(redirect)
@@ -87,6 +150,10 @@ async function handleLogin() {
           clearable
           @keyup.enter="handleLogin"
         />
+      </div>
+
+      <div class="remember-row">
+        <van-checkbox v-model="rememberPwd">记住密码</van-checkbox>
       </div>
 
       <van-button
@@ -185,6 +252,14 @@ async function handleLogin() {
   :deep(.van-field + .van-field) {
     border-top: 1px solid var(--neutral-100);
   }
+}
+
+.remember-row {
+  display: flex;
+  justify-content: flex-start;
+  padding: 16px 4px 0;
+  font-size: 14px;
+  color: var(--color-text, #323233);
 }
 
 .login-btn {

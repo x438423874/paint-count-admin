@@ -17,16 +17,16 @@ export default ({ mode }: ConfigEnv): UserConfig => {
 
     server: {
       host: true,
-      port: 6400,
+      port: 6300,
       proxy: {
         '/fg-api': {
-          target: env.VITE_SERVER_BASEURL || 'http://localhost:6200/v1',
+          target: env.VITE_SERVER_BASEURL || 'http://localhost:6100/v1',
           ws: false,
           changeOrigin: true,
           rewrite: requestPath => requestPath.replace(API_PREFIX_RE, ''),
         },
         '/uploads': {
-          target: (env.VITE_SERVER_BASEURL || 'http://localhost:6200/v1').replace(/\/v1$/, ''),
+          target: (env.VITE_SERVER_BASEURL || 'http://localhost:6100/v1').replace(/\/v1$/, ''),
           changeOrigin: true,
         },
       },

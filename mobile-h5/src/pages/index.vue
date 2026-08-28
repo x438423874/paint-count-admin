@@ -126,6 +126,10 @@ function goToImagePool() {
   router.push({ name: 'PendingImage' })
 }
 
+function goToAdjustment() {
+  router.push({ name: 'Adjustment' })
+}
+
 // 携带状态筛选跳转工单列表（工单页 onMounted/onActivated 读取该标记）
 function goToOrderListWithStatus(status?: string) {
   if (status) sessionStorage.setItem('work-order-status-query', status)
@@ -273,6 +277,12 @@ onMounted(async () => {
             <van-icon name="photo-o" size="22" color="#fff" />
           </div>
           <span class="func-label">图片池</span>
+        </div>
+        <div class="func-item" @click="goToAdjustment">
+          <div class="func-icon func-danger">
+            <van-icon name="balance-o" size="22" color="#fff" />
+          </div>
+          <span class="func-label">幅数调整</span>
         </div>
       </div>
 
@@ -589,7 +599,7 @@ onMounted(async () => {
 /* 功能宫格 */
 .func-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 12px;
   padding: 16px;
 }
@@ -625,6 +635,10 @@ onMounted(async () => {
 
 .func-warning {
   background: linear-gradient(135deg, var(--color-warning) 0%, #ffc069 100%);
+}
+
+.func-danger {
+  background: linear-gradient(135deg, var(--color-danger) 0%, #ff9c9c 100%);
 }
 
 .func-label {

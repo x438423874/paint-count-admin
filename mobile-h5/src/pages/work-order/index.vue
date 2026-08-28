@@ -2,6 +2,7 @@
 import {
   getWorkOrderPage,
   getShopList,
+  getCategories,
   getWorkOrderStatusCounts,
   ocrRecognizeImage,
   updateWorkOrder,
@@ -10,7 +11,7 @@ import {
   batchSettleWorkOrders,
   batchUnsettleWorkOrders,
 } from '@/api/paint'
-import type { PaintWorkOrder, PaintShop, PageResult, PaintOrderStatus } from '@/api/types/paint'
+import type { PaintWorkOrder, PaintShop, PaintCategory, PageResult, PaintOrderStatus } from '@/api/types/paint'
 import { showNotify } from 'vant'
 import { compressImage } from '@/utils/image-compress'
 import { canBatchOcr as canBatchOcrRole, canEdit as canEditRole } from '@/utils/permission'
@@ -25,9 +26,12 @@ const searchForm = reactive({
   settlementMonth: '',
   status: '' as PaintOrderStatus | '',
   isRework: undefined as boolean | undefined,
+  categoryId: '' as string,
+  isNewPart: undefined as boolean | undefined,
 })
 
 const shops = ref<PaintShop[]>([])
+const categories = ref<PaintCategory[]>([])
 const orders = ref<PaintWorkOrder[]>([])
 const loading = ref(false)
 const finished = ref(false)
@@ -93,6 +97,16 @@ async function loadShops() {
   }
 }
 
+async function loadCategories() {
+  try {
+    const res = await getCategories()
+    categories.value = (res as any) || []
+  }
+  catch {
+    categories.value = []
+  }
+}
+
 async function loadStatusCounts() {
   try {
     const res = await getWorkOrderStatusCounts(searchForm.shopId || undefined, searchForm.settlementMonth || undefined)
@@ -125,6 +139,8 @@ async function loadOrders(reset = false) {
     if (searchForm.settlementMonth) params.settlementMonth = searchForm.settlementMonth
     if (searchForm.status) params.status = searchForm.status
     if (searchForm.isRework !== undefined) params.isRework = searchForm.isRework
+    if (searchForm.categoryId) params.categoryId = searchForm.categoryId
+    if (searchForm.isNewPart !== undefined) params.isNewPart = searchForm.isNewPart
 
     const res = await getWorkOrderPage(params)
     const data = res as any as PageResult<PaintWorkOrder>
@@ -175,6 +191,8 @@ function resetFilter() {
   searchForm.shopId = shops.value.length === 1 ? shops.value[0].id : ''
   searchForm.settlementMonth = ''
   searchForm.isRework = undefined
+  searchForm.categoryId = ''
+  searchForm.isNewPart = undefined
   showFilterPopup.value = false
   loadOrders(true)
   loadStatusCounts()
@@ -684,6 +702,7 @@ function setupScrollObserver() {
 
 onMounted(() => {
   loadShops()
+  loadCategories()
   initOnMounted()
   nextTick(() => setupScrollObserver())
   hasInitialized = true
@@ -805,12 +824,18 @@ onActivated(() => {
               <span class="plate-number">{{ order.plateNumber || '未识别车牌' }}</span>
               </div>
               <div class="card-tags">
-                <van-tag v-if="canMerge(order)" type="danger" size="medium" @click.stop="openMergePopup(order)">
+                <van-tag v-if="order._isDuplicate" type="danger" size="medium" class="dup-tag">
+                  重复 {{ order._duplicateCount }} 条
+                </van-tag>
+                <van-tag v-if="order._isDuplicate" type="warning" size="medium" @click.stop="openMergePopup(order)">
                   合并
                 </van-tag>
-                <van-tag v-if="order.images && order.images.length > 0" type="primary" size="medium">
+                <van-tag v-if="order._hasOtherMonthSettlement" type="success" size="medium" class="cross-month-tag">
+                  跨月结算
+                </van-tag>
+                <van-tag v-if="order._count?.images || order.images?.length" type="primary" size="medium">
                   <van-icon name="photo-o" size="12" />
-                  <span>{{ order.images.length }}</span>
+                  <span>{{ order._count?.images ?? order.images?.length }}</span>
                 </van-tag>
                 <van-tag :type="getStatusType(order.status)" size="medium">
                   {{ getStatusLabel(order.status) }}
@@ -953,6 +978,46 @@ onActivated(() => {
                 @click="searchForm.isRework = false"
               >
                 否
+              </div>
+            </div>
+          </div>
+          <div class="filter-group">
+            <div class="filter-group-title">部位</div>
+            <div class="filter-options">
+              <div
+                class="filter-option"
+                :class="{ active: searchForm.categoryId === '' }"
+                @click="searchForm.categoryId = ''"
+              >
+                全部部位
+              </div>
+              <div
+                v-for="c in categories"
+                :key="c.id"
+                class="filter-option"
+                :class="{ active: searchForm.categoryId === c.id }"
+                @click="searchForm.categoryId = c.id"
+              >
+                {{ c.name }}
+              </div>
+            </div>
+          </div>
+          <div class="filter-group">
+            <div class="filter-group-title">新件</div>
+            <div class="filter-options">
+              <div
+                class="filter-option"
+                :class="{ active: searchForm.isNewPart === undefined }"
+                @click="searchForm.isNewPart = undefined"
+              >
+                全部
+              </div>
+              <div
+                class="filter-option"
+                :class="{ active: searchForm.isNewPart === true }"
+                @click="searchForm.isNewPart = true"
+              >
+                仅新件
               </div>
             </div>
           </div>

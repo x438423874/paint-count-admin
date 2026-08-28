@@ -171,6 +171,15 @@ export const generatedRoutes: GeneratedRoute[] = [
     },
     children: [
       {
+        name: 'paint_adjustment',
+        path: '/paint/adjustment',
+        component: 'view.paint_adjustment',
+        meta: {
+          title: 'paint_adjustment',
+          i18nKey: 'route.paint_adjustment'
+        }
+      },
+      {
         name: 'paint_category',
         path: '/paint/category',
         component: 'view.paint_category',
@@ -195,6 +204,15 @@ export const generatedRoutes: GeneratedRoute[] = [
         meta: {
           title: 'paint_scheduled-task',
           i18nKey: 'route.paint_scheduled-task'
+        }
+      },
+      {
+        name: 'paint_seal',
+        path: '/paint/seal',
+        component: 'view.paint_seal',
+        meta: {
+          title: 'paint_seal',
+          i18nKey: 'route.paint_seal'
         }
       },
       {

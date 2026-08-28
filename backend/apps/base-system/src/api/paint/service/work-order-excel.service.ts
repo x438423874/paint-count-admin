@@ -92,6 +92,8 @@ export interface ExcelTemplateConfig {
   items: { col: string; categoryName: string }[];
   /** 自动识别时建议的部位别名映射（原始表头名 -> 系统部位ID列表） */
   suggestedAliasMap?: Record<string, string[]>;
+  /** 是否为幅数汇总表（只有 单号/车牌/副数 等基本列，没有明细部位列，如「盛通别克油漆幅数」） */
+  summaryMode?: boolean;
 }
 
 @Injectable()
@@ -178,7 +180,7 @@ export class WorkOrderExcelService {
     const categoryNames = new Set(categories.map(c => c.name));
     const categoryNameToId = new Map(categories.map(c => [c.name, c.id]));
 
-    // 扫描每行，找到包含最多项目类别名（含别名）的行作为表头行
+    // 明细模板：含最多项目类别名（含别名）的行作为表头行
     let headerRow = -1;
     let maxMatches = 0;
     let detectedItems: { col: string; categoryName: string }[] = [];
@@ -186,6 +188,9 @@ export class WorkOrderExcelService {
     let detectedFields: ExcelTemplateConfig['fields'] = {
       date: 'B', carModel: 'C', plateNumber: 'D', orderNo: 'E', paintCount: 'F', remark: 'AG',
     };
+    // 幅数汇总表：累计识别基本字段（单号/车牌/副数），用于「盛通别克油漆幅数」这类无部位明细的台账
+    const summaryFields: Partial<ExcelTemplateConfig['fields']> = {};
+    let summaryHeaderRow = -1;
 
     for (let r = 0; r <= Math.min(10, range.e.r); r++) {
       const matches: { col: string; categoryName: string }[] = [];
@@ -235,20 +240,66 @@ export class WorkOrderExcelService {
       }
     }
 
-    if (headerRow === -1 || maxMatches === 0) {
-      throw new BadRequestException('无法识别Excel表头，请确保表头行包含项目类别名称');
+    // 明细模板（含喷漆部位列）
+    if (headerRow !== -1 && maxMatches > 0) {
+      const config: ExcelTemplateConfig = {
+        dataStartRow: headerRow + 1,
+        headerRow,
+        coefficientRow: headerRow + 1,
+        fields: detectedFields,
+        items: detectedItems,
+        suggestedAliasMap: detectedSuggestedAliasMap,
+      };
+      return config;
     }
 
-    const config: ExcelTemplateConfig = {
-      dataStartRow: headerRow + 1,
-      headerRow,
-      coefficientRow: headerRow + 1,
-      fields: detectedFields,
-      items: detectedItems,
-      suggestedAliasMap: detectedSuggestedAliasMap,
-    };
+    // 幅数汇总表：扫描表头区域，识别 单号/车牌/副数 等基本列（不要求部位列），如「盛通别克油漆幅数」
+    for (let r = 0; r <= Math.min(12, range.e.r); r++) {
+      const rowBasic: Partial<ExcelTemplateConfig['fields']> = {};
+      for (let c = 0; c <= range.e.c; c++) {
+        const cell = ws[XLSX.utils.encode_cell({ r, c })];
+        if (!cell?.v) continue;
+        const key = this.matchBasicField(String(cell.v).trim());
+        if (key) rowBasic[key] = XLSX.utils.encode_col(c);
+      }
+      Object.assign(summaryFields, rowBasic);
+      const basicCount = [rowBasic.orderNo, rowBasic.plateNumber, rowBasic.paintCount].filter(Boolean).length;
+      if (summaryHeaderRow === -1 && basicCount >= 2) summaryHeaderRow = r;
+    }
 
-    return config;
+    const hasSummaryKey = Boolean(summaryFields.orderNo || summaryFields.plateNumber || summaryFields.paintCount);
+    if (summaryHeaderRow !== -1 && hasSummaryKey) {
+      const sf: ExcelTemplateConfig['fields'] = {
+        date: summaryFields.date || '',
+        carModel: summaryFields.carModel || '',
+        plateNumber: summaryFields.plateNumber || '',
+        orderNo: summaryFields.orderNo || '',
+        paintCount: summaryFields.paintCount || '',
+        remark: summaryFields.remark || '',
+      };
+      return {
+        dataStartRow: summaryHeaderRow + 1,
+        headerRow: summaryHeaderRow,
+        coefficientRow: summaryHeaderRow + 1,
+        fields: sf,
+        items: [],
+        summaryMode: true,
+      };
+    }
+
+    throw new BadRequestException('无法识别Excel表头：请检查是否包含项目类别名称（如 左前门），或 工单号/车牌/副数 等基本列');
+  }
+
+  /** 基本字段列名关键字匹配（单号/车牌/副数/日期/车型/备注），用于幅数汇总表识别 */
+  private matchBasicField(val: string): keyof ExcelTemplateConfig['fields'] | null {
+    const n = val.toLowerCase();
+    if (n.includes('工单') || n.includes('单号') || n.includes('维修单') || n.includes('订单号')) return 'orderNo';
+    if (n.includes('车牌') || n.includes('牌照') || n.includes('车号')) return 'plateNumber';
+    if (n.includes('日期') || n.includes('进场') || n.includes('到店') || n.includes('接车') || n.includes('开工')) return 'date';
+    if (n.includes('车型') || n.includes('车系') || n.includes('车辆')) return 'carModel';
+    if (n.includes('副数') || n.includes('幅数') || n.includes('总幅') || n.includes('面积') || n.includes('油漆') || n.includes('涂料') || n.includes('喷漆')) return 'paintCount';
+    if (n.includes('备注') || n.includes('说明')) return 'remark';
+    return null;
   }
 
   /**
@@ -261,8 +312,11 @@ export class WorkOrderExcelService {
     const categories = await this.prisma.paintItemCategory.findMany();
     const categoryNameToId = new Map(categories.map(c => [c.name, c.id]));
 
+    // 仅保留与当前模板列名匹配的映射，丢弃已删除/重命名列的残留条目
+    const validNames = new Set(items.map(i => i.categoryName));
     const result: Record<string, string[]> = {};
     for (const [key, value] of Object.entries(aliasMap)) {
+      if (!validNames.has(key)) continue;
       if (Array.isArray(value) && value.length > 0) result[key] = value;
     }
 
@@ -373,7 +427,8 @@ export class WorkOrderExcelService {
         const carModel = carModelCell ? String(carModelCell.v).trim() : '';
         const remark = remarkCell ? String(remarkCell.v).trim() : '';
 
-        let orderDate = new Date().toISOString().split('T')[0];
+        // 日期无数据时留空（null），不再默认填充当天
+        let orderDate: string | undefined;
         if (dateCell?.v) {
           const dateStr = String(dateCell.v).trim();
           const match = dateStr.match(/^(\d{2,4})\.(\d{1,2})\.(\d{1,2})$/);
@@ -445,6 +500,19 @@ export class WorkOrderExcelService {
             : { categoryId, quantity: agg.quantity, newPartQuantity: 0 },
         );
 
+        // 幅数汇总表（无明细部位列）：直接用「副数/幅数」列作为该工单总幅数
+        let importTotalPaintCount: number | undefined;
+        if (!config.items || config.items.length === 0) {
+          const paintCol = config.fields.paintCount;
+          if (paintCol) {
+            const paintCell = ws[`${paintCol}${r + 1}`];
+            if (paintCell?.v !== undefined && paintCell.v !== null && paintCell.v !== '') {
+              const num = Number(paintCell.v);
+              if (Number.isFinite(num)) importTotalPaintCount = num;
+            }
+          }
+        }
+
         const extraRemark = unmappedNames.length > 0 ? `未识别部位：${unmappedNames.join('、')}` : '';
         const finalRemark = remark && extraRemark ? `${remark}；${extraRemark}` : remark || extraRemark;
 
@@ -468,6 +536,7 @@ export class WorkOrderExcelService {
           carModel: carModel || undefined,
           remark: remark || undefined,
           items,
+          importTotalPaintCount: importTotalPaintCount || undefined,
         });
 
         results.success++;
@@ -534,13 +603,20 @@ export class WorkOrderExcelService {
 
     // 系数行
     const coeffRowValues = ['', '', '', '', '', ''];
-    const templateItems = shop.standardTemplateId && !isSummary
+    const templateItems = shop.standardTemplateId
       ? await this.prisma.paintStandardTemplateItem.findMany({
           where: { templateId: shop.standardTemplateId },
           include: { category: true },
         })
       : [];
     const templateMap = new Map(templateItems.map(t => [t.category.name, Number(t.coefficient)]));
+    // 按系统部位ID索引，用于反推「标准应得幅数」，检测被手动修改过的部位
+    const templateByCatId = new Map(
+      templateItems.map(t => [
+        t.categoryId,
+        { coefficient: Number(t.coefficient), newPartAddition: Number(t.newPartAddition) },
+      ]),
+    );
     if (!isSummary) {
       for (const mapping of config.items) {
         // 系数行优先使用别名映射对应的系统部位系数（取第一个映射）
@@ -588,14 +664,14 @@ export class WorkOrderExcelService {
     // 分批游标拉取工单，逐行写出：避免一次性把所有工单及 items 载入内存导致 OOM。
     // 每批仅保留 BATCH_SIZE 条工单在内存，写出后即释放。
     const BATCH_SIZE = 500;
-    let cursorId: string | undefined;
+    let skip = 0;
     do {
-      const batchWhere: any = { ...where };
-      if (cursorId) batchWhere.id = { gt: cursorId };
       const batch = await this.prisma.paintWorkOrder.findMany({
-        where: batchWhere,
+        where,
         include: { items: true },
-        orderBy: { id: 'asc' },
+        // 导出按工单日期（orderDate）升序排列，日期相同按 id 稳定排序
+        orderBy: [{ orderDate: 'asc' }, { id: 'asc' }],
+        skip,
         take: BATCH_SIZE,
       });
       if (batch.length === 0) break;
@@ -603,6 +679,7 @@ export class WorkOrderExcelService {
       for (const order of batch) {
         const itemValues: (string | number)[] = new Array(config.items.length).fill('');
         const unmatchedItems: string[] = [];
+        const modifiedItems: string[] = [];
         let orderTotal = 0;
 
         for (const item of order.items) {
@@ -611,6 +688,19 @@ export class WorkOrderExcelService {
 
           const qty = Number(item.paintCount);
           orderTotal += qty;
+
+          // 检测手动修改过幅数的部位：用标准模板公式反推应得幅数，与实存 paintCount 比对
+          const tpl = templateByCatId.get(item.categoryId);
+          if (tpl) {
+            const quantity = Number(item.quantity) || 1;
+            const newPartQty = Number(item.newPartQuantity) || 0;
+            const oldPartQty = quantity - newPartQty;
+            let standard = tpl.coefficient * oldPartQty + (tpl.coefficient + tpl.newPartAddition) * newPartQty;
+            if (item.specialPaintMultiplier) standard *= Number(item.specialPaintMultiplier);
+            if (Math.abs(qty - standard) > 0.01) {
+              modifiedItems.push(`${cat.name} ${standard.toFixed(1)}→${qty.toFixed(1)}幅`);
+            }
+          }
 
           // 汇总模式不需要填部位列
           if (isSummary) continue;
@@ -629,7 +719,9 @@ export class WorkOrderExcelService {
           }
 
           if (colIndex >= 0) {
-            itemValues[colIndex] = qty;
+            // 同一合并列可能对应多个工单项（如下裙/包角/尾翼），须累加而非覆盖
+            const prevQty = Number(itemValues[colIndex]) || 0;
+            itemValues[colIndex] = prevQty + qty;
           } else {
             unmatchedItems.push(`${cat.name}${qty.toFixed(1)}幅`);
           }
@@ -672,8 +764,8 @@ export class WorkOrderExcelService {
           row.getCell(6).value = { formula: `SUM(${firstItemCol}${currentRow}:${remarkCol}${currentRow})` };
         }
 
-        // 备注列批注：未匹配项目明细 + 原始备注
-        const noteParts = [...unmatchedItems];
+        // 备注列批注：未匹配项目明细 + 手动修改过的部位 + 原始备注
+        const noteParts = [...unmatchedItems, ...modifiedItems];
         if (order.remark) {
           noteParts.push(`备注：${order.remark}`);
         }
@@ -684,9 +776,9 @@ export class WorkOrderExcelService {
         index++;
       }
 
-      cursorId = batch[batch.length - 1].id;
+      skip += batch.length;
       batch.length = 0; // 释放批次引用，便于 GC
-    } while (cursorId && index < totalOrders);
+    } while (index < totalOrders);
 
     // 合计行
     const totalRow = ws.addRow(['合计', '', '', '', '', '', ...new Array(itemHeaders.length).fill(''), '']);

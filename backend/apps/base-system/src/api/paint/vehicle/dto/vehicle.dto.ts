@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsBoolean, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class CreateVehicleDto {
@@ -93,6 +93,11 @@ export class UpdateVehicleDto {
   @IsOptional()
   @IsString()
   remark?: string;
+
+  @ApiPropertyOptional({ description: '是否将本次修改同步到该车所有历史工单（仅同步被修改的字段，默认 false）' })
+  @IsOptional()
+  @IsBoolean()
+  syncToOrders?: boolean;
 }
 
 export class PageVehicleDto {

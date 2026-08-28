@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive } from 'vue';
+import { computed, onMounted, reactive, ref } from 'vue';
 import { loginModuleRecord } from '@/constants/app';
 import { useAuthStore } from '@/store/modules/auth';
 import { useRouterPush } from '@/hooks/common/router';
@@ -24,6 +24,72 @@ const model: FormModel = reactive({
   password: '123456'
 });
 
+// 记住密码：勾选后在本地保存账号与密码，下次进入自动回填
+const rememberPwd = ref(false);
+const CREDENTIAL_KEY = 'paint-admin-login-credential';
+
+// 轻量可逆加密：XOR 混淆后再 base64，避免密码以明文存于 localStorage
+const PWD_SECRET = 'paint-count-admin@2026';
+
+function encryptPwd(pwd: string): string {
+  if (!pwd) return '';
+  let out = '';
+  for (let i = 0; i < pwd.length; i++) {
+    out += String.fromCharCode(pwd.charCodeAt(i) ^ PWD_SECRET.charCodeAt(i % PWD_SECRET.length));
+  }
+  const bytes = new TextEncoder().encode(out);
+  let bin = '';
+  bytes.forEach(b => {
+    bin += String.fromCharCode(b);
+  });
+  return btoa(bin);
+}
+
+function decryptPwd(cipher: string): string {
+  const bin = atob(cipher);
+  const out = new TextDecoder().decode(Uint8Array.from(bin, c => c.charCodeAt(0)));
+  let text = '';
+  for (let i = 0; i < out.length; i++) {
+    text += String.fromCharCode(out.charCodeAt(i) ^ PWD_SECRET.charCodeAt(i % PWD_SECRET.length));
+  }
+  return text;
+}
+
+function safeDecrypt(cipher: string): string {
+  try {
+    return decryptPwd(cipher);
+  } catch {
+    return cipher; // 兼容未加密的旧数据
+  }
+}
+
+function loadCredential() {
+  try {
+    const raw = localStorage.getItem(CREDENTIAL_KEY);
+    if (raw) {
+      const cred = JSON.parse(raw) as Record<string, string>;
+      model.identifier = cred.identifier ?? model.identifier;
+      if (cred.password) {
+        model.password = safeDecrypt(cred.password);
+      }
+      rememberPwd.value = true;
+    }
+  } catch {}
+}
+
+function saveCredential() {
+  if (rememberPwd.value) {
+    localStorage.setItem(
+      CREDENTIAL_KEY,
+      JSON.stringify({ identifier: model.identifier, password: encryptPwd(model.password) })
+    );
+  } else {
+    localStorage.removeItem(CREDENTIAL_KEY);
+  }
+}
+
+onMounted(loadCredential);
+
 const rules = computed<Record<keyof FormModel, App.Global.FormRule[]>>(() => {
   // inside computed to make locale reactive, if not apply i18n, you can define it without computed
   const { formRules } = useFormRules();
@@ -37,6 +103,7 @@ const rules = computed<Record<keyof FormModel, App.Global.FormRule[]>>(() => {
 async function handleSubmit() {
   await validate();
   await authStore.login(model.identifier, model.password);
+  saveCredential();
 }
 
 type AccountKey = 'super' | 'admin' | 'user';
@@ -89,7 +156,7 @@ async function handleAccountLogin(account: Account) {
     </NFormItem>
     <NSpace vertical :size="24">
       <div class="flex-y-center justify-between">
-        <NCheckbox>{{ $t('page.login.pwdLogin.rememberMe') }}</NCheckbox>
+        <NCheckbox v-model:checked="rememberPwd">{{ $t('page.login.pwdLogin.rememberMe') }}</NCheckbox>
         <NButton quaternary @click="toggleLoginModule('reset-pwd')">
           {{ $t('page.login.pwdLogin.forgetPassword') }}
         </NButton>

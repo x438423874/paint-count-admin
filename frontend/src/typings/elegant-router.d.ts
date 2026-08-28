@@ -33,9 +33,11 @@ declare module "@elegant-router/types" {
     "manage_user": "/manage/user";
     "manage_user-detail": "/manage/user-detail/:id";
     "paint": "/paint";
+    "paint_adjustment": "/paint/adjustment";
     "paint_category": "/paint/category";
     "paint_pending-image": "/paint/pending-image";
     "paint_scheduled-task": "/paint/scheduled-task";
+    "paint_seal": "/paint/seal";
     "paint_shop": "/paint/shop";
     "paint_standard-template": "/paint/standard-template";
     "paint_statistics": "/paint/statistics";
@@ -112,9 +114,11 @@ declare module "@elegant-router/types" {
     | "manage_role"
     | "manage_user-detail"
     | "manage_user"
+    | "paint_adjustment"
     | "paint_category"
     | "paint_pending-image"
     | "paint_scheduled-task"
+    | "paint_seal"
     | "paint_shop"
     | "paint_standard-template"
     | "paint_statistics"

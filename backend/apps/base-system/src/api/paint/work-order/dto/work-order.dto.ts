@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsNotEmpty, IsOptional, IsString, IsInt, IsDateString, IsIn, ValidateNested, IsArray, IsBoolean, MaxLength, IsNumber } from 'class-validator';
-import { Type } from 'class-transformer';
+import { Type, Transform } from 'class-transformer';
 
 export class WorkOrderItemDto {
   @ApiProperty({ description: '项目类别ID' })
@@ -104,6 +104,16 @@ export class CreateWorkOrderDto {
   @IsOptional()
   @IsString()
   remark?: string;
+
+  @ApiPropertyOptional({ description: '是否幅数调整单（负幅数工单，用于抵消/订正月报，不影响源工单与车辆去重）' })
+  @IsOptional()
+  @IsBoolean()
+  isAdjustment?: boolean;
+
+  @ApiPropertyOptional({ description: '导入幅数汇总表时直接指定的总幅数（无明细部位列时生效）' })
+  @IsOptional()
+  @IsNumber()
+  importTotalPaintCount?: number;
 }
 
 export class UpdateWorkOrderDto {
@@ -242,13 +252,15 @@ export class PageWorkOrderDto {
   @IsString()
   settlementMonth?: string;
 
-  @ApiPropertyOptional({ description: '状态：DRAFT=草稿,PENDING=待审核,AUDITED=已审核,SETTLED=已结算,ABNORMAL=异常' })
+  @ApiPropertyOptional({ description: '状态：DRAFT=草稿,PENDING=待审核,AUDITED=已审核,SETTLED=已结算,ABNORMAL=异常,VOID=作废' })
   @IsOptional()
-  @IsIn(['DRAFT', 'PENDING', 'AUDITED', 'SETTLED', 'ABNORMAL'])
+  @IsIn(['DRAFT', 'PENDING', 'AUDITED', 'SETTLED', 'ABNORMAL', 'VOID'])
   status?: string;
 
   @ApiPropertyOptional({ description: '是否返工' })
   @IsOptional()
+  @Type(() => String)
+  @Transform(({ value }) => (value === undefined || value === null ? value : value === true || value === 'true' || value === '1'))
   @IsBoolean()
   isRework?: boolean;
 
@@ -256,4 +268,18 @@ export class PageWorkOrderDto {
   @IsOptional()
   @IsString()
   categoryId?: string;
+
+  @ApiPropertyOptional({ description: '是否仅含新件（工单项 newPartQuantity>0）' })
+  @IsOptional()
+  @Type(() => String)
+  @Transform(({ value }) => (value === undefined || value === null ? value : value === true || value === 'true' || value === '1'))
+  @IsBoolean()
+  isNewPart?: boolean;
+
+  @ApiPropertyOptional({ description: '是否仅看幅数调整单' })
+  @IsOptional()
+  @Type(() => String)
+  @Transform(({ value }) => (value === undefined || value === null ? value : value === true || value === 'true' || value === '1'))
+  @IsBoolean()
+  isAdjustment?: boolean;
 }

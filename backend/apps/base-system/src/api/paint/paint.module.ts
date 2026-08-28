@@ -18,7 +18,7 @@ import { WorkOrderExcelService } from './service/work-order-excel.service';
 import { WorkOrderNoRuleService } from './service/work-order-no-rule.service';
 import { WorkOrderReconcileService } from './service/work-order-reconcile.service';
 import { PaintPdfExportService } from './service/paint-pdf-export.service';
-import { SettlementMonthService } from './service/settlement-month.service';
+import { SealService } from './seal/seal.service';
 import { UserShopService } from './service/user-shop.service';
 import { PendingImageService } from './service/pending-image.service';
 import { ScheduledTaskManager } from './scheduled/scheduled-task-manager.service';
@@ -30,7 +30,7 @@ import { WorkOrderController } from './work-order/rest/work-order.controller';
 import { PaintStatisticsController } from './statistics/rest/statistics.controller';
 import { PaintStandardController } from './standard/rest/standard.controller';
 import { PaintStandardTemplateController } from './standard/rest/standard-template.controller';
-import { SettlementMonthController } from './settlement-month/rest/settlement-month.controller';
+import { SealController } from './seal/rest/seal.controller';
 import { UserShopController } from './user-shop/rest/user-shop.controller';
 import { PendingImageController } from './pending-image/rest/pending-image.controller';
 
@@ -43,7 +43,7 @@ import { PendingImageController } from './pending-image/rest/pending-image.contr
     PaintStatisticsController,
     PaintStandardController,
     PaintStandardTemplateController,
-    SettlementMonthController,
+    SealController,
     ScheduledTaskController,
     UserShopController,
     PendingImageController,
@@ -69,7 +69,7 @@ import { PendingImageController } from './pending-image/rest/pending-image.contr
     WorkOrderNoRuleService,
     WorkOrderReconcileService,
     PaintPdfExportService,
-    SettlementMonthService,
+    SealService,
     UserShopService,
     PendingImageService,
   ],
@@ -92,7 +92,7 @@ import { PendingImageController } from './pending-image/rest/pending-image.contr
     WorkOrderNoRuleService,
     WorkOrderReconcileService,
     PaintPdfExportService,
-    SettlementMonthService,
+    SealService,
     UserShopService,
   ],
 })

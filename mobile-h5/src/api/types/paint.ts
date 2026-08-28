@@ -104,6 +104,7 @@ export interface PaintWorkOrder {
   mergeGroupId?: string
   items?: WorkOrderItem[]
   images?: WorkOrderImage[]
+  _count?: { images: number }
   shop?: { id: string; name: string }
   createdAt: string
   updatedAt: string
@@ -244,6 +245,7 @@ export interface CategoryBreakdown {
   totalPaintCount?: number
   orderCount: number
   totalCount?: number
+  totalNewPartQuantity?: number
 }
 
 export interface ShopComparison {
@@ -430,5 +432,32 @@ export interface PagePendingImageDto {
   settlementMonth?: string
   status?: PendingImageStatus
   keyword?: string
+}
+
+// ===== 幅数调整单 =====
+export interface PaintAdjustment {
+  id: string
+  shopId: string
+  targetMonth: string
+  applyMonth: string
+  categoryId: string | null
+  paintCount: number
+  newPartQuantity: number
+  reason: string | null
+  operatorId: string | null
+  operatorName: string | null
+  createdAt: string
+  category?: { id: string; name: string; code: string } | null
+  shop?: { name: string; code: string } | null
+}
+
+export interface CreateAdjustmentParams {
+  shopId: string
+  targetMonth: string
+  applyMonth?: string
+  categoryId?: string
+  paintCount: number
+  newPartQuantity?: number
+  reason?: string
 }
 

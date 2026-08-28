@@ -130,12 +130,15 @@ function getGlobalMenuByBaseRoute(route: RouteLocationNormalizedLoaded | Elegant
   const { name, path } = route;
   const { title, i18nKey, icon = import.meta.env.VITE_MENU_ICON, localIcon, iconFontSize } = route.meta ?? {};
 
-  const label = i18nKey ? $t(i18nKey) : title!;
+  // 兜底：动态路由后端未返回 i18nKey 时，按路由名推导（route.${name}），复用前端国际化配置
+  const finalI18nKey = i18nKey || (name ? (`route.${name}` as App.I18n.Key) : undefined);
+
+  const label = finalI18nKey ? $t(finalI18nKey) : title!;
 
   const menu: App.Global.Menu = {
     key: name as string,
     label,
-    i18nKey,
+    i18nKey: finalI18nKey,
     routeKey: name as RouteKey,
     routePath: path as RouteMap[RouteKey],
     icon: SvgIconVNode({ icon, localIcon, fontSize: iconFontSize || 20 })
@@ -283,7 +286,7 @@ export function getBreadcrumbsByRoute(
   route: RouteLocationNormalizedLoaded,
   menus: App.Global.Menu[]
 ): App.Global.Breadcrumb[] {
-  const key = route.name as string;
+  const key = (route.name as string) || '';
   const activeKey = route.meta?.activeMenu;
 
   for (const menu of menus) {

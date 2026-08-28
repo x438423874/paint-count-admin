@@ -12,6 +12,7 @@ import type {
   ScatterSeriesOption
 } from 'echarts/charts';
 import {
+  DataZoomComponent,
   DatasetComponent,
   GridComponent,
   LegendComponent,
@@ -21,6 +22,7 @@ import {
   TransformComponent
 } from 'echarts/components';
 import type {
+  DataZoomComponentOption,
   DatasetComponentOption,
   GridComponentOption,
   LegendComponentOption,
@@ -46,6 +48,7 @@ export type ECOption = echarts.ComposeOption<
   | GridComponentOption
   | ToolboxComponentOption
   | DatasetComponentOption
+  | DataZoomComponentOption
 >;
 
 echarts.use([
@@ -53,6 +56,7 @@ echarts.use([
   LegendComponent,
   TooltipComponent,
   GridComponent,
+  DataZoomComponent,
   DatasetComponent,
   TransformComponent,
   ToolboxComponent,
@@ -143,6 +147,7 @@ export function useEcharts<T extends ECOption>(optionsFactory: () => T, hooks: C
 
     chart?.setOption({ ...updatedOpts, backgroundColor: 'transparent' });
 
+    await nextTick();
     await onUpdated?.(chart!);
   }
 
@@ -161,6 +166,7 @@ export function useEcharts<T extends ECOption>(optionsFactory: () => T, hooks: C
 
       chart.setOption({ ...chartOptions, backgroundColor: 'transparent' });
 
+      await nextTick();
       await onRender?.(chart);
     }
   }

@@ -45,6 +45,13 @@ declare module 'vue-router/auto-routes' {
       { all: ParamValue<false> },
       | never
     >,
+    'Adjustment': RouteRecordInfo<
+      'Adjustment',
+      '/adjustment',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
     'Login': RouteRecordInfo<
       'Login',
       '/login',
@@ -143,6 +150,14 @@ declare module 'vue-router/auto-routes' {
         | never
       pathParamNames:
         | 'all'
+    }
+    'src/pages/adjustment/index.vue': {
+      routes:
+        | 'Adjustment'
+      views:
+        | never
+      pathParamNames:
+        | never
     }
     'src/pages/login/index.vue': {
       routes:

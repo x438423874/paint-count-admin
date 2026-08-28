@@ -50,7 +50,7 @@ services:
       JWT_SECRET: "JWT_SECRET-soybean-admin-nest@123456!@#."
       JWT_EXPIRE_IN: 3600
       REFRESH_TOKEN_SECRET: "REFRESH_TOKEN_EXPIRE_IN-soybean-admin-nest@123456!@#."
-      REFRESH_TOKEN_EXPIRE_IN: 7200
+      REFRESH_TOKEN_EXPIRE_IN: 604800
     depends_on:
       postgres:
         condition: service_healthy

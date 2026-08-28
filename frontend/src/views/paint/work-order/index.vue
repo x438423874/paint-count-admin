@@ -20,6 +20,8 @@ import {
   batchSettleWorkOrders,
   batchUnsettleWorkOrders,
   setAbnormal,
+  voidWorkOrder,
+  unvoidWorkOrder,
   importWorkOrderExcel,
   exportWorkOrderExcel,
   downloadWorkOrderTemplate,
@@ -75,7 +77,8 @@ const statusTypeMap: Record<string, NaiveUI.ThemeColor> = {
   PENDING: 'warning',
   AUDITED: 'success',
   SETTLED: 'info',
-  ABNORMAL: 'error'
+  ABNORMAL: 'error',
+  VOID: 'error'
 };
 
 const statusLabelMap: Record<string, string> = {
@@ -83,7 +86,8 @@ const statusLabelMap: Record<string, string> = {
   PENDING: '待审核',
   AUDITED: '已审核',
   SETTLED: '已结算',
-  ABNORMAL: '异常'
+  ABNORMAL: '异常',
+  VOID: '作废'
 };
 
 function getStatusType(status?: string): NaiveUI.ThemeColor {
@@ -483,6 +487,7 @@ const {
     status: undefined as string | undefined,
     settlementMonth: undefined as string | undefined,
     isRework: undefined as boolean | undefined,
+    isAdjustment: undefined as boolean | undefined,
     categoryId: undefined as string | undefined
   },
   columns: () => [
@@ -508,11 +513,14 @@ const {
           <span>{row.orderNo}</span>
           {row.images && row.images.length > 0 && (
             <NTag type="primary" size="small" round>
-              📷 {row.images.length}
+              📷 {row._count?.images ?? row.images?.length}
             </NTag>
           )}
           {row._isDuplicate && (
             <NTag type="warning" size="small" round>{row._duplicateCount}条重复</NTag>
+          )}
+          {row._hasOtherMonthSettlement && (
+            <NTag type="success" size="small" round>跨月结算</NTag>
           )}
         </NSpace>
       )
@@ -581,7 +589,10 @@ const {
       title: '幅数',
       align: 'center',
       width: 60,
-      render: (row: any) => <NTag type="info" size="small" round>{Number(row.totalPaintCount).toFixed(1)}</NTag>
+      render: (row: any) => {
+        const v = Number(row.totalPaintCount);
+        return <NTag type={v < 0 ? 'error' : 'info'} size="small" round>{v.toFixed(1)}</NTag>;
+      }
     },
     {
       key: 'status',
@@ -592,6 +603,7 @@ const {
         <NSpace justify="center" size={4}>
           <NTag type={getStatusType(row.status)} size="small">{getStatusLabel(row.status)}</NTag>
           {row.isRework && <NTag type="error" size="small">返工</NTag>}
+          {row.isAdjustment && <NTag type="warning" size="small">调整</NTag>}
           {row._isSealed && <NTag type="warning" size="small">已封单</NTag>}
         </NSpace>
       )
@@ -623,7 +635,7 @@ const {
                 修正OCR
               </NButton>
             )}
-            {row._isDuplicate && isUnaudited && allowMerge && !sealed && (
+            {row._isDuplicate && allowMerge && !sealed && (
               <NButton type="warning" text size="small" onClick={() => openMergeModal(row.orderNo, row.id, row.settlementMonth)}>
                 合并
               </NButton>
@@ -687,6 +699,30 @@ const {
                   trigger: () => (
                     <NButton type="warning" text size="small">
                       取消结算
+                    </NButton>
+                  )
+                }}
+              </NPopconfirm>
+            )}
+            {allowEdit && row.status !== 'VOID' && !sealed && (
+              <NPopconfirm onPositiveClick={() => handleVoid(row.id)}>
+                {{
+                  default: () => '确认作废该工单？作废后不计入幅数统计与对账',
+                  trigger: () => (
+                    <NButton type="error" text size="small">
+                      作废
+                    </NButton>
+                  )
+                }}
+              </NPopconfirm>
+            )}
+            {allowEdit && row.status === 'VOID' && !sealed && (
+              <NPopconfirm onPositiveClick={() => handleUnvoid(row.id)}>
+                {{
+                  default: () => '确认恢复该作废工单？',
+                  trigger: () => (
+                    <NButton type="success" text size="small">
+                      恢复
                     </NButton>
                   )
                 }}
@@ -806,6 +842,20 @@ async function handleUnsettle(orderId: string) {
   const { error } = await unsettleWorkOrder(orderId);
   if (error) return;
   window.$message?.success('已取消结算');
+  await getData();
+}
+
+async function handleVoid(orderId: string) {
+  const { error } = await voidWorkOrder(orderId);
+  if (error) return;
+  window.$message?.success('已作废，不计入幅数统计与对账');
+  await getData();
+}
+
+async function handleUnvoid(orderId: string) {
+  const { error } = await unvoidWorkOrder(orderId);
+  if (error) return;
+  window.$message?.success('已恢复工单');
   await getData();
 }
 
@@ -987,7 +1037,8 @@ async function handleBatchQuickUpload({ file }: { file: File }) {
               { label: '待审核', value: 'PENDING' },
               { label: '已审核', value: 'AUDITED' },
               { label: '已结算', value: 'SETTLED' },
-              { label: '异常', value: 'ABNORMAL' }
+              { label: '异常', value: 'ABNORMAL' },
+              { label: '作废', value: 'VOID' }
             ]"
             clearable
             style="width: 120px"
@@ -1008,6 +1059,21 @@ async function handleBatchQuickUpload({ file }: { file: File }) {
             style="width: 100px"
             placeholder="全部"
             @update:value="(val: string) => { searchParams.isRework = val === '' ? undefined : val === 'true'; getDataByPage(); }"
+          />
+        </NSpace>
+        <NSpace align="center" :size="6">
+          <NText depth="3" style="white-space: nowrap;">调整单</NText>
+          <NSelect
+            :value="searchParams.isAdjustment === undefined ? '' : String(searchParams.isAdjustment)"
+            :options="[
+              { label: '全部', value: '' },
+              { label: '仅调整单', value: 'true' },
+              { label: '仅普通', value: 'false' }
+            ]"
+            clearable
+            style="width: 110px"
+            placeholder="全部"
+            @update:value="(val: string) => { searchParams.isAdjustment = val === '' ? undefined : val === 'true'; getDataByPage(); }"
           />
         </NSpace>
         <NSpace align="center" :size="6">
@@ -1241,7 +1307,7 @@ async function handleBatchQuickUpload({ file }: { file: File }) {
                 <NSpace vertical :size="4">
                   <NText strong>{{ order.orderNo }}</NText>
                   <NText depth="3">{{ order.shop?.name }} | {{ order.plateNumber || '无车牌' }} | 幅数: {{ Number(order.totalPaintCount).toFixed(1) }}</NText>
-                  <NText depth="3">项目数: {{ order.items?.length || 0 }} | 图片数: {{ order.images?.length || 0 }}</NText>
+                  <NText depth="3">项目数: {{ order.items?.length || 0 }} | 图片数: {{ (order._count?.images ?? order.images?.length) || 0 }}</NText>
                 </NSpace>
               </NCheckbox>
             </NSpace>

@@ -25,6 +25,9 @@ export interface MonthlyStat {
   reworkOrders: number;
   reworkPaintCount: number;
   reworkVehicles: number;
+  adjustmentPaintCount: number;
+  adjustmentNewPartQuantity: number;
+  adjustments: AdjustmentSummary[];
 }
 
 export interface DailyStat {
@@ -38,6 +41,20 @@ export interface CategoryBreakdown {
   categoryCode: string;
   totalCount: number;
   totalPaintCount: number;
+  totalNewPartQuantity?: number;
+}
+
+export interface AdjustmentSummary {
+  id: string;
+  targetMonth: string;
+  applyMonth: string;
+  categoryId: string | null;
+  categoryName: string | null;
+  paintCount: number;
+  newPartQuantity: number;
+  reason: string | null;
+  operatorName: string | null;
+  createdAt: string;
 }
 
 @Injectable()
@@ -48,6 +65,8 @@ export class PaintStatisticsService {
     const factor = 10 ** decimals;
     return Math.round(value * factor) / factor;
   }
+
+
 
   async getMonthlyStatistics(
     settlementMonth?: string,
@@ -89,6 +108,10 @@ export class PaintStatisticsService {
         shopId: true,
         status: true,
         isRework: true,
+        isAdjustment: true,
+        settlementMonth: true,
+        createdAt: true,
+        remark: true,
         plateNumber: true,
         items: { select: { categoryId: true, quantity: true, paintCount: true, specialPaintId: true, specialPaintMultiplier: true } },
       },
@@ -131,6 +154,14 @@ export class PaintStatisticsService {
           // 返工单不计入总幅数、日报、待审/已审统计
           continue;
         }
+        if (order.status === 'VOID') {
+          // 作废工单不计入任何幅数统计
+          continue;
+        }
+        if (order.isAdjustment) {
+          // 幅数调整单（负幅数工单）：仅计入总幅数，不计入车辆/日报/工单
+          continue;
+        }
 
         const existing = dailyMap.get(dateKey) || { date: dateKey, orderCount: 0, paintCount: 0 };
         existing.orderCount += 1;
@@ -152,8 +183,8 @@ export class PaintStatisticsService {
         }
       }
 
-      const totalPaintCount = this.round(shopOrders.filter(o => !o.isRework).reduce((sum, o) => sum + Number(o.totalPaintCount), 0));
-      const totalOrders = shopOrders.filter(o => !o.isRework).length;
+      const totalPaintCount = this.round(shopOrders.filter(o => !o.isRework && o.status !== 'VOID' && !o.isAdjustment).reduce((sum, o) => sum + Number(o.totalPaintCount), 0));
+      const totalOrders = shopOrders.filter(o => !o.isRework && o.status !== 'VOID' && !o.isAdjustment).length;
       const totalVehicles = plateNumbers.size;
 
       const dailyStats = Array.from(dailyMap.values())
@@ -165,6 +196,28 @@ export class PaintStatisticsService {
       const settledOrders = shopOrders.filter(o => !o.isRework && o.status === 'SETTLED').length;
       const settledPaintCount = this.round(shopOrders.filter(o => !o.isRework && o.status === 'SETTLED').reduce((sum, o) => sum + Number(o.totalPaintCount), 0));
 
+      // 幅数调整单（负幅数工单）：直接计入总幅数，不影响源工单/车辆/日报
+      let adjPaint = 0;
+      const adjSummary: AdjustmentSummary[] = [];
+      for (const o of shopOrders) {
+        if (!o.isAdjustment || o.isRework || o.status === 'VOID') continue;
+        const p = Number(o.totalPaintCount);
+        adjPaint += p;
+        adjSummary.push({
+          id: o.id,
+          targetMonth,
+          applyMonth: o.settlementMonth || targetMonth,
+          categoryId: null,
+          categoryName: null,
+          paintCount: p,
+          newPartQuantity: 0,
+          reason: o.remark ?? null,
+          operatorName: null,
+          createdAt: o.createdAt ? o.createdAt.toISOString() : new Date().toISOString(),
+        });
+      }
+      const totalPaintCountWithAdj = this.round(totalPaintCount + adjPaint);
+
       results.push({
         settlementMonth: targetMonth,
         shopId: shop.id,
@@ -172,9 +225,9 @@ export class PaintStatisticsService {
         shopCode: shop.code,
         totalOrders,
         totalVehicles,
-        totalPaintCount,
-        avgPaintPerVehicle: totalVehicles > 0 ? this.round(totalPaintCount / totalVehicles, 2) : 0,
-        avgPaintPerOrder: totalOrders > 0 ? this.round(totalPaintCount / totalOrders, 2) : 0,
+        totalPaintCount: totalPaintCountWithAdj,
+        avgPaintPerVehicle: totalVehicles > 0 ? this.round(totalPaintCountWithAdj / totalVehicles, 2) : 0,
+        avgPaintPerOrder: totalOrders > 0 ? this.round(totalPaintCountWithAdj / totalOrders, 2) : 0,
         dailyStats,
         pendingOrders,
         pendingPaintCount: this.round(pendingPaintCount),
@@ -189,6 +242,9 @@ export class PaintStatisticsService {
         reworkOrders,
         reworkPaintCount: this.round(reworkPaintCount),
         reworkVehicles: reworkPlateNumbers.size,
+        adjustmentPaintCount: this.round(adjPaint),
+        adjustmentNewPartQuantity: 0,
+        adjustments: adjSummary,
       });
     }
 
@@ -216,6 +272,7 @@ export class PaintStatisticsService {
       where: {
         order: {
           settlementMonth: targetMonth,
+          status: { not: 'VOID' as any },
           ...(shopIdWhere && { shopId: shopIdWhere }),
         },
       },
@@ -230,9 +287,11 @@ export class PaintStatisticsService {
         categoryCode: item.category?.code || 'unknown',
         totalCount: 0,
         totalPaintCount: 0,
+        totalNewPartQuantity: 0,
       };
       existing.totalCount += item.quantity;
       existing.totalPaintCount += Number(item.paintCount);
+      existing.totalNewPartQuantity = (existing.totalNewPartQuantity ?? 0) + (item.newPartQuantity || 0);
       categoryMap.set(key, existing);
     }
 
@@ -339,6 +398,10 @@ export class PaintStatisticsService {
         stat.reworkPaintCount += Number(order.totalPaintCount);
         if (order.plateNumber)
           stat.reworkPlateNumbers.add(order.plateNumber);
+        continue;
+      }
+      if (order.status === 'VOID') {
+        // 作废工单不计入年度概览
         continue;
       }
 

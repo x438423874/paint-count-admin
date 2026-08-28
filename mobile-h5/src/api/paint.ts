@@ -330,3 +330,16 @@ export function deletePendingImage(id: string) {
   return request.delete(`/paint/pending-image/${id}`)
 }
 
+// ===== 幅数调整单 API =====
+export function getAdjustmentList(params?: { shopId?: string; applyMonth?: string; targetMonth?: string }) {
+  return request.get<PaintAdjustment[]>('/paint/adjustment', { params })
+}
+
+export function createAdjustment(data: CreateAdjustmentParams) {
+  return request.post<PaintAdjustment>('/paint/adjustment', data)
+}
+
+export function deleteAdjustment(id: string) {
+  return request.delete(`/paint/adjustment/${id}`)
+}
+

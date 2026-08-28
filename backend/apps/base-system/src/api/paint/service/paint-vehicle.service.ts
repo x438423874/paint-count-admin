@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
 import { PrismaService } from '@lib/shared/prisma/prisma.service';
-import { Prisma } from '@prisma/client';
+import { Prisma, PaintVehicle } from '@prisma/client';
 import { PaginationResult } from '@lib/shared/prisma/pagination';
 import { CreateVehicleDto, UpdateVehicleDto, PageVehicleDto, UpsertVehicleByPlateDto } from '../vehicle/dto/vehicle.dto';
 
@@ -36,7 +36,11 @@ export class PaintVehicleService {
     });
   }
 
-  async update(dto: UpdateVehicleDto) {
+  /**
+   * 更新车辆主数据。
+   * @returns 更新后的车辆 + syncedOrderCount（本次同步到历史工单的条数，未勾选时为 0）
+   */
+  async update(dto: UpdateVehicleDto): Promise<PaintVehicle & { syncedOrderCount: number }> {
     const existing = await this.prisma.paintVehicle.findUnique({ where: { id: dto.id } });
     if (!existing) throw new NotFoundException('车辆不存在');
 
@@ -61,10 +65,37 @@ export class PaintVehicleService {
     if (dto.contactPerson !== undefined) data.contactPerson = dto.contactPerson?.trim() || null;
     if (dto.remark !== undefined) data.remark = dto.remark?.trim() || null;
 
-    return this.prisma.paintVehicle.update({
+    const vehicle = await this.prisma.paintVehicle.update({
       where: { id: dto.id },
       data,
     });
+
+    // 显式同步：勾选后，将本次修改的车辆字段同步到该车所有历史工单的冗余字段。
+    // 仅同步被修改的字段，避免误覆盖用户未动过的信息；未勾选则不级联。
+    let syncedOrderCount = 0;
+    if (dto.syncToOrders) {
+      const syncData: Prisma.PaintWorkOrderUpdateManyMutationInput = {};
+      if (dto.plateNumber !== undefined) syncData.plateNumber = PaintVehicleService.normalizePlate(dto.plateNumber);
+      if (dto.vin !== undefined) syncData.vin = dto.vin?.trim() || null;
+      if (dto.carModel !== undefined) syncData.carModel = dto.carModel?.trim() || '';
+      if (dto.brand !== undefined) syncData.brand = dto.brand?.trim() || null;
+      if (dto.customerName !== undefined) syncData.customerName = dto.customerName?.trim() || '';
+      if (dto.phone !== undefined) syncData.phone = dto.phone?.trim() || null;
+      if (dto.contactPerson !== undefined) syncData.contactPerson = dto.contactPerson?.trim() || null;
+
+      if (Object.keys(syncData).length > 0) {
+        const result = await this.prisma.paintWorkOrder.updateMany({
+          where: { vehicleId: dto.id },
+          data: syncData,
+        });
+        syncedOrderCount = result.count;
+        if (syncedOrderCount > 0) {
+          this.logger.log(`车辆 ${vehicle.plateNumber} 同步 ${syncedOrderCount} 张工单的车辆信息`);
+        }
+      }
+    }
+
+    return { ...vehicle, syncedOrderCount };
   }
 
   async delete(id: string) {
@@ -294,7 +325,7 @@ export class PaintVehicleService {
    */
   async refreshStats(vehicleId: string): Promise<void> {
     const orders = await this.prisma.paintWorkOrder.findMany({
-      where: { vehicleId },
+      where: { vehicleId, status: { not: 'VOID' as any } },
       select: { totalPaintCount: true, orderDate: true, createdAt: true, shopId: true, isRework: true },
       orderBy: { orderDate: 'desc' },
     });
@@ -341,7 +372,7 @@ export class PaintVehicleService {
     const size = options.size ?? 20;
     const scope = options.scope || 'all_shops';
 
-    const where: Prisma.PaintWorkOrderWhereInput = { vehicleId };
+    const where: Prisma.PaintWorkOrderWhereInput = { vehicleId, status: { not: 'VOID' as any } };
 
     // 数据权限：accessibleShopIds 为 null 表示不限制（超管/财务）
     if (accessibleShopIds !== null) {
