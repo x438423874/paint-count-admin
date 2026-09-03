@@ -585,11 +585,36 @@ export interface StatisticsOverview {
   settledPaintCount: number;
   settlementRate: number;
   avgPaintPerOrder: number;
+  reworkOrders: number;
+  reworkPaintCount: number;
+  reworkVehicles: number;
 }
 
 export function fetchStatisticsOverview(params?: { settlementMonth?: string; shopId?: string }) {
   return request<StatisticsOverview>({
     url: '/paint/statistics/overview',
+    method: 'get',
+    params
+  });
+}
+
+/**
+ * 统计看板聚合数据
+ *
+ * 一次请求拿齐「月度统计 + KPI 概览 + 门店对比 + 类别分布 + 年度趋势」，
+ * 替代原先 5 个并发请求（其中 comparison / overview 在后端还会各自再跑一次完整月度聚合）。
+ */
+export interface StatisticsDashboard {
+  monthly: MonthlyStat[];
+  overview: StatisticsOverview;
+  comparison: ShopComparison[];
+  category: CategoryBreakdown[];
+  yearOverview: YearOverview[];
+}
+
+export function fetchStatisticsDashboard(params?: { settlementMonth?: string; shopId?: string; year?: number }) {
+  return request<StatisticsDashboard>({
+    url: '/paint/statistics/dashboard',
     method: 'get',
     params
   });
@@ -1373,49 +1398,8 @@ export function deletePendingImage(id: string) {
 }
 
 // ==================== 幅数调整单 API ====================
-
-/** 幅数调整单（用于对已封单月份的统计做追溯扣减/追加） */
-export interface PaintAdjustment {
-  id: string;
-  shopId: string;
-  targetMonth: string;
-  applyMonth: string;
-  categoryId: string | null;
-  paintCount: number;
-  newPartQuantity: number;
-  reason: string | null;
-  operatorId: string | null;
-  operatorName: string | null;
-  createdAt: string;
-  category?: { id: string; name: string; code: string } | null;
-  shop?: { name: string; code: string } | null;
-}
-
-export interface CreateAdjustmentParams {
-  shopId: string;
-  targetMonth: string;
-  applyMonth?: string;
-  categoryId?: string;
-  paintCount: number;
-  newPartQuantity?: number;
-  reason?: string;
-}
-
-export function fetchAdjustmentList(params?: { shopId?: string; applyMonth?: string; targetMonth?: string }) {
-  return request<PaintAdjustment[]>({
-    url: '/paint/adjustment',
-    method: 'get',
-    params
-  });
-}
-
-export function createAdjustment(data: CreateAdjustmentParams) {
-  return request<PaintAdjustment>({
-    url: '/paint/adjustment',
-    method: 'post',
-    data
-  });
-}
+// 已废弃：幅数调整单改为「isAdjustment 工单」（走 /paint/work-order 接口），
+// 后端 /paint/adjustment 端点已移除，请勿再使用以下类型与函数。
 
 export function deleteAdjustment(id: string) {
   return request({

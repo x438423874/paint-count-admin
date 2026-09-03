@@ -13,12 +13,26 @@ export class PaintStandardService {
     });
   }
 
-  /** 获取门店的可用类别及标准：优先从关联的标准模板获取，没有模板则返回空。按使用频次排序（使用越多的部位越靠前） */
+  /**
+   * 获取门店的可用类别及标准：标准模板 + 门店专属覆盖。按使用频次排序（使用越多的部位越靠前）
+   *
+   * 返回的 coefficient 必须是**生效系数**（门店专属标准 > 标准模板），
+   * 与 `WorkOrderService` 的幅数计算口径保持一致，
+   * 否则工单录入页看到的系数和实际算出的幅数会对不上。
+   *
+   * 字段说明：
+   * - `templateItemId`：标准模板项 id（始终存在）
+   * - `standardId`：门店专属标准 id（paint_standard），未设置覆盖时为 null。
+   *   历史实现错误地返回了模板项 id，导致 `PUT/DELETE /paint/standard/:id` 命中不了记录。
+   */
   async findShopCategoriesWithStandard(shopId: string) {
-    // 查找门店关联的标准模板
+    // 查找门店关联的标准模板 + 门店专属标准
     const shop = await (this.prisma as any).paintShop.findUnique({
       where: { id: shopId },
-      include: { standardTemplate: { include: { items: { include: { category: true, specialPaint: true } } } } },
+      include: {
+        standardTemplate: { include: { items: { include: { category: true, specialPaint: true } } } },
+        standards: true,
+      },
     });
 
     if (!shop) throw new NotFoundException('门店不存在');
@@ -26,6 +40,12 @@ export class PaintStandardService {
     // 如果门店没有关联标准模板，返回空
     if (!shop.standardTemplate || !shop.standardTemplate.items?.length) {
       return [];
+    }
+
+    // 门店专属标准（覆盖模板）
+    const overrideMap = new Map<string, any>();
+    for (const std of shop.standards || []) {
+      overrideMap.set(std.categoryId, std);
     }
 
     // 统计每个部位的使用频次（该门店所有工单中该部位被使用的次数）
@@ -42,17 +62,21 @@ export class PaintStandardService {
     }
 
     // 从标准模板项目获取部位和系数，按使用频次降序排序（使用多的在前），频次相同的按sortOrder排
-    const items = shop.standardTemplate.items.map((item: any) => ({
-      categoryId: item.categoryId,
-      category: item.category,
-      coefficient: item.coefficient,
-      newPartAddition: item.newPartAddition || 0,
-      alias: item.alias || item.category?.name || null,
-      specialPaintId: item.specialPaintId || null,
-      specialPaint: item.specialPaint || null,
-      standardId: item.id,
-      _usageCount: usageMap.get(item.categoryId) || 0,
-    }));
+    const items = shop.standardTemplate.items.map((item: any) => {
+      const override = overrideMap.get(item.categoryId);
+      return {
+        categoryId: item.categoryId,
+        category: item.category,
+        coefficient: override ? override.coefficient : item.coefficient,
+        newPartAddition: override ? override.newPartAddition || 0 : item.newPartAddition || 0,
+        alias: override?.alias || item.alias || item.category?.name || null,
+        specialPaintId: override?.specialPaintId || item.specialPaintId || null,
+        specialPaint: item.specialPaint || null,
+        templateItemId: item.id,
+        standardId: override?.id ?? null,
+        _usageCount: usageMap.get(item.categoryId) || 0,
+      };
+    });
 
     items.sort((a: any, b: any) => {
       // 使用频次高的在前

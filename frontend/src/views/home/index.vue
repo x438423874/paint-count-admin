@@ -1,11 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue';
-import {
-  fetchMonthlyStatistics,
-  fetchCategoryBreakdown,
-  fetchShopComparison,
-  fetchYearOverview
-} from '@/service/api/paint';
+import { fetchStatisticsDashboard } from '@/service/api/paint';
 import { getChartPalette } from '@/utils/chart';
 
 defineOptions({ name: 'Home' });
@@ -82,16 +77,16 @@ async function loadData() {
   if (!currentMonth.value) return;
   loading.value = true;
   try {
-    const [r1, r2, r3, r4] = await Promise.all([
-      fetchMonthlyStatistics({ settlementMonth: currentMonth.value }),
-      fetchCategoryBreakdown({ settlementMonth: currentMonth.value }),
-      fetchShopComparison({ settlementMonth: currentMonth.value }),
-      fetchYearOverview({ year: currentMonth.value ? +currentMonth.value.split('-')[0] : new Date().getFullYear() })
-    ]);
-    monthlyStats.value = (r1.data || []) as any[];
-    categoryData.value = (r2.data || []) as any[];
-    shopComparison.value = (r3.data || []) as any[];
-    yearOverview.value = (r4.data || []) as any[];
+    // 单次请求拿齐全部统计，替代原先 4 个并发请求
+    // （其中 comparison 在服务端还会再跑一次完整月度聚合）
+    const { data } = await fetchStatisticsDashboard({
+      settlementMonth: currentMonth.value,
+      year: +currentMonth.value.split('-')[0]
+    });
+    monthlyStats.value = (data?.monthly || []) as any[];
+    categoryData.value = (data?.category || []) as any[];
+    shopComparison.value = (data?.comparison || []) as any[];
+    yearOverview.value = (data?.yearOverview || []) as any[];
   } finally {
     loading.value = false;
   }

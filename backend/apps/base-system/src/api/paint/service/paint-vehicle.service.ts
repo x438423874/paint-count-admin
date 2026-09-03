@@ -3,6 +3,16 @@ import { PrismaService } from '@lib/shared/prisma/prisma.service';
 import { Prisma, PaintVehicle } from '@prisma/client';
 import { PaginationResult } from '@lib/shared/prisma/pagination';
 import { CreateVehicleDto, UpdateVehicleDto, PageVehicleDto, UpsertVehicleByPlateDto } from '../vehicle/dto/vehicle.dto';
+import { toPaintCents } from './paint-calculation';
+
+/** 由工单事实数据重算出的车辆统计 */
+interface VehicleStatRow {
+  vehicleId: string;
+  orderCount: number | string;
+  paintCount: number | string | null;
+  lastOrderAt: Date | string | null;
+  lastShopId: string | null;
+}
 
 @Injectable()
 export class PaintVehicleService {
@@ -357,6 +367,132 @@ export class PaintVehicleService {
         lastShopId: latest.shopId,
       },
     });
+  }
+
+  /**
+   * 归一化历史工单的车牌号（trim + 大写）
+   *
+   * 工单写入路径原本未做归一化，存量的 `粤a123` / `粤A123` 会在
+   * "按车牌去重统计车辆数"时被算成多台车，导致总车次、台均幅数虚高。
+   * 写入路径已修复，这里负责修复存量数据。
+   */
+  async normalizeLegacyPlateNumbers(): Promise<number> {
+    const affected = await this.prisma.$executeRaw`
+      UPDATE paint_work_order
+      SET plate_number = UPPER(TRIM(plate_number))
+      WHERE plate_number IS NOT NULL
+        AND plate_number <> ''
+        AND plate_number <> UPPER(TRIM(plate_number))
+    `;
+    return Number(affected);
+  }
+
+  /**
+   * 以工单为事实来源，重算车辆的统计快照
+   *
+   * 只统计有工单的车辆；无工单的车辆在 reconcileStats 中按 0 处理。
+   * 口径与 refreshStats 一致：排除作废单，返工单计入工单数与幅数。
+   */
+  private async queryVehicleStatsFromOrders(vehicleIds: string[]): Promise<VehicleStatRow[]> {
+    if (vehicleIds.length === 0) return [];
+    return this.prisma.$queryRaw<VehicleStatRow[]>`
+      SELECT
+        agg.vehicle_id AS vehicleId,
+        agg.order_count AS orderCount,
+        agg.paint_count AS paintCount,
+        agg.last_at AS lastOrderAt,
+        last_o.shop_id AS lastShopId
+      FROM (
+        SELECT
+          vehicle_id,
+          COUNT(*) AS order_count,
+          COALESCE(SUM(total_paint_count), 0) AS paint_count,
+          MAX(COALESCE(order_date, created_at)) AS last_at
+        FROM paint_work_order
+        WHERE vehicle_id IN (${Prisma.join(vehicleIds)}) AND status <> 'VOID'
+        GROUP BY vehicle_id
+      ) agg
+      INNER JOIN paint_work_order last_o ON last_o.id = (
+        SELECT o2.id
+        FROM paint_work_order o2
+        WHERE o2.vehicle_id = agg.vehicle_id AND o2.status <> 'VOID'
+        ORDER BY o2.order_date DESC, o2.created_at DESC, o2.id DESC
+        LIMIT 1
+      )
+    `;
+  }
+
+  /**
+   * 车辆统计对账（供定时任务调用）
+   *
+   * refreshStats 在工单写操作后是异步补偿执行、失败只打日志，
+   * 长此以往 PaintVehicle 的统计会与工单真实数据永久偏离且无人发现。
+   * 这里以工单为唯一事实来源批量重算，只更新发生偏离的记录。
+   *
+   * @returns 检查车辆数、修复车辆数、修复的历史车牌数
+   */
+  async reconcileStats(batchSize = 500): Promise<{ checked: number; fixed: number; fixedPlates: number }> {
+    const fixedPlates = await this.normalizeLegacyPlateNumbers();
+
+    let checked = 0;
+    let fixed = 0;
+    let cursor: string | null = null;
+
+    for (;;) {
+      const query: Prisma.PaintVehicleFindManyArgs = {
+        select: { id: true, totalOrderCount: true, totalPaintCount: true, lastOrderAt: true, lastShopId: true },
+        orderBy: { id: 'asc' },
+        take: batchSize,
+      };
+      if (cursor) {
+        query.cursor = { id: cursor };
+        query.skip = 1;
+      }
+      const vehicles = await this.prisma.paintVehicle.findMany(query);
+      if (vehicles.length === 0) break;
+
+      const statMap = new Map(
+        (await this.queryVehicleStatsFromOrders(vehicles.map(v => v.id))).map(s => [s.vehicleId, s]),
+      );
+
+      for (const vehicle of vehicles) {
+        const stat = statMap.get(vehicle.id);
+        const expectedOrderCount = stat ? Number(stat.orderCount) : 0;
+        const expectedPaintCents = toPaintCents(stat?.paintCount);
+        const expectedLastAt = stat?.lastOrderAt ? new Date(stat.lastOrderAt) : null;
+        const expectedShopId = stat?.lastShopId ?? null;
+        checked += 1;
+
+        const data: Prisma.PaintVehicleUpdateInput = {};
+        if (vehicle.totalOrderCount !== expectedOrderCount) {
+          data.totalOrderCount = expectedOrderCount;
+        }
+        if (toPaintCents(vehicle.totalPaintCount) !== expectedPaintCents) {
+          data.totalPaintCount = new Prisma.Decimal(expectedPaintCents).dividedBy(100);
+        }
+        if ((vehicle.lastOrderAt?.getTime() ?? null) !== (expectedLastAt?.getTime() ?? null)) {
+          data.lastOrderAt = expectedLastAt;
+        }
+        if ((vehicle.lastShopId ?? null) !== expectedShopId) {
+          data.lastShopId = expectedShopId;
+        }
+
+        if (Object.keys(data).length === 0) continue;
+        await this.prisma.paintVehicle.update({ where: { id: vehicle.id }, data });
+        fixed += 1;
+      }
+
+      if (vehicles.length < batchSize) break;
+      cursor = vehicles[vehicles.length - 1].id;
+    }
+
+    if (fixedPlates > 0) {
+      this.logger.log(`归一化历史工单车牌 ${fixedPlates} 条`);
+    }
+    if (fixed > 0) {
+      this.logger.warn(`车辆统计对账：检查 ${checked} 台，修复偏离 ${fixed} 台`);
+    }
+    return { checked, fixed, fixedPlates };
   }
 
   /**

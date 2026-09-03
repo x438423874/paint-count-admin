@@ -499,8 +499,17 @@ model PaintSettlementMonth {
   @@map("paint_settlement_month")
 }
 
-// 幅数调整单：用于对已封单月份的统计做追溯调整（不影响源工单/车辆/日报）
-// 例：上月已封单且已报送，发现幅数多算 X，则在本月建一条 paintCount = -X 的调整单（applyMonth=本月，targetMonth=上月）
+// 【已废弃 / DEPRECATED】历史遗留的幅数调整单表
+//
+// 幅数调整现已改为「isAdjustment 工单」（paint_work_order.is_adjustment = true），
+// 统一走工单流程，统计口径也只认工单。
+//
+// ⚠️ 注意：本表仍在数据库中存在（保留存量数据），但：
+//   1. 后端 /paint/adjustment 接口已移除，没有任何代码会写入或读取本表
+//   2. 统计服务（PaintStatisticsService）不会读取本表
+//   3. 请勿再基于本表开发新功能
+//
+// 存量数据清空后，可通过一次 migration 安全 DROP TABLE `paint_adjustment`。
 model PaintAdjustment {
   id              String    @id @default(cuid())
   shopId          String    @map("shop_id")

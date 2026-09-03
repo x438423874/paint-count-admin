@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ScheduledTaskManager, ScheduledTaskDefinition } from './scheduled-task-manager.service';
 import { PaintImageService } from '../service/paint-image.service';
+import { PaintVehicleService } from '../service/paint-vehicle.service';
 
 /**
  * 定时任务注册中心
@@ -23,6 +24,12 @@ export class ScheduledTaskRegistrar implements OnModuleInit {
       description: '清理冗余图片文件（每天凌晨3点）',
       enabled: true,
     },
+    {
+      name: 'reconcileVehicleStats',
+      cron: '0 4 * * *',
+      description: '车辆统计对账：以工单为事实来源重算车辆工单数/幅数，并归一化历史车牌（每天凌晨4点）',
+      enabled: true,
+    },
     // 新增任务在这里添加，例如：
     // {
     //   name: 'syncShopData',
@@ -35,6 +42,7 @@ export class ScheduledTaskRegistrar implements OnModuleInit {
   constructor(
     private readonly taskManager: ScheduledTaskManager,
     private readonly imageService: PaintImageService,
+    private readonly vehicleService: PaintVehicleService,
   ) {}
 
   async onModuleInit() {
@@ -74,6 +82,14 @@ export class ScheduledTaskRegistrar implements OnModuleInit {
             this.logger.warn(`${result.errors.length} 个文件删除失败`);
             result.errors.forEach(e => this.logger.warn(`  ${e}`));
           }
+        };
+
+      case 'reconcileVehicleStats':
+        return async () => {
+          const result = await this.vehicleService.reconcileStats();
+          this.logger.log(
+            `车辆统计对账完成：检查 ${result.checked} 台，修复 ${result.fixed} 台，归一化车牌 ${result.fixedPlates} 条`,
+          );
         };
 
       // 新增任务的 handler 在这里添加

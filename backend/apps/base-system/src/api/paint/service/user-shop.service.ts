@@ -1,5 +1,6 @@
 import { Injectable, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '@lib/shared/prisma/prisma.service';
+import { PaintStatsCache } from './paint-stats-cache';
 import { CacheConstant } from '@lib/constants/cache.constant';
 import { RedisUtility } from '@lib/shared/redis/redis.util';
 
@@ -102,6 +103,9 @@ export class UserShopService {
         data: uniqueShopIds.map((shopId: string) => ({ userId, shopId })),
       });
     });
+
+    // 用户可见门店范围变了，其统计缓存的口径也随之变化，需要全量失效
+    PaintStatsCache.invalidate().catch(() => undefined);
   }
 
   /**

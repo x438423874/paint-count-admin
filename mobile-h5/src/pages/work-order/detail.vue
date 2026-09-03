@@ -127,6 +127,9 @@ const editStandards = ref<PaintStandard[]>([])
 const specialPaints = ref<PaintSpecialPaint[]>([])
 const showCategoryPicker = ref(false)
 const editingItemIndex = ref(-1)
+// 多选弹层
+const showCategoryMultiPicker = ref(false)
+const checkedCategoryIds = ref<string[]>([])
 const categoryColumns = computed(() => {
   const currentItem = editForm.items[editingItemIndex.value]
   const currentCategoryId = currentItem?.categoryId
@@ -760,19 +763,48 @@ function addEditItem() {
     return
   }
   const selectedIds = new Set(editForm.items.map(i => i.categoryId).filter(Boolean) as string[])
-  const firstUnselected = editStandards.value.find(s => !selectedIds.has(s.categoryId))
-  if (!firstUnselected) {
+  const hasUnselected = editStandards.value.some(s => !selectedIds.has(s.categoryId))
+  if (!hasUnselected) {
     showNotify({ type: 'warning', message: '所有部位已选择' })
     return
   }
-  editForm.items.push({
-    categoryId: firstUnselected.categoryId,
-    quantity: 1,
-    newPartQuantity: 0,
-  })
-  // 自动打开分类选择器
-  editingItemIndex.value = editForm.items.length - 1
-  showCategoryPicker.value = true
+  // 打开多选弹层
+  checkedCategoryIds.value = []
+  showCategoryMultiPicker.value = true
+}
+
+// 多选弹层可勾选的部位（排除已选）
+const categoryMultiOptions = computed(() => {
+  const selectedIds = new Set(editForm.items.map(i => i.categoryId).filter(Boolean) as string[])
+  return editStandards.value
+    .filter(s => !selectedIds.has(s.categoryId))
+    .map(s => ({
+      id: s.categoryId,
+      label: `${s.category?.name || s.alias || s.categoryId} (${Number(s.coefficient).toFixed(1)}幅)`,
+    }))
+})
+
+function toggleCategoryCheck(id: string) {
+  const idx = checkedCategoryIds.value.indexOf(id)
+  if (idx >= 0) checkedCategoryIds.value.splice(idx, 1)
+  else checkedCategoryIds.value.push(id)
+}
+
+function onCategoryMultiConfirm() {
+  if (checkedCategoryIds.value.length === 0) {
+    showCategoryMultiPicker.value = false
+    return
+  }
+  for (const categoryId of checkedCategoryIds.value) {
+    // 防御：跳过已被选中的部位
+    if (editForm.items.some(i => i.categoryId === categoryId)) continue
+    editForm.items.push({
+      categoryId,
+      quantity: 1,
+      newPartQuantity: 0,
+    })
+  }
+  showCategoryMultiPicker.value = false
 }
 
 function openCategoryPicker(index: number) {
@@ -1396,13 +1428,45 @@ onMounted(() => {
       />
     </div>
 
-    <!-- 分类选择器 -->
+    <!-- 分类选择器（单选：修改已有部位类别） -->
     <van-popup v-model:show="showCategoryPicker" position="bottom" round>
       <van-picker
         :columns="categoryColumns"
         @confirm="onCategoryConfirm"
         @cancel="showCategoryPicker = false"
       />
+    </van-popup>
+
+    <!-- 分类多选弹层（添加部位） -->
+    <van-popup v-model:show="showCategoryMultiPicker" position="bottom" round>
+      <div class="category-multi-picker">
+        <div class="category-multi-header">
+          <span class="category-multi-title">选择部位（可多选）</span>
+          <span class="category-multi-count">已选 {{ checkedCategoryIds.length }}</span>
+        </div>
+        <div class="category-multi-list">
+          <van-checkbox-group v-model="checkedCategoryIds">
+            <van-cell-group inset>
+              <van-cell
+                v-for="opt in categoryMultiOptions"
+                :key="opt.id"
+                clickable
+                @click="toggleCategoryCheck(opt.id)"
+              >
+                <template #title>
+                  <van-checkbox :name="opt.id" shape="square" @click.stop>
+                    {{ opt.label }}
+                  </van-checkbox>
+                </template>
+              </van-cell>
+            </van-cell-group>
+          </van-checkbox-group>
+        </div>
+        <div class="category-multi-footer">
+          <van-button block plain type="primary" @click="showCategoryMultiPicker = false">取消</van-button>
+          <van-button block type="primary" :disabled="checkedCategoryIds.length === 0" @click="onCategoryMultiConfirm">确定</van-button>
+        </div>
+      </div>
     </van-popup>
 
     <!-- 编辑日期选择器 -->
@@ -1886,6 +1950,36 @@ onMounted(() => {
     display: flex;
     gap: 12px;
     margin-top: 16px;
+  }
+}
+
+.category-multi-picker {
+  .category-multi-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 16px;
+
+    .category-multi-title {
+      font-size: 16px;
+      font-weight: 600;
+    }
+
+    .category-multi-count {
+      font-size: 12px;
+      color: var(--color-text-tertiary, #999);
+    }
+  }
+
+  .category-multi-list {
+    max-height: 45vh;
+    overflow-y: auto;
+  }
+
+  .category-multi-footer {
+    display: flex;
+    gap: 12px;
+    padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
   }
 }
 </style>

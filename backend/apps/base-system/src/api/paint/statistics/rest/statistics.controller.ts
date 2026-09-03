@@ -1,7 +1,7 @@
 import { Controller, Get, Query, Res, Request } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
-import { SkipThrottle, Throttle } from '@nestjs/throttler';
-import { PaintStatisticsService } from '../../service/paint-statistics.service';
+import { Throttle } from '@nestjs/throttler';
+import { PaintStatisticsService, ExportOrderRow } from '../../service/paint-statistics.service';
 import { PaintPdfExportService } from '../../service/paint-pdf-export.service';
 import { UserShopService } from '../../service/user-shop.service';
 import { ApiRes } from '@lib/infra/rest/res.response';
@@ -9,9 +9,21 @@ import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
 import { FastifyReply } from 'fastify';
 import ExcelJS from 'exceljs';
 
+/** 工单汇总表头（与 ExportOrderRow 字段顺序一致） */
+const SUMMARY_HEADERS = [
+  '工单号', '门店', '门店编码', '工单日期', '结算月份', '车牌号', '车型', '客户名称',
+  '总幅数', '计入统计幅数', '是否返工', '是否调整单', '是否审核', '审核时间', '审核人', '状态', '备注',
+] as const;
+
+const SUMMARY_WIDTHS = [20, 16, 12, 12, 12, 12, 12, 12, 10, 14, 10, 12, 10, 12, 10, 10, 20];
+
+/** 项目明细表头 */
+const DETAIL_HEADERS = ['工单号', '门店', '车牌号', '部位', '数量', '幅数', '是否新件', '特殊车漆', '车漆倍数'] as const;
+const DETAIL_WIDTHS = [20, 16, 12, 14, 8, 10, 10, 14, 10];
+
 @ApiTags('Paint - Statistics')
 @Controller('paint/statistics')
-@SkipThrottle() // 统计查询为只读操作，默认不限流；导出接口单独配置
+@Throttle({ default: { limit: 60, ttl: 60000 } }) // 统计查询：每分钟 60 次
 export class PaintStatisticsController {
   constructor(
     private readonly statisticsService: PaintStatisticsService,
@@ -24,6 +36,25 @@ export class PaintStatisticsController {
   async latestMonth(@Request() req: AuthenticatedRequest) {
     const accessibleShopIds = await this.userShopService.getAccessibleShopIds(req.user.uid);
     const data = await this.statisticsService.getLatestSettlementMonth(accessibleShopIds);
+    return ApiRes.success(data);
+  }
+
+  /**
+   * 统计看板聚合接口
+   *
+   * 一次返回月度统计、KPI 概览、门店对比、类别分布、年度趋势，
+   * 避免前端并发 5 个请求、后端重复跑 3 次完整月度聚合。
+   */
+  @Get('dashboard')
+  @ApiOperation({ summary: '统计看板聚合数据（月度+KPI+门店对比+类别分布+年度趋势）' })
+  async dashboard(
+    @Request() req: AuthenticatedRequest,
+    @Query('settlementMonth') settlementMonth?: string,
+    @Query('shopId') shopId?: string,
+    @Query('year') year?: number,
+  ) {
+    const accessibleShopIds = await this.userShopService.getAccessibleShopIds(req.user.uid);
+    const data = await this.statisticsService.getDashboard(settlementMonth, shopId, accessibleShopIds, year);
     return ApiRes.success(data);
   }
 
@@ -84,6 +115,15 @@ export class PaintStatisticsController {
     return ApiRes.success(data);
   }
 
+  // ==================== 导出 ====================
+
+  /** 导出权限校验（shopId 越权或用户未绑定任何门店时拒绝） */
+  private assertExportAccess(accessibleShopIds: string[] | null, shopId?: string): boolean {
+    if (!shopId) return true;
+    if (!accessibleShopIds) return true; // null = 不限制（超管/财务）
+    return accessibleShopIds.includes(shopId);
+  }
+
   @Get('export/csv')
   @Throttle({ default: { limit: 5, ttl: 60000 } }) // 每分钟5次：导出文件较大
   @ApiOperation({ summary: '导出月度统计CSV' })
@@ -93,9 +133,8 @@ export class PaintStatisticsController {
     @Res() res: FastifyReply,
     @Request() req: AuthenticatedRequest,
   ) {
-    // 数据权限校验
     const accessibleShopIds = await this.userShopService.getAccessibleShopIds(req.user.uid);
-    if (shopId && accessibleShopIds && !accessibleShopIds.includes(shopId)) {
+    if (!this.assertExportAccess(accessibleShopIds, shopId)) {
       res.status(403).send({ code: 403, message: '无权导出该门店数据' });
       return;
     }
@@ -109,16 +148,18 @@ export class PaintStatisticsController {
       }
       return str;
     };
-    const headers = ['工单号', '门店', '门店编码', '工单日期', '结算月份', '车牌号', '车型', '客户名称', '总幅数', '是否审核', '审核时间', '审核人', '状态', '备注'];
+
     const rows = data.map(row => [
       row.工单号, row.门店, row.门店编码, row.工单日期, row.结算月份,
-      row.车牌号, row.车型, row.客户名称, row.总幅数, row.是否审核,
+      row.车牌号, row.车型, row.客户名称, row.总幅数, row.计入统计幅数,
+      row.是否返工, row.是否调整单, row.是否审核,
       row.审核时间, row.审核人, row.状态, row.备注,
     ]);
 
     // BOM for Excel UTF-8
     const bom = '\uFEFF';
-    const csvContent = bom + [headers.join(','), ...rows.map(r => r.map(csvEscape).join(','))].join('\n');
+    const csvContent =
+      bom + [SUMMARY_HEADERS.join(','), ...rows.map(r => r.map(csvEscape).join(','))].join('\n');
 
     res.header('Content-Type', 'text/csv; charset=utf-8');
     res.header('Content-Disposition', `attachment; filename=paint-statistics-${settlementMonth}.csv`);
@@ -134,32 +175,52 @@ export class PaintStatisticsController {
     @Res() res: FastifyReply,
     @Request() req: AuthenticatedRequest,
   ) {
-    // 数据权限校验
     const accessibleShopIds = await this.userShopService.getAccessibleShopIds(req.user.uid);
-    if (shopId && accessibleShopIds && !accessibleShopIds.includes(shopId)) {
+    if (!this.assertExportAccess(accessibleShopIds, shopId)) {
       res.status(403).send({ code: 403, message: '无权导出该门店数据' });
       return;
     }
-    const data = await this.statisticsService.getExportData(settlementMonth, shopId, accessibleShopIds);
 
-    const workbook = new ExcelJS.Workbook();
+    // hijack 后由 ExcelJS 流式写入器直接接管响应流，
+    // 避免 workbook.xlsx.writeBuffer() 把整个工作簿缓冲在内存里
+    res.hijack();
+    res.raw.writeHead(200, {
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': `attachment; filename=paint-statistics-${settlementMonth}.xlsx`,
+      'Cache-Control': 'no-cache',
+    });
+
+    const workbook = new ExcelJS.stream.xlsx.WorkbookWriter({ stream: res.raw, useStyles: true });
     workbook.creator = '喷漆幅数统计系统';
     workbook.created = new Date();
 
-    // ===== Sheet1: 工单汇总 =====
-    const summarySheet = workbook.addWorksheet('工单汇总');
-    const summaryHeaders = ['工单号', '门店', '门店编码', '工单日期', '结算月份', '车牌号', '车型', '客户名称', '总幅数', '是否审核', '审核时间', '审核人', '状态', '备注'];
+    await this.writeSummarySheet(workbook, settlementMonth, shopId, accessibleShopIds);
+    await this.writeDetailSheet(workbook, settlementMonth, shopId, accessibleShopIds);
 
-    // 标题行
-    const titleRow = summarySheet.addRow([`喷漆幅数统计 - ${settlementMonth}`]);
-    summarySheet.mergeCells('A1:N1');
+    await workbook.commit();
+    if (!res.raw.writableEnded) res.raw.end();
+  }
+
+  /** Sheet1：工单汇总（流式写入） */
+  private async writeSummarySheet(
+    workbook: ExcelJS.stream.xlsx.WorkbookWriter,
+    settlementMonth: string,
+    shopId: string | undefined,
+    accessibleShopIds: string[] | null,
+  ) {
+    const sheet = workbook.addWorksheet('工单汇总');
+    SUMMARY_WIDTHS.forEach((w, idx) => {
+      sheet.getColumn(idx + 1).width = w;
+    });
+
+    const titleRow = sheet.addRow([`喷漆幅数统计 - ${settlementMonth}`]);
     titleRow.getCell(1).font = { size: 16, bold: true };
     titleRow.getCell(1).alignment = { horizontal: 'center' };
     titleRow.height = 30;
+    titleRow.commit();
 
-    // 表头
-    const headerRow = summarySheet.addRow(summaryHeaders);
-    headerRow.eachCell((cell) => {
+    const headerRow = sheet.addRow([...SUMMARY_HEADERS]);
+    headerRow.eachCell(cell => {
       cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
       cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4472C4' } };
       cell.alignment = { horizontal: 'center', vertical: 'middle' };
@@ -169,71 +230,71 @@ export class PaintStatisticsController {
       };
     });
     headerRow.height = 22;
+    headerRow.commit();
 
-    // 数据行
-    let totalPaintCount = 0;
-    for (const row of data) {
-      totalPaintCount += row.总幅数;
-      const dataRow = summarySheet.addRow([
-        row.工单号, row.门店, row.门店编码, row.工单日期, row.结算月份,
-        row.车牌号, row.车型, row.客户名称, row.总幅数, row.是否审核,
-        row.审核时间, row.审核人, row.状态, row.备注,
-      ]);
-      dataRow.eachCell((cell, colNumber) => {
-        cell.border = {
-          top: { style: 'thin' }, bottom: { style: 'thin' },
-          left: { style: 'thin' }, right: { style: 'thin' },
-        };
-        if (colNumber === 9) {
-          cell.numFmt = '0.0';
-        }
-        cell.alignment = { vertical: 'middle' };
-      });
+    let countedTotal = 0;
+    for await (const batch of this.statisticsService.iterateExportData(settlementMonth, shopId, accessibleShopIds)) {
+      for (const row of batch) {
+        countedTotal += row.计入统计幅数;
+        const dataRow = sheet.addRow([
+          row.工单号, row.门店, row.门店编码, row.工单日期, row.结算月份,
+          row.车牌号, row.车型, row.客户名称, row.总幅数, row.计入统计幅数,
+          row.是否返工, row.是否调整单, row.是否审核,
+          row.审核时间, row.审核人, row.状态, row.备注,
+        ]);
+        dataRow.eachCell((cell, colNumber) => {
+          cell.border = {
+            top: { style: 'thin' }, bottom: { style: 'thin' },
+            left: { style: 'thin' }, right: { style: 'thin' },
+          };
+          if (colNumber === 9 || colNumber === 10) {
+            cell.numFmt = '0.0';
+          }
+          cell.alignment = { vertical: 'middle' };
+        });
+        dataRow.commit();
+      }
     }
 
-    // 合计行
-    const totalRow = summarySheet.addRow([]);
-    totalRow.getCell(8).value = '合计';
+    // 合计行：以「计入统计幅数」为准，保证与看板 KPI 完全一致
+    const totalRow = sheet.addRow([]);
+    totalRow.getCell(8).value = '合计(统计口径)';
     totalRow.getCell(8).font = { bold: true };
     totalRow.getCell(8).alignment = { horizontal: 'right' };
-    totalRow.getCell(9).value = totalPaintCount;
-    totalRow.getCell(9).font = { bold: true, color: { argb: 'FFC00000' } };
-    totalRow.getCell(9).numFmt = '0.0';
-    totalRow.eachCell((cell) => {
+    totalRow.getCell(10).value = Number(countedTotal.toFixed(2));
+    totalRow.getCell(10).font = { bold: true, color: { argb: 'FFC00000' } };
+    totalRow.getCell(10).numFmt = '0.0';
+    totalRow.eachCell(cell => {
       cell.border = {
         top: { style: 'double' }, bottom: { style: 'double' },
         left: { style: 'thin' }, right: { style: 'thin' },
       };
     });
+    totalRow.commit();
 
-    // 列宽自适应
-    summarySheet.getColumn(1).width = 20;
-    summarySheet.getColumn(2).width = 16;
-    summarySheet.getColumn(3).width = 12;
-    summarySheet.getColumn(4).width = 12;
-    summarySheet.getColumn(5).width = 12;
-    summarySheet.getColumn(6).width = 12;
-    summarySheet.getColumn(7).width = 12;
-    summarySheet.getColumn(8).width = 12;
-    summarySheet.getColumn(9).width = 10;
-    summarySheet.getColumn(10).width = 10;
-    summarySheet.getColumn(11).width = 12;
-    summarySheet.getColumn(12).width = 10;
-    summarySheet.getColumn(13).width = 10;
-    summarySheet.getColumn(14).width = 20;
+    sheet.commit();
+  }
 
-    // ===== Sheet2: 项目明细 =====
-    const detailSheet = workbook.addWorksheet('项目明细');
-    const detailHeaders = ['工单号', '门店', '车牌号', '部位', '数量', '幅数', '是否新件', '特殊车漆', '车漆倍数'];
+  /** Sheet2：项目明细（流式写入） */
+  private async writeDetailSheet(
+    workbook: ExcelJS.stream.xlsx.WorkbookWriter,
+    settlementMonth: string,
+    shopId: string | undefined,
+    accessibleShopIds: string[] | null,
+  ) {
+    const sheet = workbook.addWorksheet('项目明细');
+    DETAIL_WIDTHS.forEach((w, idx) => {
+      sheet.getColumn(idx + 1).width = w;
+    });
 
-    const detailTitleRow = detailSheet.addRow([`项目明细 - ${settlementMonth}`]);
-    detailSheet.mergeCells('A1:I1');
-    detailTitleRow.getCell(1).font = { size: 16, bold: true };
-    detailTitleRow.getCell(1).alignment = { horizontal: 'center' };
-    detailTitleRow.height = 30;
+    const titleRow = sheet.addRow([`项目明细 - ${settlementMonth}`]);
+    titleRow.getCell(1).font = { size: 16, bold: true };
+    titleRow.getCell(1).alignment = { horizontal: 'center' };
+    titleRow.height = 30;
+    titleRow.commit();
 
-    const detailHeaderRow = detailSheet.addRow(detailHeaders);
-    detailHeaderRow.eachCell((cell) => {
+    const headerRow = sheet.addRow([...DETAIL_HEADERS]);
+    headerRow.eachCell(cell => {
       cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
       cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF70AD47' } };
       cell.alignment = { horizontal: 'center', vertical: 'middle' };
@@ -242,59 +303,51 @@ export class PaintStatisticsController {
         left: { style: 'thin' }, right: { style: 'thin' },
       };
     });
-    detailHeaderRow.height = 22;
+    headerRow.height = 22;
+    headerRow.commit();
 
-    let detailTotalPaintCount = 0;
-    for (const order of data) {
-      for (const item of order.项目明细) {
-        detailTotalPaintCount += item.幅数;
-        const row = detailSheet.addRow([
-          order.工单号, order.门店, order.车牌号,
-          item.部位, item.数量, item.幅数,
-          item.是否新件, item.特殊车漆, item.车漆倍数,
-        ]);
-        row.eachCell((cell, colNumber) => {
-          cell.border = {
-            top: { style: 'thin' }, bottom: { style: 'thin' },
-            left: { style: 'thin' }, right: { style: 'thin' },
-          };
-          if (colNumber === 6) {
-            cell.numFmt = '0.00';
-          }
-        });
+    let detailTotal = 0;
+    for await (const batch of this.statisticsService.iterateExportData(settlementMonth, shopId, accessibleShopIds)) {
+      for (const order of batch as ExportOrderRow[]) {
+        // 返工单不计入统计口径，其明细也不应计入明细合计
+        if (order.是否返工 === '是') continue;
+        for (const item of order.项目明细) {
+          detailTotal += item.幅数;
+          const row = sheet.addRow([
+            order.工单号, order.门店, order.车牌号,
+            item.部位, item.数量, item.幅数,
+            item.是否新件, item.特殊车漆, item.车漆倍数,
+          ]);
+          row.eachCell((cell, colNumber) => {
+            cell.border = {
+              top: { style: 'thin' }, bottom: { style: 'thin' },
+              left: { style: 'thin' }, right: { style: 'thin' },
+            };
+            if (colNumber === 6) {
+              cell.numFmt = '0.00';
+            }
+          });
+          row.commit();
+        }
       }
     }
 
-    // 明细合计行
-    const detailTotalRow = detailSheet.addRow([]);
+    const detailTotalRow = sheet.addRow([]);
     detailTotalRow.getCell(5).value = '合计';
     detailTotalRow.getCell(5).font = { bold: true };
     detailTotalRow.getCell(5).alignment = { horizontal: 'right' };
-    detailTotalRow.getCell(6).value = detailTotalPaintCount;
+    detailTotalRow.getCell(6).value = Number(detailTotal.toFixed(2));
     detailTotalRow.getCell(6).font = { bold: true, color: { argb: 'FFC00000' } };
     detailTotalRow.getCell(6).numFmt = '0.00';
-    detailTotalRow.eachCell((cell) => {
+    detailTotalRow.eachCell(cell => {
       cell.border = {
         top: { style: 'double' }, bottom: { style: 'double' },
         left: { style: 'thin' }, right: { style: 'thin' },
       };
     });
+    detailTotalRow.commit();
 
-    detailSheet.getColumn(1).width = 20;
-    detailSheet.getColumn(2).width = 16;
-    detailSheet.getColumn(3).width = 12;
-    detailSheet.getColumn(4).width = 14;
-    detailSheet.getColumn(5).width = 8;
-    detailSheet.getColumn(6).width = 10;
-    detailSheet.getColumn(7).width = 10;
-    detailSheet.getColumn(8).width = 14;
-    detailSheet.getColumn(9).width = 10;
-
-    // 生成buffer并返回
-    const buffer = await workbook.xlsx.writeBuffer();
-    res.header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.header('Content-Disposition', `attachment; filename=paint-statistics-${settlementMonth}.xlsx`);
-    res.send(buffer);
+    sheet.commit();
   }
 
   @Get('export/pdf')
@@ -306,9 +359,8 @@ export class PaintStatisticsController {
     @Res() res: FastifyReply,
     @Request() req: AuthenticatedRequest,
   ) {
-    // 数据权限校验
     const accessibleShopIds = await this.userShopService.getAccessibleShopIds(req.user.uid);
-    if (shopId && accessibleShopIds && !accessibleShopIds.includes(shopId)) {
+    if (!this.assertExportAccess(accessibleShopIds, shopId)) {
       res.status(403).send({ code: 403, message: '无权导出该门店数据' });
       return;
     }

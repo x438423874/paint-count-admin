@@ -16,6 +16,10 @@ interface ExportRow {
   车型: string;
   客户名称: string;
   总幅数: number;
+  /** 纳入月度统计口径的幅数（返工单为 0） */
+  计入统计幅数: number;
+  是否返工: string;
+  是否调整单: string;
   是否审核: string;
   审核时间: string;
   审核人: string;
@@ -48,10 +52,13 @@ export class PaintPdfExportService {
       accessibleShopIds,
     );
 
-    // 汇总统计
-    const totalOrders = data.length;
-    const totalPaintCount = data.reduce((sum, r) => sum + (r.总幅数 || 0), 0);
-    const auditedCount = data.filter(r => r.是否审核 === '是').length;
+    // 汇总统计（口径与统计看板一致：返工单不计入总幅数）
+    const normalRows = data.filter(r => r.是否返工 === '否' && r.是否调整单 === '否');
+    const reworkRows = data.filter(r => r.是否返工 === '是');
+    const totalOrders = normalRows.length;
+    const totalPaintCount = data.reduce((sum, r) => sum + (r.计入统计幅数 || 0), 0);
+    const reworkPaintCount = reworkRows.reduce((sum, r) => sum + (r.总幅数 || 0), 0);
+    const auditedCount = normalRows.filter(r => r.是否审核 === '是').length;
     const pendingCount = totalOrders - auditedCount;
 
     // 构造表格行（只展示关键列，避免 PDF 过宽）
@@ -63,6 +70,7 @@ export class PaintPdfExportService {
         { text: '车牌号', style: 'tableHeader' },
         { text: '车型', style: 'tableHeader' },
         { text: '幅数', style: 'tableHeader', alignment: 'right' },
+        { text: '计入统计', style: 'tableHeader', alignment: 'right' },
         { text: '审核', style: 'tableHeader' },
       ],
     ];
@@ -73,17 +81,20 @@ export class PaintPdfExportService {
         row.工单日期 || '-',
         row.车牌号 || '-',
         row.车型 || '-',
-        { text: row.总幅数.toFixed(2), alignment: 'right' },
+        { text: (row.总幅数 || 0).toFixed(2), alignment: 'right' },
+        { text: (row.计入统计幅数 || 0).toFixed(2), alignment: 'right' },
         row.是否审核,
       ]);
     }
 
-    // 合计行
+    // 合计行：第 5 列为全部工单幅数之和，第 6 列为纳入统计口径的幅数（返工单不计）
+    const rawPaintCount = data.reduce((sum, r) => sum + (r.总幅数 || 0), 0);
     tableBody.push([
       { text: '合计', colSpan: 4, style: 'tableFooter' },
       '',
       '',
       '',
+      { text: rawPaintCount.toFixed(2), alignment: 'right', style: 'tableFooter' },
       { text: totalPaintCount.toFixed(2), alignment: 'right', style: 'tableFooter' },
       { text: `${auditedCount}/${totalOrders}`, style: 'tableFooter' },
     ]);
@@ -125,6 +136,12 @@ export class PaintPdfExportService {
                 { text: 'Pending', style: 'summaryLabel' },
                 { text: String(pendingCount), style: 'summaryValue' },
               ],
+              [
+                { text: 'Rework Orders', style: 'summaryLabel' },
+                { text: String(reworkRows.length), style: 'summaryValue' },
+                { text: 'Rework Paint Count', style: 'summaryLabel' },
+                { text: reworkPaintCount.toFixed(2), style: 'summaryValue' },
+              ],
             ],
           },
           layout: 'noBorders',
@@ -134,7 +151,7 @@ export class PaintPdfExportService {
         {
           table: {
             headerRows: 1,
-            widths: ['auto', 'auto', '*', '*', 'auto', 'auto'],
+            widths: ['auto', 'auto', '*', '*', 'auto', 'auto', 'auto'],
             body: tableBody,
           },
           layout: {

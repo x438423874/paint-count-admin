@@ -50,6 +50,8 @@ export class PaintStandardTemplateService {
           })),
         });
       }
+      // 模板项目变更后，自动同步刷新所有已应用该模板的门店标准快照
+      await this.syncTemplateToShops(id);
     }
 
     return this.prisma.paintStandardTemplate.update({
@@ -84,6 +86,43 @@ export class PaintStandardTemplateService {
       include: { _count: { select: { shops: true, items: true } } },
       orderBy: { createdAt: 'desc' },
     });
+  }
+
+  /** 将模板项目同步刷新到所有已应用该模板的门店（覆盖门店标准快照） */
+  private async syncTemplateToShops(templateId: string) {
+    const template = await this.prisma.paintStandardTemplate.findUnique({
+      where: { id: templateId },
+      include: { items: true },
+    });
+    if (!template) throw new NotFoundException('标准模板不存在');
+
+    const shops = await this.prisma.paintShop.findMany({
+      where: { standardTemplateId: templateId },
+      select: { id: true },
+    });
+    if (shops.length === 0) return { syncedShops: 0 };
+
+    await this.prisma.$transaction(async tx => {
+      await tx.paintStandard.deleteMany({
+        where: { shopId: { in: shops.map(s => s.id) } },
+      });
+      if (template.items.length > 0) {
+        await tx.paintStandard.createMany({
+          data: shops.flatMap(shop =>
+            template.items.map(item => ({
+              shopId: shop.id,
+              categoryId: item.categoryId,
+              coefficient: item.coefficient,
+              newPartAddition: item.newPartAddition,
+              alias: item.alias,
+              unit: item.unit,
+            })),
+          ),
+        });
+      }
+    });
+
+    return { syncedShops: shops.length };
   }
 
   /** 将标准模板应用到门店：复制模板项目到门店的 PaintStandard */

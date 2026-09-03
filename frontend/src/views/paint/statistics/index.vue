@@ -1,7 +1,7 @@
 <script setup lang="tsx">
 import { ref, computed, onMounted, watch, nextTick } from 'vue';
 import { NCard, NGrid, NGi, NStatistic, NSelect, NSpace, NTag, NDataTable, NH3, NNumberAnimation, NDatePicker, NButton, NEmpty } from 'naive-ui';
-import { fetchMonthlyStatistics, fetchShopComparison, fetchYearOverview, fetchCategoryBreakdown, fetchPaintShopList, fetchLatestSettlementMonth, fetchStatisticsOverview, exportStatisticsCsv, exportStatisticsExcel, exportStatisticsPdf } from '@/service/api';
+import { fetchStatisticsDashboard, fetchPaintShopList, fetchLatestSettlementMonth, exportStatisticsCsv, exportStatisticsExcel, exportStatisticsPdf } from '@/service/api';
 import { useEcharts } from '@/hooks/common/echarts';
 import { getChartPalette, primaryGradient } from '@/utils/chart';
 
@@ -36,22 +36,21 @@ async function loadAllData() {
   loading.value = true;
   try {
     const params: any = {};
-    if (selectedSettlementMonth.value) params.settlementMonth = selectedSettlementMonth.value;
+    if (selectedSettlementMonth.value) {
+      params.settlementMonth = selectedSettlementMonth.value;
+      params.year = parseInt(selectedSettlementMonth.value.split('-')[0], 10);
+    }
     if (selectedShopId.value) params.shopId = selectedShopId.value;
 
-    const [monthlyRes, comparisonRes, yearRes, categoryRes, overviewRes] = await Promise.all([
-      fetchMonthlyStatistics(params),
-      fetchShopComparison(params),
-      fetchYearOverview({ year: selectedSettlementMonth.value ? parseInt(selectedSettlementMonth.value.split('-')[0]) : new Date().getFullYear(), ...(selectedShopId.value && { shopId: selectedShopId.value }) }),
-      fetchCategoryBreakdown(params),
-      fetchStatisticsOverview(params)
-    ]);
+    // 单次请求拿齐全部统计：原先是 5 个并发请求，
+    // 且 comparison / overview 在服务端还会各自再跑一遍完整月度聚合
+    const { data, error } = await fetchStatisticsDashboard(params);
 
-    if (!monthlyRes.error) monthlyData.value = monthlyRes.data || [];
-    if (!comparisonRes.error) shopComparison.value = comparisonRes.data || [];
-    if (!yearRes.error) yearOverview.value = yearRes.data || [];
-    if (!categoryRes.error) categoryBreakdown.value = categoryRes.data || [];
-    if (!overviewRes.error) overview.value = overviewRes.data;
+    monthlyData.value = !error && data ? data.monthly || [] : [];
+    shopComparison.value = !error && data ? data.comparison || [] : [];
+    yearOverview.value = !error && data ? data.yearOverview || [] : [];
+    categoryBreakdown.value = !error && data ? data.category || [] : [];
+    overview.value = !error && data ? data.overview || null : null;
 
     // 更新图表
     await nextTick();
@@ -77,7 +76,7 @@ const totalStats = computed(() => {
   const reworkOrders = monthlyData.value.reduce((s, d) => s + Number(d.reworkOrders || 0), 0);
   const reworkPaintCount = monthlyData.value.reduce((s, d) => s + Number(d.reworkPaintCount || 0), 0);
   const reworkVehicles = monthlyData.value.reduce((s, d) => s + Number(d.reworkVehicles || 0), 0);
-  return {
+  const local = {
     totalOrders,
     totalPaintCount,
     totalVehicles,
@@ -94,6 +93,8 @@ const totalStats = computed(() => {
     reworkPaintCount,
     reworkVehicles
   };
+  // 服务端 overview 已提供派生指标（审核率、结算率等），避免前端再算一遍
+  return overview.value ? { ...local, ...overview.value } : local;
 });
 
 // 调试：方便在浏览器控制台核对原始数据
