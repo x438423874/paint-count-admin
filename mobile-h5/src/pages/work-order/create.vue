@@ -179,6 +179,21 @@ const totalPaintCount = computed(() => {
   }, 0)
 })
 
+/**
+ * 负幅数自动识别为调整单：
+ * 任一提交项的幅数为负，整单即作为调整单提交（用于抵消/订正月报），
+ * 统计时只贡献幅数、不计入工单数与车辆数。
+ */
+const isAdjustmentOrder = computed(() =>
+  form.items.some(
+    item =>
+      item.quantity > 0
+      && item.overridePaintCount !== undefined
+      && item.overridePaintCount !== null
+      && item.overridePaintCount < 0,
+  ),
+)
+
 /** 获取单个 item 的自动计算幅数 */
 function getItemAutoPaintCount(index: number): number {
   const item = form.items[index]
@@ -193,6 +208,23 @@ function getItemAutoPaintCount(index: number): number {
     if (sp) specialMultiplier = Number(sp.multiplier) || 1
   }
   return (item.quantity * coefficient + (item.newPartQuantity || 0) * newPartAddition) * specialMultiplier
+}
+
+// 幅数小数位控制：默认显示1位小数，聚焦输入时允许输入2位小数
+const paintFocusIndex = ref<number | null>(null)
+
+function getPaintDecimalLength(index: number, value?: number | string | null): number {
+  if (paintFocusIndex.value === index) return 2
+  const decimals = String(value ?? '').split('.')[1]?.length ?? 0
+  return Math.min(Math.max(decimals, 1), 2)
+}
+
+function onPaintCountBlur(item: CreateWorkOrderItemDto) {
+  paintFocusIndex.value = null
+  if (item.overridePaintCount !== undefined && item.overridePaintCount !== null) {
+    // 失焦后规范化为最多2位小数，避免浮点误差与超长小数
+    item.overridePaintCount = Number(Number(item.overridePaintCount).toFixed(2))
+  }
 }
 
 // 特殊车漆选项
@@ -300,6 +332,7 @@ async function handleSubmit(opts?: { skipStrict?: boolean }) {
       customerName: form.customerName || undefined,
       phone: form.phone || undefined,
       remark: form.remark || undefined,
+      isAdjustment: isAdjustmentOrder.value || undefined,
       items: validItems.length > 0 ? validItems.map((it) => {
         const item: any = {
           categoryId: it.categoryId,
@@ -779,6 +812,10 @@ onMounted(() => {
         喷漆项目
         <span class="total-count">总幅数: {{ totalPaintCount.toFixed(1) }}</span>
       </div>
+      <div v-if="isAdjustmentOrder" class="adjust-hint">
+        <van-icon name="warning-o" size="12" />
+        含负幅数，将作为「调整单」提交：只冲抵统计幅数，不计入工单数
+      </div>
 
       <div v-for="(item, index) in form.items" :key="index" class="item-row">
         <div class="item-name">
@@ -799,11 +836,13 @@ onMounted(() => {
               <van-stepper
                 v-if="item.overridePaintCount !== undefined && item.overridePaintCount !== null"
                 :model-value="item.overridePaintCount"
-                min="0" max="99" step="0.1" decimal-length="1"
+                min="-99" max="99" step="0.1" :decimal-length="getPaintDecimalLength(index, item.overridePaintCount)"
                 input-width="48px"
+                @focus="paintFocusIndex = index"
+                @blur="onPaintCountBlur(item)"
                 @update:model-value="(val: number) => { item.overridePaintCount = val }"
               />
-              <span v-else class="paint-count-value" @click="item.overridePaintCount = getItemAutoPaintCount(index)">
+              <span v-else class="paint-count-value" @click="item.overridePaintCount = Number(getItemAutoPaintCount(index).toFixed(1))">
                 {{ getItemAutoPaintCount(index).toFixed(1) }}
               </span>
               <van-icon
@@ -1037,6 +1076,19 @@ onMounted(() => {
   font-size: 13px;
   font-weight: 500;
   color: var(--color-primary);
+}
+
+.adjust-hint {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 10px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--color-warning);
+  background: var(--color-warning-bg);
 }
 
 .item-row {

@@ -11,6 +11,7 @@ import { isSuperAdmin as checkIsSuperAdmin } from '@/utils/permission';
 import UserOperateDrawer from './modules/user-operate-drawer.vue';
 import UserSearch from './modules/user-search.vue';
 import UserShopBindDrawer from './modules/user-shop-bind-drawer.vue';
+import UserRoleAssignDrawer from './modules/user-role-assign-drawer.vue';
 
 const appStore = useAppStore();
 
@@ -24,6 +25,17 @@ const bindUserId = ref<string | null>(null);
 function handleBindShop(userId: string) {
   bindUserId.value = userId;
   bindDrawerVisible.value = true;
+}
+
+// 用户-角色分配抽屉
+const roleDrawerVisible = ref(false);
+const roleUserId = ref<string | null>(null);
+const roleUserName = ref('');
+
+function handleAssignRole(userId: string, userName?: string) {
+  roleUserId.value = userId;
+  roleUserName.value = userName || '';
+  roleDrawerVisible.value = true;
 }
 
 const {
@@ -125,7 +137,7 @@ const {
       key: 'operate',
       title: $t('common.operate'),
       align: 'center',
-      width: isSuperAdmin.value ? 240 : 130,
+      width: isSuperAdmin.value ? 320 : 130,
       render: row => (
         <div class="flex-center gap-8px">
           <NButton type="primary" ghost size="small" onClick={() => edit(row.id)}>
@@ -134,6 +146,16 @@ const {
           {isSuperAdmin.value && (
             <NButton type="info" ghost size="small" onClick={() => handleBindShop(row.id)}>
               绑定门店
+            </NButton>
+          )}
+          {isSuperAdmin.value && (
+            <NButton
+              type="warning"
+              ghost
+              size="small"
+              onClick={() => handleAssignRole(row.id, row.username)}
+            >
+              分配角色
             </NButton>
           )}
           <NPopconfirm onPositiveClick={() => handleDelete(row.id)}>
@@ -203,7 +225,7 @@ function edit(id: string) {
         :data="data"
         size="small"
         :flex-height="!appStore.isMobile"
-        :scroll-x="962"
+        :scroll-x="1042"
         :loading="loading"
         remote
         :row-key="row => row.id"
@@ -221,6 +243,11 @@ function edit(id: string) {
         @submitted="getDataByPage"
       />
       <UserShopBindDrawer v-model:visible="bindDrawerVisible" :user-id="bindUserId" />
+      <UserRoleAssignDrawer
+        v-model:visible="roleDrawerVisible"
+        :user-id="roleUserId"
+        :user-name="roleUserName"
+      />
     </NCard>
   </div>
 </template>

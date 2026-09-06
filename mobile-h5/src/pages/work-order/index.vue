@@ -11,7 +11,9 @@ import {
   batchSettleWorkOrders,
   batchUnsettleWorkOrders,
 } from '@/api/paint'
+import type { MyScope } from '@/api/paint'
 import type { PaintWorkOrder, PaintShop, PaintCategory, PageResult, PaintOrderStatus } from '@/api/types/paint'
+import { monthInTenure, getMyScopeCached } from '@/utils/tenure'
 import { showNotify } from 'vant'
 import { compressImage } from '@/utils/image-compress'
 import { canBatchOcr as canBatchOcrRole, canEdit as canEditRole } from '@/utils/permission'
@@ -39,6 +41,13 @@ const current = ref(1)
 // 每页大小：平衡首屏速度和加载次数
 const size = 20
 const totalPaintCount = ref(0)
+
+// 总幅数显示格式：默认1位小数，实际值有2位小数时显示2位（与编辑页幅数规则一致）
+function formatPaintCount(val?: number | null): string {
+  const n = Number(val ?? 0)
+  const decimals = String(n).split('.')[1]?.length ?? 0
+  return n.toFixed(Math.min(Math.max(decimals, 1), 2))
+}
 const refreshing = ref(false)
 
 const statusCounts = reactive({
@@ -68,7 +77,7 @@ const monthColumns = computed(() => {
   for (let i = 0; i < 12; i++) {
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
     const value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
-    list.push({ text: value, value })
+    if (monthInTenure(value, scope.value)) list.push({ text: value, value })
   }
   return list
 })
@@ -94,6 +103,35 @@ async function loadShops() {
   }
   catch {
     shops.value = []
+  }
+}
+
+// ==================== 数据可见范围提示（在岗期口径） ====================
+
+const scope = ref<MyScope | null>(null)
+const scopeHintDismissed = ref(false)
+
+const scopeHintText = computed(() => {
+  if (!scope.value || scope.value.kind !== 'tenure') return ''
+  // ISO 时间按本地时区格式化为 yyyy-MM-dd（避免 UTC 截断出现前一天）
+  const fmt = (v?: string | null) => {
+    if (!v) return ''
+    const d = new Date(v)
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  }
+  const parts = scope.value.shops.map((s) => {
+    const start = fmt(s.startAt)
+    if (s.endAt) return `${s.shopName}（${start} ~ ${fmt(s.endAt)}，已离岗）`
+    return `${s.shopName}（${start} 至今）`
+  })
+  return `数据范围：仅可查看您在岗期间结算的工单（按结算月份归属）。${parts.join('；')}`
+})
+
+async function loadScope() {
+  scope.value = await getMyScopeCached()
+  // 任期加载后，若已选结算月份超出在岗期则清空
+  if (searchForm.settlementMonth && !monthInTenure(searchForm.settlementMonth, scope.value)) {
+    searchForm.settlementMonth = ''
   }
 }
 
@@ -703,6 +741,7 @@ function setupScrollObserver() {
 onMounted(() => {
   loadShops()
   loadCategories()
+  loadScope()
   initOnMounted()
   nextTick(() => setupScrollObserver())
   hasInitialized = true
@@ -773,6 +812,19 @@ onActivated(() => {
       </div>
     </div>
 
+    <!-- 数据可见范围提示（在岗期口径） -->
+    <van-notice-bar
+      v-if="scopeHintText && !scopeHintDismissed"
+      mode="closeable"
+      wrapable
+      :scrollable="false"
+      left-icon="info-o"
+      :text="scopeHintText"
+      color="#ed6a0c"
+      background="#fffbe8"
+      @close="scopeHintDismissed = true"
+    />
+
     <!-- 状态标签 -->
     <div class="status-tabs-wrapper">
       <van-tabs
@@ -794,7 +846,7 @@ onActivated(() => {
     <!-- 汇总 -->
     <div v-if="orders.length > 0" class="summary-bar">
       <span class="summary-text">共 {{ statusCounts[statusOptions[activeStatus].key as keyof typeof statusCounts] || 0 }} 单</span>
-      <span class="summary-text">搜索总幅数 {{ Number(totalPaintCount).toFixed(1) }} 幅</span>
+      <span class="summary-text">搜索总幅数 {{ formatPaintCount(totalPaintCount) }} 幅</span>
     </div>
 
     <!-- 列表 -->
@@ -863,6 +915,10 @@ onActivated(() => {
                 <span class="info-label">日期</span>
                 <span class="info-value">{{ formatDate(order.orderDate) }}</span>
               </div>
+              <div class="info-item">
+                <span class="info-label">结算月份</span>
+                <span class="info-value">{{ order.settlementMonth || '未结算' }}</span>
+              </div>
             </div>
 
             <div class="card-bottom">
@@ -871,7 +927,7 @@ onActivated(() => {
                 <span>{{ order.customerName || '-' }}</span>
               </div>
               <div class="paint-count">
-                <span class="count-value">{{ order.totalPaintCount }}</span>
+                <span class="count-value">{{ formatPaintCount(order.totalPaintCount) }}</span>
                 <span class="count-unit">幅</span>
               </div>
             </div>

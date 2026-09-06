@@ -1,4 +1,33 @@
+import { ref } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
+import { getMyPerms } from '@/service/api/paint';
+
+/**
+ * 权限点缓存（响应式，会话级）：来自 GET /paint/user-shop/my-perms，
+ * 与后端 PermGuard 共用同一注册表口径；加载失败/未就绪时回退角色码判断
+ */
+const permsCache = ref<string[] | null>(null);
+
+/** 拉取当前用户权限点集合（登录/刷新后用户信息就绪时调用） */
+export async function fetchMyPerms(): Promise<void> {
+  try {
+    const res: any = await getMyPerms();
+    const list = res?.data ?? res;
+    permsCache.value = Array.isArray(list) ? list : [];
+  } catch {
+    permsCache.value = null;
+  }
+}
+
+/** 是否拥有指定权限点 */
+export function hasPerm(perm: string): boolean {
+  return !!permsCache.value && permsCache.value.includes(perm);
+}
+
+/** 权限点是否已就绪（未就绪时 can* 函数回退角色码判断） */
+function permReady(): boolean {
+  return permsCache.value !== null;
+}
 
 /**
  * Web 后台权限判断工具
@@ -29,33 +58,39 @@ export function isFinance(): boolean {
   return hasRole('ROLE_FINANCE');
 }
 
-/** 是否可审核工单（超管/门店管理员） */
+/** 是否可审核工单（权限点优先，角色码回退） */
 export function canAudit(): boolean {
+  if (permReady()) return hasPerm('paint:work-order:audit');
   return hasRole('ROLE_SUPER', 'R_SUPER', 'ROLE_SHOP_ADMIN');
 }
 
-/** 是否可删除工单（超管/门店管理员） */
+/** 是否可删除工单（权限点优先，角色码回退） */
 export function canDelete(): boolean {
+  if (permReady()) return hasPerm('paint:work-order:delete');
   return hasRole('ROLE_SUPER', 'R_SUPER', 'ROLE_SHOP_ADMIN');
 }
 
-/** 是否可使用一键OCR批量填充（超管/门店管理员） */
+/** 是否可使用一键OCR批量填充（权限点优先，角色码回退） */
 export function canBatchOcr(): boolean {
+  if (permReady()) return hasPerm('paint:work-order:batch-ocr');
   return hasRole('ROLE_SUPER', 'R_SUPER', 'ROLE_SHOP_ADMIN');
 }
 
-/** 是否可合并工单（超管/门店管理员） */
+/** 是否可合并工单（权限点优先，角色码回退） */
 export function canMerge(): boolean {
+  if (permReady()) return hasPerm('paint:work-order:merge');
   return hasRole('ROLE_SUPER', 'R_SUPER', 'ROLE_SHOP_ADMIN');
 }
 
-/** 是否可结算/标记异常（超管/门店管理员） */
+/** 是否可结算/标记异常（权限点优先，角色码回退） */
 export function canSettle(): boolean {
+  if (permReady()) return hasPerm('paint:work-order:settle');
   return hasRole('ROLE_SUPER', 'R_SUPER', 'ROLE_SHOP_ADMIN');
 }
 
-/** 是否可编辑工单（除只读用户/财务外都可） */
+/** 是否可编辑工单（权限点优先，角色码回退） */
 export function canEdit(): boolean {
+  if (permReady()) return hasPerm('paint:work-order:create');
   return !hasRole('ROLE_VIEWER', 'ROLE_FINANCE');
 }
 

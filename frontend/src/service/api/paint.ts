@@ -1026,13 +1026,17 @@ export function toggleScheduledTask(name: string, action: 'start' | 'stop') {
 
 // ==================== 用户-门店绑定 API（数据权限） ====================
 
-/** 用户绑定的门店信息 */
+/** 用户绑定的门店信息（含在岗期） */
 export interface UserBoundShop {
   id: string;
   name: string;
   code: string;
   brand: string;
   status: string;
+  /** 在岗开始时间 */
+  startAt: string;
+  /** 离岗时间；为 null 表示在岗中 */
+  endAt: string | null;
 }
 
 /** 获取指定用户绑定的门店列表（仅超管可用） */
@@ -1043,12 +1047,38 @@ export function fetchUserBoundShops(userId: string) {
   });
 }
 
-/** 设置指定用户绑定的门店（仅超管可用，全量覆盖） */
-export function bindUserShops(userId: string, shopIds: string[]) {
+/**
+ * 设置指定用户绑定的门店（仅超管可用，全量覆盖）
+ * 移除的门店自动离岗留痕；重新勾选视为重新上岗；
+ * startAtMap：新上岗门店的自定义在岗开始时间（ISO 字符串，key 为 shopId），用于回填历史日期
+ */
+export function bindUserShops(userId: string, shopIds: string[], startAtMap?: Record<string, string>) {
   return request({
     url: `/paint/user-shop/user/${userId}`,
     method: 'put',
-    data: { shopIds }
+    data: { shopIds, startAtMap }
+  });
+}
+
+/** 调整指定门店绑定的在岗期（仅超管用：回填历史开始时间 / 设置离岗时间） */
+/** 获取当前用户权限点集合（按钮显隐与后端 PermGuard 共用同一注册表口径） */
+export function getMyPerms() {
+  return request({
+    url: '/paint/user-shop/my-perms',
+    method: 'get'
+  });
+}
+
+export function updateUserShopTenure(
+  userId: string,
+  shopId: string,
+  startAt: string,
+  endAt?: string | null
+) {
+  return request({
+    url: `/paint/user-shop/user/${userId}/tenure`,
+    method: 'put',
+    data: { shopId, startAt, endAt: endAt ?? null }
   });
 }
 
@@ -1379,6 +1409,33 @@ export function createOrderFromPending(id: string, settlementMonth?: string) {
     url: `/paint/pending-image/${id}/create-order`,
     method: 'post',
     data: { settlementMonth }
+  });
+}
+
+/** 人工修正图片池记录的 OCR 识别结果（rematch=true 时保存后立即重新匹配） */
+export function correctPendingImageOcr(
+  id: string,
+  payload: {
+    orderNo?: string;
+    plateNumber?: string;
+    vin?: string;
+    carModel?: string;
+    brand?: string;
+    customerName?: string;
+    phone?: string;
+    date?: string;
+    settlementMonth?: string;
+  },
+  rematch = true
+) {
+  return request<{
+    id: string;
+    record: PaintPendingImage | null;
+    match: { status: PendingImageStatus; matchedOrderId?: string; remark?: string } | null;
+  }>({
+    url: `/paint/pending-image/${id}/correct-ocr`,
+    method: 'post',
+    data: { ...payload, rematch }
   });
 }
 

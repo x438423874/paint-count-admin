@@ -40,6 +40,13 @@ function getImageUrl(url: string) {
   if (!url || url.startsWith('http') || url.startsWith('blob:')) return url;
   return `/proxy-demo${url}`;
 }
+
+// 幅数显示格式：默认1位小数，实际值有2位小数时显示2位（与编辑页幅数规则一致）
+function formatPaintCount(val?: number | string | null): string {
+  const n = Number(val ?? 0);
+  const decimals = String(n).split('.')[1]?.length ?? 0;
+  return n.toFixed(Math.min(Math.max(decimals, 1), 2));
+}
 </script>
 
 <template>
@@ -61,7 +68,7 @@ function getImageUrl(url: string) {
               <NDescriptionsItem label="电话">{{ props.order.phone || '-' }}</NDescriptionsItem>
               <NDescriptionsItem label="日期">{{ props.order.orderDate ? new Date(props.order.orderDate).toLocaleDateString() : '-' }}</NDescriptionsItem>
               <NDescriptionsItem label="总幅数">
-                <NTag type="success" size="large">{{ Number(props.order.totalPaintCount).toFixed(1) }} 幅</NTag>
+                <NTag type="success" size="large">{{ formatPaintCount(props.order.totalPaintCount) }} 幅</NTag>
               </NDescriptionsItem>
               <NDescriptionsItem label="状态">
                 <NTag :type="getStatusType(props.order.status) as any">{{ getStatusLabel(props.order.status) }}</NTag>
@@ -75,7 +82,7 @@ function getImageUrl(url: string) {
           :columns="[
             { key: 'categoryName', title: '项目名称', render: (row: any) => row.alias || row.category?.name || '-' },
             { key: 'quantity', title: '数量', width: 80, align: 'center' },
-            { key: 'paintCount', title: '幅数', width: 100, align: 'center', render: (row: any) => Number(row.paintCount).toFixed(2) + ' 幅' },
+            { key: 'paintCount', title: '幅数', width: 100, align: 'center', render: (row: any) => formatPaintCount(row.paintCount) + ' 幅' },
             { key: 'specialPaint', title: '特殊车漆', width: 120, align: 'center', render: (row: any) => row.specialPaint ? row.specialPaint.name + ' x' + Number(row.specialPaintMultiplier).toFixed(1) : '-' },
             { key: 'isNewPart', title: '新件', width: 70, align: 'center', render: (row: any) => row.isNewPart ? '是' : '否' }
           ]"

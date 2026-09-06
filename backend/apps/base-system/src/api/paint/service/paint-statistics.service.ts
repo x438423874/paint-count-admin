@@ -13,15 +13,13 @@ import {
   isCountedInPaintTotal,
   isVoidOrder,
   normalizePlateNumber,
-  resolveShopScope,
   roundHalfUp,
   toDateKey,
-  toOrderShopWhere,
+  toOrderAccessWhere,
   toPaintCents,
-  toShopWhere,
   centsToPaintCount,
   aggregateShopMonthly,
-  type ShopScope,
+  type OrderAccessScope,
 } from './paint-calculation';
 import { PaintStatsCache, hashScope, statsTtlForMonth } from './paint-stats-cache';
 
@@ -148,15 +146,31 @@ export class PaintStatisticsService {
   /**
    * 解析数据权限范围
    *
-   * 注意：accessibleShopIds 为空数组表示「普通用户未绑定任何门店」，
-   * 必须返回空结果，历史实现在此处退化成了「不限制」从而越权暴露全部门店数据。
+   * - 未传 scope（undefined）视为不限制（内部调用兼容）
+   * - 指定 shopId 时把范围收窄到该门店（任期为该门店、无时间上界限制的门店不受限）
+   * - 指定 shopId 但不在范围内 → none
    */
-  private scopeOf(shopId: string | undefined, accessibleShopIds: string[] | null | undefined): ShopScope {
-    return resolveShopScope(shopId, accessibleShopIds);
+  private scopeOf(shopId: string | undefined, orderScope?: OrderAccessScope): OrderAccessScope {
+    const base: OrderAccessScope = orderScope ?? { kind: 'all' };
+    if (!shopId) return base;
+    if (base.kind === 'none') return base;
+    if (base.kind === 'all') {
+      return { kind: 'tenure', tenures: [{ shopId, startAt: new Date(0), endAt: null }] };
+    }
+    const tenures = base.tenures.filter(t => t.shopId === shopId);
+    return tenures.length > 0 ? { kind: 'tenure', tenures } : { kind: 'none' };
   }
 
-  private scopeHashOf(scope: ShopScope): string {
-    return scope.kind === 'list' ? hashScope('list', scope.shopIds) : hashScope(scope.kind);
+  /** 范围摘要进缓存 key：任期含起止时间，不同用户/任期不会互相污染缓存 */
+  private scopeHashOf(scope: OrderAccessScope): string {
+    if (scope.kind === 'all') return hashScope('all');
+    if (scope.kind === 'none') return hashScope('none');
+    return hashScope(
+      'tenure',
+      scope.tenures.map(
+        t => `${t.shopId}|${new Date(t.startAt).toISOString()}|${t.endAt ? new Date(t.endAt).toISOString() : ''}`,
+      ),
+    );
   }
 
   private targetMonth(settlementMonth?: string): string {
@@ -226,18 +240,19 @@ export class PaintStatisticsService {
   async getMonthlyStatistics(
     settlementMonth?: string,
     shopId?: string,
-    accessibleShopIds?: string[] | null,
+    orderScope?: OrderAccessScope,
   ): Promise<MonthlyStat[]> {
     const targetMonth = this.targetMonth(settlementMonth);
-    const scope = this.scopeOf(shopId, accessibleShopIds);
+    const scope = this.scopeOf(shopId, orderScope);
     if (scope.kind === 'none') return [];
 
     const cacheKey = await PaintStatsCache.buildKey('monthly', targetMonth, this.scopeHashOf(scope));
     const cached = await PaintStatsCache.get<MonthlyStat[]>(cacheKey);
     if (cached) return cached;
 
+    const shopIds = scope.kind === 'all' ? undefined : scope.tenures.map(t => t.shopId);
     const shops = await this.prisma.paintShop.findMany({
-      where: toShopWhere(scope),
+      where: shopIds ? { id: { in: shopIds } } : undefined,
       select: { id: true, name: true, code: true },
     });
     if (shops.length === 0) {
@@ -250,7 +265,7 @@ export class PaintStatisticsService {
     const orders = (await this.prisma.paintWorkOrder.findMany({
       where: {
         settlementMonth: targetMonth,
-        ...toOrderShopWhere(scope),
+        ...toOrderAccessWhere(scope),
       },
       select: {
         id: true,
@@ -293,10 +308,10 @@ export class PaintStatisticsService {
   async getCategoryBreakdown(
     settlementMonth?: string,
     shopId?: string,
-    accessibleShopIds?: string[] | null,
+    orderScope?: OrderAccessScope,
   ): Promise<CategoryBreakdown[]> {
     const targetMonth = this.targetMonth(settlementMonth);
-    const scope = this.scopeOf(shopId, accessibleShopIds);
+    const scope = this.scopeOf(shopId, orderScope);
     if (scope.kind === 'none') return [];
 
     const cacheKey = await PaintStatsCache.buildKey('category', targetMonth, this.scopeHashOf(scope));
@@ -310,7 +325,7 @@ export class PaintStatisticsService {
           settlementMonth: targetMonth,
           status: { not: 'VOID' },
           isRework: false,
-          ...toOrderShopWhere(scope),
+          ...toOrderAccessWhere(scope),
         },
       },
       _sum: { quantity: true, paintCount: true, newPartQuantity: true },
@@ -350,9 +365,9 @@ export class PaintStatisticsService {
    */
   async getShopComparison(
     settlementMonth?: string,
-    accessibleShopIds?: string[] | null,
+    orderScope?: OrderAccessScope,
   ): Promise<ShopComparisonItem[]> {
-    const monthly = await this.getMonthlyStatistics(settlementMonth, undefined, accessibleShopIds);
+    const monthly = await this.getMonthlyStatistics(settlementMonth, undefined, orderScope);
     return this.buildComparison(monthly);
   }
 
@@ -360,9 +375,9 @@ export class PaintStatisticsService {
   async getOverview(
     settlementMonth?: string,
     shopId?: string,
-    accessibleShopIds?: string[] | null,
+    orderScope?: OrderAccessScope,
   ): Promise<StatisticsOverview> {
-    const monthly = await this.getMonthlyStatistics(settlementMonth, shopId, accessibleShopIds);
+    const monthly = await this.getMonthlyStatistics(settlementMonth, shopId, orderScope);
     return this.buildOverview(monthly);
   }
 
@@ -381,20 +396,28 @@ export class PaintStatisticsService {
   async getYearOverview(
     year?: number,
     shopId?: string,
-    accessibleShopIds?: string[] | null,
+    orderScope?: OrderAccessScope,
   ): Promise<YearOverviewItem[]> {
     const targetYear = year ?? new Date().getFullYear();
-    const scope = this.scopeOf(shopId, accessibleShopIds);
+    const scope = this.scopeOf(shopId, orderScope);
     if (scope.kind === 'none') return [];
 
     const cacheKey = await PaintStatsCache.buildKey('year', `y${targetYear}`, this.scopeHashOf(scope));
     const cached = await PaintStatsCache.get<YearOverviewItem[]>(cacheKey);
     if (cached) return cached;
 
-    const shopFilter =
-      scope.kind === 'list'
-        ? Prisma.sql` AND shop_id IN (${Prisma.join(scope.shopIds)})`
-        : Prisma.empty;
+    // 数据权限：任期过滤（归属时间 = orderDate 为空时取 createdAt）
+    // none：无任何权限；tenure：按 (shop_id + 归属时间在任期内) 的 OR 组合过滤
+    let accessFilter = Prisma.empty;
+    if (scope.kind === 'tenure') {
+      accessFilter = Prisma.sql` AND (${Prisma.join(
+        scope.tenures.map(t =>
+          t.endAt
+            ? Prisma.sql`(shop_id = ${t.shopId} AND COALESCE(order_date, created_at) >= ${t.startAt} AND COALESCE(order_date, created_at) <= ${t.endAt})`
+            : Prisma.sql`(shop_id = ${t.shopId} AND COALESCE(order_date, created_at) >= ${t.startAt})`,
+        ),
+      )})`;
+    }
 
     // plate_number 存在空字符串与大小写混杂的历史数据，
     // 统一 TRIM + UPPER 后再去重，并把空串归一为 NULL 排除掉
@@ -433,7 +456,7 @@ export class PaintStatisticsService {
               THEN NULLIF(UPPER(TRIM(plate_number)), '') END) AS pendingVehicles
       FROM paint_work_order
       WHERE settlement_month LIKE ${`${targetYear}-%`}
-      ${shopFilter}
+      ${accessFilter}
       GROUP BY settlement_month
     `;
 
@@ -482,16 +505,16 @@ export class PaintStatisticsService {
   async getDashboard(
     settlementMonth?: string,
     shopId?: string,
-    accessibleShopIds?: string[] | null,
+    orderScope?: OrderAccessScope,
     year?: number,
   ): Promise<StatisticsDashboard> {
     const targetMonth = this.targetMonth(settlementMonth);
     const targetYear = year ?? (parseInt(targetMonth.slice(0, 4), 10) || new Date().getFullYear());
 
     const [monthly, category, yearOverview] = await Promise.all([
-      this.getMonthlyStatistics(targetMonth, shopId, accessibleShopIds),
-      this.getCategoryBreakdown(targetMonth, shopId, accessibleShopIds),
-      this.getYearOverview(targetYear, shopId, accessibleShopIds),
+      this.getMonthlyStatistics(targetMonth, shopId, orderScope),
+      this.getCategoryBreakdown(targetMonth, shopId, orderScope),
+      this.getYearOverview(targetYear, shopId, orderScope),
     ]);
 
     return {
@@ -514,11 +537,11 @@ export class PaintStatisticsService {
    * - `计入统计幅数` 为最终纳入月度总幅数的数值，导出合计以此为准，
    *   保证导出的合计数与看板 KPI 完全一致
    */
-  private exportWhere(settlementMonth: string, scope: ShopScope) {
+  private exportWhere(settlementMonth: string, scope: OrderAccessScope) {
     return {
       settlementMonth,
       status: { not: 'VOID' as const },
-      ...toOrderShopWhere(scope),
+      ...toOrderAccessWhere(scope),
     };
   }
 
@@ -564,9 +587,9 @@ export class PaintStatisticsService {
   async getExportData(
     settlementMonth: string,
     shopId?: string,
-    accessibleShopIds?: string[] | null,
+    orderScope?: OrderAccessScope,
   ): Promise<ExportOrderRow[]> {
-    const scope = this.scopeOf(shopId, accessibleShopIds);
+    const scope = this.scopeOf(shopId, orderScope);
     if (scope.kind === 'none') return [];
 
     const orders = await this.prisma.paintWorkOrder.findMany({
@@ -587,10 +610,10 @@ export class PaintStatisticsService {
   async *iterateExportData(
     settlementMonth: string,
     shopId?: string,
-    accessibleShopIds?: string[] | null,
+    orderScope?: OrderAccessScope,
     batchSize = 500,
   ): AsyncGenerator<ExportOrderRow[]> {
-    const scope = this.scopeOf(shopId, accessibleShopIds);
+    const scope = this.scopeOf(shopId, orderScope);
     if (scope.kind === 'none') return;
 
     let skip = 0;
@@ -616,14 +639,14 @@ export class PaintStatisticsService {
    * 获取有数据的最新结算月份
    * 用 aggregate 取最大值，避免 findFirst + orderBy 的全索引排序
    */
-  async getLatestSettlementMonth(accessibleShopIds?: string[] | null): Promise<string | null> {
-    const scope = this.scopeOf(undefined, accessibleShopIds);
+  async getLatestSettlementMonth(orderScope?: OrderAccessScope): Promise<string | null> {
+    const scope = this.scopeOf(undefined, orderScope);
     if (scope.kind === 'none') return null;
 
     const result = await this.prisma.paintWorkOrder.aggregate({
       where: {
         settlementMonth: { not: null },
-        ...toOrderShopWhere(scope),
+        ...toOrderAccessWhere(scope),
       },
       _max: { settlementMonth: true },
     });

@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '@lib/shared/prisma/prisma.service';
 import { Prisma } from '@prisma/client';
-import { generateMergeGroupId } from './paint-calculation';
+import { generateMergeGroupId, toOrderAccessWhere, type OrderAccessScope } from './paint-calculation';
 import { PaintVehicleService } from './paint-vehicle.service';
 
 @Injectable()
@@ -116,7 +116,7 @@ export class WorkOrderMergeService {
   async findDuplicateOrders(
     orderNo: string,
     excludeId?: string,
-    accessibleShopIds?: string[] | null,
+    orderScope?: OrderAccessScope,
     settlementMonth?: string,
   ) {
     const where: Prisma.PaintWorkOrderWhereInput = {
@@ -125,9 +125,11 @@ export class WorkOrderMergeService {
     if (excludeId) {
       where.id = { not: excludeId };
     }
-    // 数据权限：accessibleShopIds 为 null 表示不限制，数组表示限制到这些门店
-    if (accessibleShopIds) {
-      where.shopId = { in: accessibleShopIds };
+    // 数据权限：按门店在岗期过滤（all/未传 表示不限制）
+    const accessWhere =
+      !orderScope || orderScope.kind === 'all' ? undefined : toOrderAccessWhere(orderScope);
+    if (accessWhere) {
+      where.AND = [accessWhere];
     }
     // 同号不同结算月份不算重复，仅查询同月的
     if (settlementMonth) {

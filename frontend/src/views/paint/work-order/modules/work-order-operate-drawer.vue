@@ -482,7 +482,7 @@ const itemColumns = computed(() => {
           }),
           h(NTooltip, {}, {
             trigger: () => h(NText, { type: 'warning', style: 'cursor: pointer; font-size: 12px' }, () => '*'),
-            default: () => '手动覆盖（自动计算值: ' + autoCount.toFixed(1) + '）'
+            default: () => '手动覆盖（自动计算值: ' + formatPaintCount(autoCount) + '）'
           }),
           h(NButton, {
             size: 'tiny',
@@ -495,7 +495,7 @@ const itemColumns = computed(() => {
 
       // 自动计算模式：显示计算值，可点击手动覆盖
       return h(NSpace, { align: 'center', size: 4, justify: 'center' }, () => [
-        h(NText, { depth: 3 }, () => `${displayCount.toFixed(1)}`),
+        h(NText, { depth: 3 }, () => `${formatPaintCount(displayCount)}`),
         h(NButton, {
           size: 'tiny',
           quaternary: true,
@@ -541,6 +541,13 @@ function getCategoryPaintCount(categoryId: string, newPartQuantity: number, tota
     if (sp) result *= sp.multiplier;
   }
   return result;
+}
+
+// 幅数显示格式：默认1位小数，实际值有2位小数时显示2位（与编辑页幅数规则一致）
+function formatPaintCount(val?: number | string | null): string {
+  const n = Number(val ?? 0);
+  const decimals = String(n).split('.')[1]?.length ?? 0;
+  return n.toFixed(Math.min(Math.max(decimals, 1), 2));
 }
 
 const totalPaintCount = computed(() => {
@@ -1236,7 +1243,7 @@ watch(() => model.orderNo, () => {
               <NSpace align="center" :size="8" :wrap="false">
                 <span>已匹配历史车辆，<template v-if="vehicleMatchedFields.length">已自动填充：{{ vehicleMatchedFields.join('、') }}</template><template v-else>所有字段已有值</template></span>
                 <span class="text-gray-400">·</span>
-                <span class="text-12px text-gray-500">累计 {{ vehicleFound.totalOrderCount }} 单 / {{ Number(vehicleFound.totalPaintCount).toFixed(1) }} 幅</span>
+                <span class="text-12px text-gray-500">累计 {{ vehicleFound.totalOrderCount }} 单 / {{ formatPaintCount(vehicleFound.totalPaintCount) }} 幅</span>
               </NSpace>
             </NAlert>
           </NGridItem>
@@ -1271,7 +1278,7 @@ watch(() => model.orderNo, () => {
 
         <NDivider title-placement="left">
           喷漆项目
-          <NTag type="info" size="small" round style="margin-left: 8px;">总幅数: {{ totalPaintCount.toFixed(1) }}</NTag>
+          <NTag type="info" size="small" round style="margin-left: 8px;">总幅数: {{ formatPaintCount(totalPaintCount) }}</NTag>
         </NDivider>
 
         <div class="mb-8px">

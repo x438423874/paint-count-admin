@@ -41,7 +41,7 @@ const validationPipeOptions: ValidationPipeOptions = {
   exceptionFactory: (errors: ValidationError[]) => {
     const formattedErrors = formatErrors(errors);
     return new UnprocessableEntityException({
-      message: 'Validation failed',
+      message: '参数校验失败',
       errors: formattedErrors,
     });
   },

@@ -3,7 +3,7 @@ import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { PendingImageService } from '../../service/pending-image.service';
 import { UserShopService } from '../../service/user-shop.service';
-import { PagePendingImageDto, ManualMatchDto, CreateOrderFromPendingDto } from '../dto/pending-image.dto';
+import { PagePendingImageDto, ManualMatchDto, CreateOrderFromPendingDto, CorrectPendingImageOcrDto } from '../dto/pending-image.dto';
 import { ApiRes } from '@lib/infra/rest/res.response';
 import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
 import { FastifyRequest } from 'fastify';
@@ -252,6 +252,18 @@ export class PendingImageController {
     if (!pending) throw new BadRequestException('图片池记录不存在');
     await this.userShopService.assertShopAccess(request.user.uid, pending.shopId);
     const data = await this.pendingImageService.createOrderFromPending(id, dto.settlementMonth);
+    return ApiRes.success(data);
+  }
+
+  /** 人工修正 OCR 识别结果（待匹配/待确认/失败的图片均可修正），并立即重新匹配 */
+  @Post(':id/correct-ocr')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: '修正 OCR 识别结果并重新匹配' })
+  async correctOcr(@Param('id') id: string, @Body() dto: CorrectPendingImageOcrDto, @Req() request: AuthenticatedRequest) {
+    const pending = await this.pendingImageService.findById(id);
+    if (!pending) throw new BadRequestException('图片池记录不存在');
+    await this.userShopService.assertShopAccess(request.user.uid, pending.shopId);
+    const data = await this.pendingImageService.correctOcr(id, dto);
     return ApiRes.success(data);
   }
 

@@ -14,6 +14,8 @@ import {
   normalizePlateNumber,
   parseOrderNoSeq,
   shouldMigrateSettlementMonth,
+  toOrderAccessWhere,
+  type OrderAccessScope,
 } from './paint-calculation';
 import { PaintStatsCache } from './paint-stats-cache';
 import { CreateWorkOrderDto, UpdateWorkOrderDto, PageWorkOrderDto, WorkOrderItemDto } from '../work-order/dto/work-order.dto';
@@ -301,6 +303,9 @@ export class WorkOrderService {
       }
 
       const orderNo = dto.orderNo || null;
+      // 负幅数自动识别为调整单（用于抵消/订正月报）：前端未显式传值时按总幅数判定，
+      // 保证「有负数的工单就是调整单」这一不变量在后端也成立
+      const isAdjustment = dto.isAdjustment ?? totalPaintCount < 0;
       const order = await tx.paintWorkOrder.create({
         data: {
           orderNo,
@@ -318,8 +323,8 @@ export class WorkOrderService {
           vehicleId: vehicleId || null,
           totalPaintCount,
           remark: dto.remark,
-          isAdjustment: dto.isAdjustment ?? false,
-          status: (dto.isAdjustment ? 'AUDITED' : 'DRAFT') as PaintOrderStatus,
+          isAdjustment,
+          status: (isAdjustment ? 'AUDITED' : 'DRAFT') as PaintOrderStatus,
           items: { create: itemsData },
         },
         include: { items: { include: { category: true, specialPaint: true } }, shop: true },
@@ -377,6 +382,7 @@ export class WorkOrderService {
       remark: dto.remark,
       isRework: dto.isRework,
       reworkRemark: dto.reworkRemark ? dto.reworkRemark.slice(0, 200) : dto.reworkRemark,
+      isAdjustment: dto.isAdjustment,
     };
 
     // 支持编辑工单号（OCR识别可能有误）
@@ -659,7 +665,7 @@ export class WorkOrderService {
 
   async page(
     dto: PageWorkOrderDto,
-    accessibleShopIds?: string[] | null,
+    orderScope?: OrderAccessScope,
   ): Promise<PaginationResult<any>> {
     const current = dto.current ?? 1;
     const size = dto.size ?? 10;
@@ -671,10 +677,9 @@ export class WorkOrderService {
       statusFilter = { status: bizStatus as any };
     }
 
-    // 数据权限：accessibleShopIds 为 null 表示不限制（超管/财务），数组表示限制到这些门店
-    const shopIdFilter = accessibleShopIds
-      ? { shopId: { in: accessibleShopIds } }
-      : null;
+    // 数据权限：all/未传 表示不限制（超管/财务），tenure 按门店在岗期过滤，none 无任何数据
+    const accessWhere =
+      !orderScope || orderScope.kind === 'all' ? undefined : toOrderAccessWhere(orderScope);
 
     const where: Prisma.PaintWorkOrderWhereInput = {
       // 若用户传入 shopId，需同时满足数据权限范围
@@ -702,15 +707,16 @@ export class WorkOrderService {
           },
         },
       }),
-      // 叠加数据权限过滤（与 dto.shopId 取交集）
-      ...(shopIdFilter && shopIdFilter),
+      // 叠加数据权限过滤（含在岗期，与 dto.shopId 取交集）
+      ...(accessWhere && { AND: [accessWhere] }),
     };
 
-    // 若指定了 dto.shopId 但不在 accessibleShopIds 范围内，直接返回空
+    // 若指定了 dto.shopId 但不在数据权限范围内，直接返回空
     if (
-      accessibleShopIds &&
-      dto.shopId &&
-      !accessibleShopIds.includes(dto.shopId)
+      orderScope?.kind === 'none' ||
+      (orderScope?.kind === 'tenure' &&
+        dto.shopId &&
+        !orderScope.tenures.some(t => t.shopId === dto.shopId))
     ) {
       return { current, size, total: 0, records: [] };
     }
@@ -790,7 +796,7 @@ export class WorkOrderService {
           where: {
             orderNo: { in: pageOrderNos },
             ...(dto.shopId && { shopId: dto.shopId }),
-            ...(shopIdFilter && shopIdFilter),
+            ...(accessWhere && { AND: [accessWhere] }),
           },
         })
       : [];
@@ -856,22 +862,26 @@ export class WorkOrderService {
   async getStatusCounts(
     shopId?: string,
     settlementMonth?: string,
-    accessibleShopIds?: string[] | null,
+    orderScope?: OrderAccessScope,
   ) {
+    // 数据权限：all/未传 表示不限制，tenure 按门店在岗期过滤，none 无任何数据
+    const accessWhere =
+      !orderScope || orderScope.kind === 'all' ? undefined : toOrderAccessWhere(orderScope);
+
     const baseWhere: Prisma.PaintWorkOrderWhereInput = {
       ...(shopId && { shopId }),
       ...(settlementMonth && { settlementMonth }),
-      // 数据权限过滤：accessibleShopIds 为 null 表示不限制
-      ...(accessibleShopIds && { shopId: { in: accessibleShopIds } }),
+      ...(accessWhere && { AND: [accessWhere] }),
     };
 
-    // 若指定了 shopId 但不在权限范围内，直接返回 0
+    // 若指定了 shopId 但不在数据权限范围内，直接返回 0
     if (
-      accessibleShopIds &&
-      shopId &&
-      !accessibleShopIds.includes(shopId)
+      orderScope?.kind === 'none' ||
+      (orderScope?.kind === 'tenure' &&
+        shopId &&
+        !orderScope.tenures.some(t => t.shopId === shopId))
     ) {
-      return { total: 0, pending: 0, audited: 0, settled: 0 };
+      return { total: 0, draft: 0, pending: 0, audited: 0, settled: 0, abnormal: 0, void: 0 };
     }
 
     const [total, draft, pending, audited, settled, abnormal, voidCount] = await Promise.all([

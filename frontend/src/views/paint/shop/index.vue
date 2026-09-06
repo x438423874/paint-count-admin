@@ -1,6 +1,6 @@
 <script setup lang="tsx">
 import { NButton, NTag, NSpace, NSelect, NInput, NText, NDropdown } from 'naive-ui';
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
 import { fetchPaintShopPage, deletePaintShop, fetchStandardTemplateList, applyTemplateToShop } from '@/service/api';
 import { useTable, useTableOperate } from '@/hooks/common/table';
 import ShopOperateDrawer from './modules/shop-operate-drawer.vue';
@@ -9,7 +9,7 @@ import ExcelConfigModal from '../components/excel-config-modal.vue';
 import { canManageShop, canEdit } from '@/utils/permission';
 
 // 权限控制：门店的创建/编辑/删除仅超管可操作
-const allowManageShop = canManageShop();
+const allowManageShop = computed(() => canManageShop());
 // Excel配置/工单号规则等：除只读/财务外都可
 const allowEditShop = canEdit();
 
@@ -88,7 +88,7 @@ const {
         return (
           <NSpace align="center" size={4}>
             <NTag size="small" type="warning">未关联</NTag>
-            {allowManageShop && showTemplateSelect.value === row.id ? (
+            {allowManageShop.value && showTemplateSelect.value === row.id ? (
               <NSelect
                 size="small"
                 style="width: 140px"
@@ -98,7 +98,7 @@ const {
                 onUpdateValue={(val: string) => handleAssociateTemplate(row.id, val)}
                 onBlur={() => { showTemplateSelect.value = ''; }}
               />
-            ) : allowManageShop ? (
+            ) : allowManageShop.value ? (
               <NButton type="primary" text size="tiny" onClick={() => { showTemplateSelect.value = row.id; }}>
                 关联
               </NButton>
@@ -128,7 +128,7 @@ const {
         const moreOptions = buildActionOptions(row);
         return (
           <div class="flex-center gap-8px">
-            {allowManageShop && (
+            {allowManageShop.value && (
               <NButton type="primary" ghost size="small" onClick={() => edit(row.id)}>
                 编辑
               </NButton>
@@ -224,7 +224,7 @@ function buildActionOptions(row: any) {
     opts.push({ label: 'Excel 配置', key: 'excel' });
     opts.push({ label: '工单号规则', key: 'orderNo' });
   }
-  if (allowManageShop) {
+  if (allowManageShop.value) {
     opts.push({ label: '删除', key: 'delete' });
   }
   return opts;

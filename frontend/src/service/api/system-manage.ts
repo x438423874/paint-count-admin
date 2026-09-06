@@ -277,6 +277,48 @@ export function deleteUser(id: string) {
   });
 }
 
+/**
+ * 获取用户已分配的角色 ID 列表
+ *
+ * @param userId 用户ID
+ * @returns 角色 ID 数组
+ */
+export function fetchUserRoleIds(userId: string) {
+  return request<string[]>({
+    url: `/authorization/user-roles/${userId}`,
+    method: 'get'
+  });
+}
+
+/**
+ * 给用户分配角色（全量覆盖）
+ *
+ * @param userId 用户ID
+ * @param roleIds 角色 ID 数组，传空数组表示清空该用户的所有角色
+ * @returns nothing
+ */
+export function assignUserRoles(userId: string, roleIds: string[]) {
+  return request({
+    url: '/authorization/assign-user-roles',
+    method: 'post',
+    data: { userId, roleIds }
+  });
+}
+
+/**
+ * 获取角色列表（用于分配角色时全量拉取）
+ *
+ * @param size 每页条数，默认拉 100 条覆盖全部角色
+ * @returns 角色分页记录
+ */
+export function fetchGetAssignableRoles(size = 100) {
+  return request<Api.SystemManage.RoleList>({
+    url: '/role',
+    method: 'get',
+    params: { current: 1, size }
+  });
+}
+
 /** get api-endpoint tree */
 export function fetchGetApiEndpointTree() {
   return request<Api.SystemManage.ApiEndpoint[]>({

@@ -171,6 +171,112 @@ export function toOrderShopWhere(scope: ShopScope): { shopId: { in: string[] } }
   return scope.kind === 'list' ? { shopId: { in: scope.shopIds } } : undefined;
 }
 
+// ==================== 工单数据访问范围（含在岗期） ====================
+
+/** 一段门店在岗期（endAt 为空表示在岗中） */
+export interface OrderTenure {
+  shopId: string;
+  startAt: Date;
+  endAt: Date | null;
+}
+
+/**
+ * 工单数据访问范围
+ * - all：不限制（超管/财务）
+ * - tenure：按门店在岗期过滤（门店负责人/员工，只能看自己在岗时的数据）
+ * - none：无任何可访问数据（普通用户未绑定门店）
+ */
+export type OrderAccessScope =
+  | { kind: 'all' }
+  | { kind: 'tenure'; tenures: OrderTenure[] }
+  | { kind: 'none' };
+
+/** 日期 → 'yyyy-MM' 月份字符串（与 settlementMonth 格式一致，字典序即时间序） */
+export function toMonthString(d: Date | string): string {
+  const date = new Date(d);
+  if (Number.isNaN(date.getTime())) return '';
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+
+/**
+ * 工单归属月份（yyyy-MM）：优先结算月份 settlementMonth（工单日期可能录错，结算月份为财务归属口径），
+ * 未结算时用录入时间 createdAt 的年月兜底
+ */
+export function orderBelongMonth(order: {
+  settlementMonth?: string | null;
+  createdAt?: Date | string | null;
+}): string | null {
+  const sm = order.settlementMonth;
+  if (sm && /^\d{4}-\d{2}$/.test(sm)) return sm;
+  if (!order.createdAt) return null;
+  const month = toMonthString(order.createdAt);
+  return month || null;
+}
+
+/** 任期月份区间（'yyyy-MM' 字符串比较；endAt 为空表示在岗中，不设上界） */
+function tenureMonthRange(startAt: Date, endAt: Date | null): { gte: string; lte?: string } {
+  const range: { gte: string; lte?: string } = { gte: toMonthString(startAt) };
+  if (endAt) range.lte = toMonthString(endAt);
+  return range;
+}
+
+/**
+ * 把工单数据访问范围转成 paint_work_order 的 where 条件
+ *
+ * 在岗期口径（按结算月份归属）：
+ * - 已结算工单：settlementMonth（yyyy-MM）落在 [startAt 月, endAt 月] 内
+ * - 未结算工单：settlementMonth 为空，按录入时间所在月（[startAt 月初, endAt 月末]）兜底
+ * 多段任期/多门店之间取 OR
+ */
+export function toOrderAccessWhere(scope: OrderAccessScope): Record<string, any> | undefined {
+  if (scope.kind === 'all') return undefined;
+  if (scope.kind === 'none') return { shopId: { in: [] } };
+  return {
+    OR: scope.tenures.map(t => {
+      const monthRange = tenureMonthRange(t.startAt, t.endAt);
+      // 未结算工单的 createdAt 兜底区间：startAt 所在月初 ~ endAt 所在月末
+      const s = new Date(t.startAt);
+      const createdRange: { gte: Date; lt?: Date } = {
+        gte: new Date(s.getFullYear(), s.getMonth(), 1),
+      };
+      if (t.endAt) {
+        const e = new Date(t.endAt);
+        createdRange.lt = new Date(e.getFullYear(), e.getMonth() + 1, 1); // 下月 1 号（开区间）
+      }
+      return {
+        shopId: t.shopId,
+        OR: [
+          { settlementMonth: monthRange },
+          { settlementMonth: null, createdAt: createdRange },
+        ],
+      };
+    }),
+  };
+}
+
+/** 判断在岗期与结算月（yyyy-MM）是否存在交集 */
+export function tenureCoversMonth(tenure: OrderTenure, month: string): boolean {
+  const parts = month.split('-').map(Number);
+  if (parts.length !== 2 || !parts[0] || !parts[1]) return false;
+  const monthStart = new Date(parts[0], parts[1] - 1, 1);
+  const monthEnd = new Date(parts[0], parts[1], 1); // 下月 1 号（开区间）
+  const end = tenure.endAt ? new Date(tenure.endAt) : null;
+  return new Date(tenure.startAt) < monthEnd && (!end || end >= monthStart);
+}
+
+/** 工单归属月份（结算月份口径，未结算按录入时间年月）是否落在任期内 */
+export function tenureCoversOrder(
+  tenure: OrderTenure,
+  order: { settlementMonth?: string | null; createdAt?: Date | string | null },
+): boolean {
+  const month = orderBelongMonth(order);
+  if (!month) return false;
+  const startMonth = toMonthString(tenure.startAt);
+  if (month < startMonth) return false;
+  if (tenure.endAt && month > toMonthString(tenure.endAt)) return false;
+  return true;
+}
+
 // ==================== 数值精度 ====================
 
 /** 数据库 Decimal / number / string 的统一数值类型 */

@@ -41,3 +41,5 @@ backups
 !.vscode/tasks.json
 !.vscode/launch.json
 !.vscode/extensions.json
+# One-off data backups (never commit)
+backup-*.json

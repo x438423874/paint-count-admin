@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { QueryBus } from '@nestjs/cqrs';
 
 import { EndpointProperties } from '@app/base-system/lib/bounded-contexts/api-endpoint/api-endpoint/domain/endpoint.read.model';
@@ -11,8 +11,11 @@ import { MenusByIdsQuery } from '@app/base-system/lib/bounded-contexts/iam/menu/
 import { RoleProperties } from '@app/base-system/lib/bounded-contexts/iam/role/domain/role.read.model';
 import { FindRoleByIdQuery } from '@app/base-system/lib/bounded-contexts/iam/role/queries/role.by-id.query';
 
+import { ISecurityConfig, SecurityConfig } from '@lib/config';
+import { CacheConstant } from '@lib/constants/cache.constant';
 import { AuthZRBACService } from '@lib/infra/casbin';
 import { PrismaService } from '@lib/shared/prisma/prisma.service';
+import { RedisUtility } from '@lib/shared/redis/redis.util';
 
 import { RoleAssignPermissionCommand } from '../../commands/role-assign-permission.command';
 import { RoleAssignRouteCommand } from '../../commands/role-assign-route.command';
@@ -27,6 +30,8 @@ export class AuthorizationService {
     private readonly queryBus: QueryBus,
     private readonly authZRBACService: AuthZRBACService,
     private readonly prisma: PrismaService,
+    @Inject(SecurityConfig.KEY)
+    private readonly securityConfig: ISecurityConfig,
   ) {}
 
   async assignPermission(command: RoleAssignPermissionCommand) {
@@ -153,6 +158,73 @@ export class AuthorizationService {
     ];
 
     await this.prisma.$transaction(operations);
+  }
+
+  /**
+   * 查询用户已分配的角色 ID 列表
+   */
+  async getUserRoleIds(userId: string): Promise<string[]> {
+    const rows = await this.prisma.sysUserRole.findMany({
+      where: { userId },
+      select: { roleId: true },
+    });
+
+    return rows.map((row) => row.roleId);
+  }
+
+  /**
+   * 以用户为中心分配角色：全量覆盖该用户的角色，并同步刷新 Redis 角色缓存，
+   * 避免分配后仍读旧缓存导致权限不生效（用户无需重新登录）。
+   */
+  async assignUserRoles(userId: string, roleIds: string[]) {
+    const users = await this.queryBus.execute<UsersByIdsQuery, UserProperties[]>(
+      new UsersByIdsQuery([userId]),
+    );
+    if (!users.length) {
+      throw new NotFoundException('用户不存在');
+    }
+
+    if (roleIds.length) {
+      const roles = await this.prisma.sysRole.findMany({
+        where: { id: { in: roleIds } },
+        select: { id: true },
+      });
+      if (roles.length !== roleIds.length) {
+        throw new NotFoundException('一个或多个角色不存在');
+      }
+    }
+
+    await this.prisma.$transaction([
+      this.prisma.sysUserRole.deleteMany({ where: { userId } }),
+      ...roleIds.map((roleId) =>
+        this.prisma.sysUserRole.create({ data: { userId, roleId } }),
+      ),
+    ]);
+
+    await this.refreshUserRolesCache(userId);
+  }
+
+  /**
+   * 刷新 Redis 中的用户角色缓存（存角色 code 集合），与登录时写入保持一致
+   */
+  private async refreshUserRolesCache(userId: string) {
+    const rows = await this.prisma.sysUserRole.findMany({
+      where: { userId },
+      select: { roleId: true },
+    });
+    const roleIds = rows.map((row) => row.roleId);
+    const roles = await this.prisma.sysRole.findMany({
+      where: { id: { in: roleIds } },
+      select: { code: true },
+    });
+    const codes = roles.map((role) => role.code);
+
+    const key = `${CacheConstant.AUTH_TOKEN_PREFIX}${userId}`;
+    await RedisUtility.instance.del(key);
+    if (codes.length > 0) {
+      await RedisUtility.instance.sadd(key, ...codes);
+      await RedisUtility.instance.expire(key, this.securityConfig.jwtExpiresIn);
+    }
   }
 
   private async checkDomainAndRole(domainCode: string, roleId: string) {

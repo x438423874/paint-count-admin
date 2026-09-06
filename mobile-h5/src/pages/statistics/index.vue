@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { getMonthlyStatistics, getCategoryBreakdown, getShopComparison, getShopList, getStatisticsOverview, getLatestSettlementMonth } from '@/api/paint'
 import type { MonthlyStatistics, CategoryBreakdown, ShopComparison, PaintShop, DailyStat, StatisticsOverview } from '@/api/types/paint'
+import type { MyScope } from '@/api/paint'
+import { monthInTenure, latestTenureMonth, getMyScopeCached } from '@/utils/tenure'
 
 const currentMonth = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`
 
@@ -18,27 +20,28 @@ const refreshing = ref(false)
 const showMonthPicker = ref(false)
 const showShopPicker = ref(false)
 
-async function initDefaultMonth() {
-  try {
-    const latest = await getLatestSettlementMonth()
-    const latestMonth = (latest as any as string | null) || currentMonth
-    selectedMonth.value = latestMonth
-  }
-  catch {
-    selectedMonth.value = currentMonth
-  }
+// ==================== 数据可见范围（在岗期口径） ====================
+
+const scope = ref<MyScope | null>(null)
+
+async function loadScope() {
+  scope.value = await getMyScopeCached()
 }
 
-const monthColumns = computed(() => {
-  const now = new Date()
-  const list = []
-  for (let i = 0; i < 12; i++) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
-    const value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
-    list.push({ text: value, value })
+async function initDefaultMonth() {
+  let fallback = currentMonth
+  // 默认月份必须在任期内：最新结算月超任期时，回退到任期内最新月份
+  if (!monthInTenure(fallback, scope.value))
+    fallback = latestTenureMonth(scope.value) || currentMonth
+  try {
+    const latest = await getLatestSettlementMonth()
+    const latestMonth = (latest as any as string | null) || fallback
+    selectedMonth.value = monthInTenure(latestMonth, scope.value) ? latestMonth : fallback
   }
-  return list
-})
+  catch {
+    selectedMonth.value = fallback
+  }
+}
 
 const shopColumns = computed(() => {
   const cols = [{ text: '全部门店', value: '' }]
@@ -126,7 +129,7 @@ function getCategoryBarWidth(count: number) {
 }
 
 onMounted(async () => {
-  await loadShops()
+  await Promise.all([loadShops(), loadScope()])
   await initDefaultMonth()
   loadStatistics()
 })
@@ -356,15 +359,13 @@ onMounted(async () => {
       <div style="height: 80px;" />
     </van-pull-refresh>
 
-    <!-- 月份选择器 -->
-    <van-popup v-model:show="showMonthPicker" position="bottom" round>
-      <van-picker
-        :columns="monthColumns"
-        :model-value="[selectedMonth]"
-        @confirm="onMonthConfirm"
-        @cancel="showMonthPicker = false"
-      />
-    </van-popup>
+    <!-- 月份选择器（在岗期口径，与幅数管理共用组件） -->
+    <TenureMonthPicker
+      v-model:show="showMonthPicker"
+      :model-value="selectedMonth"
+      title="选择月份"
+      @confirm="onMonthConfirm"
+    />
 
     <!-- 门店选择器 -->
     <van-popup v-model:show="showShopPicker" position="bottom" round>

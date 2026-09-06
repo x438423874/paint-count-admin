@@ -137,6 +137,7 @@ export interface CreateWorkOrderDto {
   description?: string
   items?: CreateWorkOrderItemDto[]
   remark?: string
+  isAdjustment?: boolean
 }
 
 export interface CreateWorkOrderItemDto {
@@ -165,6 +166,7 @@ export interface UpdateWorkOrderDto {
   remark?: string
   isRework?: boolean
   reworkRemark?: string
+  isAdjustment?: boolean
 }
 
 export interface PageWorkOrderDto {
@@ -434,30 +436,4 @@ export interface PagePendingImageDto {
   keyword?: string
 }
 
-// ===== 幅数调整单 =====
-export interface PaintAdjustment {
-  id: string
-  shopId: string
-  targetMonth: string
-  applyMonth: string
-  categoryId: string | null
-  paintCount: number
-  newPartQuantity: number
-  reason: string | null
-  operatorId: string | null
-  operatorName: string | null
-  createdAt: string
-  category?: { id: string; name: string; code: string } | null
-  shop?: { name: string; code: string } | null
-}
-
-export interface CreateAdjustmentParams {
-  shopId: string
-  targetMonth: string
-  applyMonth?: string
-  categoryId?: string
-  paintCount: number
-  newPartQuantity?: number
-  reason?: string
-}
 

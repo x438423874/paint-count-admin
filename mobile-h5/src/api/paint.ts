@@ -35,6 +35,28 @@ export function getShopDetail(id: string) {
   return request.get<PaintShop>(`/paint/shop/${id}`)
 }
 
+// ===== 数据可见范围（在岗期提示） =====
+
+export interface MyScopeShop {
+  shopId: string
+  shopName: string
+  startAt: string
+  endAt: string | null
+}
+
+export interface MyScope {
+  kind: 'all' | 'none' | 'tenure'
+  shops: MyScopeShop[]
+}
+
+export function getMyScope() {
+  return request.get<MyScope>('/paint/user-shop/my-scope')
+}
+
+export function getMyPerms() {
+  return request.get<string[]>('/paint/user-shop/my-perms')
+}
+
 // ===== 工单 API =====
 
 export function getWorkOrderPage(params: PageWorkOrderDto) {
@@ -322,6 +344,29 @@ export function createOrderFromPending(id: string, settlementMonth?: string) {
   return request.post<PaintPendingImage>(`/paint/pending-image/${id}/create-order`, { settlementMonth })
 }
 
+/** 人工修正图片池记录的 OCR 识别结果（rematch=true 时保存后立即重新匹配） */
+export function correctPendingImageOcr(
+  id: string,
+  payload: {
+    orderNo?: string
+    plateNumber?: string
+    vin?: string
+    carModel?: string
+    brand?: string
+    customerName?: string
+    phone?: string
+    date?: string
+    settlementMonth?: string
+  },
+  rematch = true
+) {
+  return request.post<{
+    id: string
+    record: PaintPendingImage | null
+    match: { status: PendingImageStatus; matchedOrderId?: string; remark?: string } | null
+  }>(`/paint/pending-image/${id}/correct-ocr`, { ...payload, rematch })
+}
+
 export function retryOcrPendingImage(id: string) {
   return request.post<PaintPendingImage>(`/paint/pending-image/${id}/retry-ocr`, {}, { timeout: 120000 })
 }
@@ -330,16 +375,4 @@ export function deletePendingImage(id: string) {
   return request.delete(`/paint/pending-image/${id}`)
 }
 
-// ===== 幅数调整单 API =====
-export function getAdjustmentList(params?: { shopId?: string; applyMonth?: string; targetMonth?: string }) {
-  return request.get<PaintAdjustment[]>('/paint/adjustment', { params })
-}
-
-export function createAdjustment(data: CreateAdjustmentParams) {
-  return request.post<PaintAdjustment>('/paint/adjustment', data)
-}
-
-export function deleteAdjustment(id: string) {
-  return request.delete(`/paint/adjustment/${id}`)
-}
 

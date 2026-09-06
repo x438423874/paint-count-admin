@@ -7,7 +7,7 @@ import { Logger as WinstonLogger } from 'winston';
 import { PaintImageService } from './paint-image.service';
 import { OcrService } from './ocr.service';
 import { PaintVehicleService } from './paint-vehicle.service';
-import { PagePendingImageDto } from '../pending-image/dto/pending-image.dto';
+import { CorrectPendingImageOcrDto, PagePendingImageDto } from '../pending-image/dto/pending-image.dto';
 import { BACKEND_ROOT } from './upload-root';
 import crypto from 'crypto';
 import path from 'path';
@@ -418,6 +418,79 @@ export class PendingImageService implements OnApplicationBootstrap {
       await this.vehicleService.refreshStats(order.vehicleId).catch(() => void 0);
     }
     return { id: pendingId, orderId: order.id, status: PendingImageStatus.MANUAL };
+  }
+
+  // ==================== 识别结果修正 ====================
+
+  /**
+   * 人工修正 OCR 识别结果（仅未归类的图片可修正），并可选择立即重新匹配。
+   * 传了哪些字段就覆盖哪些字段，空串表示清空；未传的字段保持原值。
+   * 修正后视为识别完成（ocrStatus=DONE），匹配状态复位为 PENDING，
+   * 避免记录停留在此前的 FAILED / NEEDS_REVIEW 状态上。
+   */
+  async correctOcr(pendingId: string, dto: CorrectPendingImageOcrDto) {
+    const pending = await this.prisma.paintPendingImage.findUnique({ where: { id: pendingId } });
+    if (!pending) throw new NotFoundException('图片池记录不存在');
+    if (pending.status === PendingImageStatus.MATCHED || pending.status === PendingImageStatus.MANUAL) {
+      throw new BadRequestException('该图片已归类，不能修改识别结果');
+    }
+    // 后台识别任务仍在进行时禁止修正，避免异步回调覆盖人工结果
+    if (pending.ocrStatus === OcrStatus.PROCESSING) {
+      throw new BadRequestException('图片正在识别中，请稍候再修正');
+    }
+
+    const norm = (v?: string | null): string | null => {
+      const t = (v ?? '').trim();
+      return t.length ? t : null;
+    };
+
+    const merged = {
+      orderNo: dto.orderNo !== undefined ? norm(dto.orderNo) : pending.ocrOrderNo,
+      plateNumber: dto.plateNumber !== undefined ? norm(dto.plateNumber) : pending.ocrPlateNumber,
+      vin: dto.vin !== undefined ? norm(dto.vin) : pending.ocrVin,
+      carModel: dto.carModel !== undefined ? norm(dto.carModel) : pending.ocrCarModel,
+      brand: dto.brand !== undefined ? norm(dto.brand) : pending.ocrBrand,
+      customerName: dto.customerName !== undefined ? norm(dto.customerName) : pending.ocrCustomerName,
+      phone: dto.phone !== undefined ? norm(dto.phone) : pending.ocrPhone,
+      date: dto.date !== undefined ? norm(dto.date) : pending.ocrDate,
+    };
+
+    // 同步原始识别 JSON，保证其它读取方（候选查询、导出等）拿到修正后的值
+    let raw: Record<string, unknown> = {};
+    try {
+      raw = pending.ocrRawJson ? JSON.parse(pending.ocrRawJson) : {};
+    } catch {
+      raw = {};
+    }
+
+    await this.prisma.paintPendingImage.update({
+      where: { id: pendingId },
+      data: {
+        ocrOrderNo: merged.orderNo,
+        ocrPlateNumber: merged.plateNumber,
+        ocrVin: merged.vin,
+        ocrCarModel: merged.carModel,
+        ocrBrand: merged.brand,
+        ocrCustomerName: merged.customerName,
+        ocrPhone: merged.phone,
+        ocrDate: merged.date,
+        ocrRawJson: JSON.stringify({ ...raw, ...merged }),
+        settlementMonth: dto.settlementMonth !== undefined ? norm(dto.settlementMonth) : pending.settlementMonth,
+        ocrStatus: OcrStatus.DONE,
+        status: PendingImageStatus.PENDING,
+        matchRemark: '识别结果已人工修正',
+      },
+    });
+
+    let match: { status: PendingImageStatus; matchedOrderId?: string; remark?: string } | null = null;
+    if (dto.rematch !== false) {
+      match = await this.autoMatch(pendingId);
+    }
+
+    // 匹配成功时记录已被删除（图片已归入工单），此处返回 null 属正常
+    const record = await this.findById(pendingId);
+    this.winston.info?.(`图片池识别结果人工修正 pendingId=${pendingId} rematch=${dto.rematch !== false} → ${match?.status ?? 'NONE'}`);
+    return { id: pendingId, record, match };
   }
 
   // ==================== 删除 ====================

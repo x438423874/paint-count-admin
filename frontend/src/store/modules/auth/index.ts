@@ -132,6 +132,9 @@ export const useAuthStore = defineStore(SetupStoreId.Auth, () => {
       // update store
       Object.assign(userInfo, info);
 
+      // 用户信息就绪后拉取权限点集合（按钮显隐与后端 PermGuard 共用同一口径；动态 import 避免循环依赖）
+      import('@/utils/permission').then(m => m.fetchMyPerms());
+
       return true;
     }
 

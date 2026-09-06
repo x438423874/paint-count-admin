@@ -38,12 +38,12 @@ import WorkOrderDetailModal from './modules/work-order-detail-modal.vue';
 import { canAudit, canDelete, canBatchOcr, canMerge, canSettle, canEdit } from '@/utils/permission';
 
 // 权限控制（一次性求值，角色在登录态确定后不变）
-const allowAudit = canAudit();
-const allowDelete = canDelete();
+const allowAudit = computed(() => canAudit());
+const allowDelete = computed(() => canDelete());
 const allowBatchOcr = canBatchOcr();
-const allowMerge = canMerge();
-const allowSettle = canSettle();
-const allowEdit = canEdit();
+const allowMerge = computed(() => canMerge());
+const allowSettle = computed(() => canSettle());
+const allowEdit = computed(() => canEdit());
 
 const shops = ref<{ id: string; name: string; code: string; brand?: string; standardTemplateId?: string; standardTemplate?: { id: string; name: string } }[]>([]);
 const showDetail = ref(false);
@@ -591,7 +591,7 @@ const {
       width: 60,
       render: (row: any) => {
         const v = Number(row.totalPaintCount);
-        return <NTag type={v < 0 ? 'error' : 'info'} size="small" round>{v.toFixed(1)}</NTag>;
+        return <NTag type={v < 0 ? 'error' : 'info'} size="small" round>{formatPaintCount(v)}</NTag>;
       }
     },
     {
@@ -927,8 +927,15 @@ async function viewDetail(id: string) {
   }
 }
 
+// 幅数显示格式：默认1位小数，实际值有2位小数时显示2位（与编辑页幅数规则一致）
+function formatPaintCount(val?: number | string | null): string {
+  const n = Number(val ?? 0);
+  const decimals = String(n).split('.')[1]?.length ?? 0;
+  return n.toFixed(Math.min(Math.max(decimals, 1), 2));
+}
+
 const totalPaintCount = computed(() => {
-  return Number(extra.value?.totalPaintCount || 0).toFixed(1);
+  return formatPaintCount(extra.value?.totalPaintCount);
 });
 
 // 批量快速上传
@@ -1306,7 +1313,7 @@ async function handleBatchQuickUpload({ file }: { file: File }) {
               <NCheckbox :checked="mergeSelectedIds.includes(order.id)" @update:checked="(val: boolean) => toggleMergeSelect(order.id, val)">
                 <NSpace vertical :size="4">
                   <NText strong>{{ order.orderNo }}</NText>
-                  <NText depth="3">{{ order.shop?.name }} | {{ order.plateNumber || '无车牌' }} | 幅数: {{ Number(order.totalPaintCount).toFixed(1) }}</NText>
+                  <NText depth="3">{{ order.shop?.name }} | {{ order.plateNumber || '无车牌' }} | 幅数: {{ formatPaintCount(order.totalPaintCount) }}</NText>
                   <NText depth="3">项目数: {{ order.items?.length || 0 }} | 图片数: {{ (order._count?.images ?? order.images?.length) || 0 }}</NText>
                 </NSpace>
               </NCheckbox>

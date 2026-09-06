@@ -38,9 +38,9 @@ export class UserCreateHandler
     const userCreateProperties: UserCreateProperties = {
       id: UlidGenerator.generate(),
       username: command.username,
-      nickName: command.nickName,
+      nickName: command.nickName?.trim() || command.username,
       password: hashedPassword.getValue(),
-      domain: command.domain,
+      domain: command.domain?.trim() || 'built-in',
       status: Status.ENABLED,
       avatar: command.avatar,
       email: command.email,

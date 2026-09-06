@@ -8,6 +8,7 @@ import {
   manualMatchPendingImage,
   createOrderFromPending,
   retryOcrPendingImage,
+  correctPendingImageOcr,
   deletePendingImage,
   getShopList,
   getWorkOrderPage,
@@ -328,6 +329,95 @@ function onDelete(item: PaintPendingImage) {
   }).catch(() => void 0)
 }
 
+// ==================== 修正识别结果 ====================
+// 待匹配(PENDING)/待确认(NEEDS_REVIEW)/失败(FAILED) 均可修正后重新匹配
+function canCorrect(item: PaintPendingImage) {
+  return allowEdit && ocrState(item) !== 'processing' && item.status !== 'MATCHED' && item.status !== 'MANUAL'
+}
+
+const correctPopup = reactive({
+  show: false,
+  submitting: false,
+  pendingId: '',
+  previewUrl: '',
+})
+const correctForm = reactive<Record<string, string>>({
+  orderNo: '',
+  plateNumber: '',
+  vin: '',
+  carModel: '',
+  brand: '',
+  customerName: '',
+  phone: '',
+  date: '',
+})
+const correctMonth = ref('')
+const showCorrectMonthPicker = ref(false)
+
+const correctFields: { key: string; label: string; placeholder: string }[] = [
+  { key: 'orderNo', label: '工单号', placeholder: '用于匹配工单的关键字段' },
+  { key: 'plateNumber', label: '车牌号', placeholder: '工单号缺失时按车牌匹配' },
+  { key: 'vin', label: '车架号', placeholder: 'VIN' },
+  { key: 'carModel', label: '车型', placeholder: '如 别克君威' },
+  { key: 'brand', label: '品牌', placeholder: '如 别克' },
+  { key: 'customerName', label: '客户名称', placeholder: '客户姓名' },
+  { key: 'phone', label: '电话', placeholder: '联系电话' },
+  { key: 'date', label: '工单日期', placeholder: 'YYYY-MM-DD' },
+]
+
+function openCorrectPopup(item: PaintPendingImage) {
+  correctPopup.pendingId = item.id
+  correctPopup.previewUrl = resolveImageUrl(item.url)
+  correctForm.orderNo = item.ocrOrderNo || ''
+  correctForm.plateNumber = item.ocrPlateNumber || ''
+  correctForm.vin = item.ocrVin || ''
+  correctForm.carModel = item.ocrCarModel || ''
+  correctForm.brand = item.ocrBrand || ''
+  correctForm.customerName = item.ocrCustomerName || ''
+  correctForm.phone = item.ocrPhone || ''
+  correctForm.date = item.ocrDate || ''
+  correctMonth.value = item.settlementMonth || ''
+  correctPopup.show = true
+}
+
+async function submitCorrect(rematch: boolean) {
+  if (!correctPopup.pendingId) return
+  correctPopup.submitting = true
+  try {
+    const res: any = await correctPendingImageOcr(
+      correctPopup.pendingId,
+      {
+        orderNo: correctForm.orderNo,
+        plateNumber: correctForm.plateNumber,
+        vin: correctForm.vin,
+        carModel: correctForm.carModel,
+        brand: correctForm.brand,
+        customerName: correctForm.customerName,
+        phone: correctForm.phone,
+        date: correctForm.date,
+        settlementMonth: correctMonth.value || '',
+      },
+      rematch
+    )
+    const match = res?.match
+    if (!rematch) {
+      showNotify({ type: 'success', message: '识别结果已保存' })
+    } else if (match?.status === 'MATCHED' || match?.status === 'MANUAL') {
+      showNotify({ type: 'success', message: '已修正并归类到工单' })
+    } else if (match?.status === 'NEEDS_REVIEW') {
+      showNotify({ type: 'warning', message: '已修正，命中多个候选，请人工指派' })
+    } else {
+      showNotify({ type: 'primary', message: match?.remark || '已修正，仍未匹配到工单' })
+    }
+    correctPopup.show = false
+    onRefresh()
+  } catch (e: any) {
+    showNotify({ type: 'danger', message: e?.message || '操作失败' })
+  } finally {
+    correctPopup.submitting = false
+  }
+}
+
 // ==================== 人工指派 ====================
 const matchPopup = reactive({
   show: false,
@@ -497,6 +587,7 @@ onUnmounted(() => stopPolling())
                 <div v-if="allowEdit" class="card-actions">
                   <span v-if="ocrState(item) === 'processing'" class="recognizing-hint">识别中，请稍候…</span>
                   <template v-else>
+                    <van-button v-if="canCorrect(item)" size="mini" @click="openCorrectPopup(item)">修正</van-button>
                     <van-button size="mini" @click="onAutoMatch(item)">匹配</van-button>
                     <van-button
                       v-if="item.status === 'NEEDS_REVIEW' || item.status === 'PENDING'"
@@ -524,6 +615,49 @@ onUnmounted(() => stopPolling())
     <!-- 月份选择 -->
     <van-popup v-model:show="showMonthPicker" position="bottom">
       <van-picker :columns="monthColumns" @confirm="(v: any) => { selectedMonth = v.selectedValues[0]; showMonthPicker = false; onSearch() }" @cancel="showMonthPicker = false" />
+    </van-popup>
+
+    <!-- 修正月份选择 -->
+    <van-popup v-model:show="showCorrectMonthPicker" position="bottom">
+      <van-picker
+        :columns="monthColumns"
+        @confirm="(v: any) => { correctMonth = v.selectedValues[0] || ''; showCorrectMonthPicker = false }"
+        @cancel="showCorrectMonthPicker = false"
+      />
+    </van-popup>
+
+    <!-- 修正识别结果弹窗 -->
+    <van-popup v-model:show="correctPopup.show" position="bottom" round :style="{ height: '85%' }">
+      <div class="correct-popup">
+        <van-nav-bar title="修正识别结果" left-text="取消" @click-left="correctPopup.show = false" />
+        <div class="correct-body">
+          <div class="correct-preview" @click="showImagePreview({ images: [correctPopup.previewUrl] })">
+            <van-image :src="correctPopup.previewUrl" fit="contain" height="150px" />
+            <div class="correct-preview-tip">点击可查看大图</div>
+          </div>
+          <van-cell-group inset>
+            <van-field
+              v-for="f in correctFields"
+              :key="f.key"
+              v-model="correctForm[f.key]"
+              :label="f.label"
+              :placeholder="f.placeholder"
+            />
+            <van-field
+              :model-value="correctMonth || '不限月份'"
+              label="结算月份"
+              readonly
+              is-link
+              @click="showCorrectMonthPicker = true"
+            />
+          </van-cell-group>
+          <div class="correct-tip">结算月份用于限定匹配范围，留空则在该门店全部月份中匹配。</div>
+        </div>
+        <div class="correct-footer">
+          <van-button block :loading="correctPopup.submitting" @click="submitCorrect(false)">仅保存</van-button>
+          <van-button block type="primary" :loading="correctPopup.submitting" @click="submitCorrect(true)">保存并重新匹配</van-button>
+        </div>
+      </div>
     </van-popup>
 
     <!-- 人工指派弹窗 -->
@@ -707,6 +841,41 @@ onUnmounted(() => stopPolling())
   .match-no { font-weight: 600; }
   .match-plate { color: var(--color-primary); }
   .match-extra { color: var(--text-tertiary); font-size: 12px; }
+}
+.correct-popup {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.correct-body {
+  flex: 1;
+  overflow-y: auto;
+  padding-bottom: 8px;
+}
+.correct-preview {
+  text-align: center;
+  padding: 8px 0 2px;
+  background: var(--color-surface);
+}
+.correct-preview-tip {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  padding-bottom: 6px;
+}
+.correct-tip {
+  padding: 8px 16px 0;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  line-height: 1.5;
+}
+.correct-footer {
+  flex-shrink: 0;
+  display: flex;
+  gap: 8px;
+  padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+  background: var(--color-surface);
+  border-top: 1px solid var(--color-border);
 }
 </style>
 

@@ -295,6 +295,8 @@ const local: App.I18n.Schema = {
         userEmail: '邮箱',
         userStatus: '用户状态',
         userRole: '用户角色',
+        password: '密码',
+        domain: '域',
         form: {
           userName: '请输入用户名',
           password: '请输入密码',

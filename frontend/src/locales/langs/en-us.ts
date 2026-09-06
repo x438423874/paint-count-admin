@@ -295,6 +295,8 @@ const local: App.I18n.Schema = {
         userEmail: 'Email',
         userStatus: 'User Status',
         userRole: 'User Role',
+        password: 'Password',
+        domain: 'Domain',
         form: {
           userName: 'Please enter user name',
           password: 'Please enter password',

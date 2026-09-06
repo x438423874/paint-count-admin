@@ -116,10 +116,15 @@ model SysUserRole {
   @@map("sys_user_role")
 }
 
-// 用户-门店绑定关系（数据权限：用户只能访问绑定的门店数据）
+// 用户-门店绑定关系（数据权限：用户只能访问绑定门店的数据）
+// 在岗期（start_at ~ end_at）：门店负责人只能看到自己在岗期间产生的工单数据
+// - start_at：在岗开始时间，绑定时可指定（支持回填历史日期）
+// - end_at：离岗时间，空 = 在岗中；离岗后保留绑定行，可只读查看任期内数据
 model SysUserShop {
   userId String @map("user_id")
   shopId String @map("shop_id")
+  startAt DateTime @default(now()) @map("start_at")
+  endAt   DateTime? @map("end_at")
   createdAt DateTime @default(now()) @map("created_at")
 
   user SysUser @relation(fields: [userId], references: [id], onDelete: Cascade)

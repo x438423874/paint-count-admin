@@ -75,43 +75,93 @@ describe('PaintStatisticsService', () => {
 
   // ==================== 数据权限 ====================
 
+  /** 构造在岗期 scope */
+  const tenureScope = (
+    tenures: { shopId: string; startAt?: Date; endAt?: Date | null }[],
+  ) => ({
+    kind: 'tenure' as const,
+    tenures: tenures.map(t => ({
+      shopId: t.shopId,
+      startAt: t.startAt ?? new Date('2026-01-01'),
+      endAt: t.endAt ?? null,
+    })),
+  });
+
   describe('数据权限', () => {
-    it('accessibleShopIds 为空数组时返回空（普通用户未绑定门店，不得看到全量数据）', async () => {
-      const result = await service.getMonthlyStatistics('2026-05', undefined, []);
+    it('scope 为 none 时返回空（普通用户未绑定门店，不得看到全量数据）', async () => {
+      const result = await service.getMonthlyStatistics('2026-05', undefined, { kind: 'none' });
 
       expect(result).toEqual([]);
       expect(prisma.paintShop.findMany).not.toHaveBeenCalled();
       expect(prisma.paintWorkOrder.findMany).not.toHaveBeenCalled();
     });
 
-    it('accessibleShopIds 为空数组时，类别分布同样返回空', async () => {
-      expect(await service.getCategoryBreakdown('2026-05', undefined, [])).toEqual([]);
+    it('scope 为 none 时，类别分布同样返回空', async () => {
+      expect(await service.getCategoryBreakdown('2026-05', undefined, { kind: 'none' })).toEqual([]);
       expect(prisma.paintWorkOrderItem.groupBy).not.toHaveBeenCalled();
     });
 
-    it('accessibleShopIds 为空数组时，年度概览同样返回空', async () => {
-      expect(await service.getYearOverview(2026, undefined, [])).toEqual([]);
+    it('scope 为 none 时，年度概览同样返回空', async () => {
+      expect(await service.getYearOverview(2026, undefined, { kind: 'none' })).toEqual([]);
       expect(prisma.$queryRaw).not.toHaveBeenCalled();
     });
 
-    it('accessibleShopIds 为空数组时，导出数据同样返回空', async () => {
-      expect(await service.getExportData('2026-05', undefined, [])).toEqual([]);
+    it('scope 为 none 时，导出数据同样返回空', async () => {
+      expect(await service.getExportData('2026-05', undefined, { kind: 'none' })).toEqual([]);
       expect(prisma.paintWorkOrder.findMany).not.toHaveBeenCalled();
     });
 
-    it('shopId 不在 accessibleShopIds 内时返回空', async () => {
-      const result = await service.getMonthlyStatistics('2026-05', 'shop-1', ['shop-2', 'shop-3']);
+    it('shopId 不在任期内 scope 时返回空', async () => {
+      const scope = tenureScope([{ shopId: 'shop-2' }, { shopId: 'shop-3' }]);
+      const result = await service.getMonthlyStatistics('2026-05', 'shop-1', scope);
       expect(result).toEqual([]);
       expect(prisma.paintShop.findMany).not.toHaveBeenCalled();
     });
 
-    it('accessibleShopIds 为 null 时不限制（超管/财务）', async () => {
+    it('scope 为 all 时不限制（超管/财务）', async () => {
       prisma.paintShop.findMany.mockResolvedValue([shop()]);
       prisma.paintWorkOrder.findMany.mockResolvedValue([order()]);
 
-      const result = await service.getMonthlyStatistics('2026-05', undefined, null);
+      const result = await service.getMonthlyStatistics('2026-05', undefined, { kind: 'all' });
       expect(result).toHaveLength(1);
       expect(prisma.paintShop.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: undefined }));
+    });
+
+    it('在岗期 scope：工单查询条件包含任期月份过滤（结算月份口径，未结算按录入时间年月兜底）', async () => {
+      prisma.paintShop.findMany.mockResolvedValue([shop()]);
+      prisma.paintWorkOrder.findMany.mockResolvedValue([]);
+
+      const startAt = new Date('2026-03-01');
+      const endAt = new Date('2026-06-30');
+      await service.getMonthlyStatistics('2026-05', undefined, tenureScope([{ shopId: 'shop-1', startAt, endAt }]));
+
+      expect(prisma.paintWorkOrder.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            OR: [
+              {
+                shopId: 'shop-1',
+                OR: [
+                  { settlementMonth: { gte: '2026-03', lte: '2026-06' } },
+                  { settlementMonth: null, createdAt: { gte: new Date(2026, 2, 1), lt: new Date(2026, 6, 1) } },
+                ],
+              },
+            ],
+          }),
+        }),
+      );
+    });
+
+    it('在岗中（无 endAt）的任期不设月份上界', async () => {
+      prisma.paintShop.findMany.mockResolvedValue([shop()]);
+      prisma.paintWorkOrder.findMany.mockResolvedValue([]);
+
+      const startAt = new Date('2026-03-01');
+      await service.getMonthlyStatistics('2026-05', undefined, tenureScope([{ shopId: 'shop-1', startAt }]));
+
+      const where = (prisma.paintWorkOrder.findMany as jest.Mock).mock.calls[0][0].where;
+      expect(where.OR[0].OR[0].settlementMonth).toEqual({ gte: '2026-03' });
+      expect(where.OR[0].OR[1].createdAt).toEqual({ gte: new Date(2026, 2, 1) });
     });
   });
 
@@ -410,7 +460,7 @@ describe('PaintStatisticsService', () => {
     it('应通过 aggregate 取最大结算月，避免全索引排序', async () => {
       prisma.paintWorkOrder.aggregate.mockResolvedValue({ _max: { settlementMonth: '2026-05' } });
 
-      expect(await service.getLatestSettlementMonth(null)).toBe('2026-05');
+      expect(await service.getLatestSettlementMonth()).toBe('2026-05');
       expect(prisma.paintWorkOrder.aggregate).toHaveBeenCalledWith(
         expect.objectContaining({ _max: { settlementMonth: true } }),
       );

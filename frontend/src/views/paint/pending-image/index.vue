@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { NCard, NGrid, NGridItem, NTag, NButton, NImage, NImageGroup, NSpace, NSelect, NInput, NPagination, NUpload, NModal, NEmpty, NPopconfirm, NStatistic, NDescriptions, NDescriptionsItem, NSpin, useMessage } from 'naive-ui';
+import { NCard, NGrid, NGridItem, NTag, NButton, NImage, NImageGroup, NSpace, NSelect, NInput, NForm, NFormItem, NPagination, NUpload, NModal, NEmpty, NPopconfirm, NStatistic, NDescriptions, NDescriptionsItem, NSpin, useMessage } from 'naive-ui';
 import { ref, computed, onMounted, onUnmounted, reactive } from 'vue';
 import {
   fetchPendingImagePage,
@@ -10,6 +10,7 @@ import {
   manualMatchPendingImage,
   createOrderFromPending,
   retryOcrPendingImage,
+  correctPendingImageOcr,
   deletePendingImage,
   fetchPaintShopList,
   fetchWorkOrderPage,
@@ -316,6 +317,94 @@ async function confirmMatch(orderId: string) {
   }
 }
 
+// ==================== 修正识别结果 ====================
+// 待匹配(PENDING)/待确认(NEEDS_REVIEW)/失败(FAILED) 均可修正后重新匹配
+function canCorrect(item: PaintPendingImage) {
+  return allowEdit && ocrState(item) !== 'processing' && item.status !== 'MATCHED' && item.status !== 'MANUAL';
+}
+
+const correctModal = reactive({
+  show: false,
+  submitting: false,
+  pendingId: '',
+  previewUrl: '',
+});
+const correctForm = reactive<Record<string, string>>({
+  orderNo: '',
+  plateNumber: '',
+  vin: '',
+  carModel: '',
+  brand: '',
+  customerName: '',
+  phone: '',
+  date: '',
+});
+const correctMonth = ref<string | null>(null);
+
+const correctFields: { key: string; label: string; placeholder: string }[] = [
+  { key: 'orderNo', label: '工单号', placeholder: '用于匹配工单的关键字段' },
+  { key: 'plateNumber', label: '车牌号', placeholder: '工单号缺失时按车牌匹配' },
+  { key: 'vin', label: '车架号', placeholder: 'VIN' },
+  { key: 'carModel', label: '车型', placeholder: '如 别克君威' },
+  { key: 'brand', label: '品牌', placeholder: '如 别克' },
+  { key: 'customerName', label: '客户名称', placeholder: '客户姓名' },
+  { key: 'phone', label: '电话', placeholder: '联系电话' },
+  { key: 'date', label: '工单日期', placeholder: 'YYYY-MM-DD' },
+];
+
+function openCorrectModal(item: PaintPendingImage) {
+  correctModal.pendingId = item.id;
+  correctModal.previewUrl = getImageUrl(item.url);
+  correctForm.orderNo = item.ocrOrderNo || '';
+  correctForm.plateNumber = item.ocrPlateNumber || '';
+  correctForm.vin = item.ocrVin || '';
+  correctForm.carModel = item.ocrCarModel || '';
+  correctForm.brand = item.ocrBrand || '';
+  correctForm.customerName = item.ocrCustomerName || '';
+  correctForm.phone = item.ocrPhone || '';
+  correctForm.date = item.ocrDate || '';
+  correctMonth.value = item.settlementMonth || null;
+  correctModal.show = true;
+}
+
+async function submitCorrect(rematch: boolean) {
+  if (!correctModal.pendingId) return;
+  correctModal.submitting = true;
+  try {
+    const { data }: any = await correctPendingImageOcr(
+      correctModal.pendingId,
+      {
+        orderNo: correctForm.orderNo,
+        plateNumber: correctForm.plateNumber,
+        vin: correctForm.vin,
+        carModel: correctForm.carModel,
+        brand: correctForm.brand,
+        customerName: correctForm.customerName,
+        phone: correctForm.phone,
+        date: correctForm.date,
+        settlementMonth: correctMonth.value || '',
+      },
+      rematch
+    );
+    const res = data?.match;
+    if (!rematch) {
+      message.success('识别结果已保存');
+    } else if (res?.status === 'MATCHED' || res?.status === 'MANUAL') {
+      message.success('已修正并归类到工单');
+    } else if (res?.status === 'NEEDS_REVIEW') {
+      message.info('已修正，命中多个候选，请人工指派');
+    } else {
+      message.info(res?.remark || '已修正，仍未匹配到工单');
+    }
+    correctModal.show = false;
+    loadList();
+  } catch (e: any) {
+    message.error(e?.message || '操作失败');
+  } finally {
+    correctModal.submitting = false;
+  }
+}
+
 // ==================== 图片预览 ====================
 onMounted(async () => {
   await loadShops();
@@ -436,6 +525,7 @@ onUnmounted(() => stopPolling());
                 </div>
                 <template #action>
                   <NSpace size="small" :wrap="false">
+                    <NButton v-if="canCorrect(item)" size="tiny" @click="openCorrectModal(item)">修正</NButton>
                     <NButton v-if="allowEdit && ocrState(item) !== 'processing'" size="tiny" @click="onAutoMatch(item)">匹配</NButton>
                     <NButton v-if="allowEdit && ocrState(item) !== 'processing' && (item.status === 'NEEDS_REVIEW' || item.status === 'PENDING')" size="tiny" type="primary" @click="openMatchModal(item)">指派</NButton>
                     <NButton v-if="allowEdit && ocrState(item) !== 'processing' && item.status !== 'MATCHED' && item.status !== 'MANUAL'" size="tiny" @click="onCreateOrder(item)">补建</NButton>
@@ -465,6 +555,41 @@ onUnmounted(() => stopPolling());
         />
       </div>
     </NCard>
+
+    <!-- 修正识别结果弹窗 -->
+    <NModal v-model:show="correctModal.show" preset="card" title="修正识别结果" style="width: 780px; max-width: 95vw">
+      <NGrid :x-gap="16" cols="1 m:2" responsive="screen">
+        <NGridItem>
+          <NImage :src="correctModal.previewUrl" object-fit="contain" height="260" width="100%" />
+          <div class="text-xs text-gray-500 mt-2">结算月份用于限定匹配范围，留空则在该门店全部月份中匹配。</div>
+          <NSelect
+            v-model:value="correctMonth"
+            :options="monthOptions"
+            placeholder="结算月份（不限）"
+            clearable
+            class="mt-1"
+          />
+        </NGridItem>
+        <NGridItem>
+          <NForm label-placement="top" size="small">
+            <NGrid :x-gap="12" cols="1 s:2" responsive="screen">
+              <NGridItem v-for="f in correctFields" :key="f.key">
+                <NFormItem :label="f.label">
+                  <NInput v-model:value="correctForm[f.key]" :placeholder="f.placeholder" clearable />
+                </NFormItem>
+              </NGridItem>
+            </NGrid>
+          </NForm>
+        </NGridItem>
+      </NGrid>
+      <template #footer>
+        <NSpace justify="end">
+          <NButton @click="correctModal.show = false">取消</NButton>
+          <NButton :loading="correctModal.submitting" @click="submitCorrect(false)">仅保存</NButton>
+          <NButton type="primary" :loading="correctModal.submitting" @click="submitCorrect(true)">保存并重新匹配</NButton>
+        </NSpace>
+      </template>
+    </NModal>
 
     <!-- 人工指派弹窗 -->
     <NModal v-model:show="matchModal.show" preset="card" title="人工指派到工单" style="width: 720px; max-width: 95vw">

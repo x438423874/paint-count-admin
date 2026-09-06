@@ -4,6 +4,7 @@ import {
   Get,
   HttpException,
   HttpStatus,
+  Param,
   Post,
   Request,
   UseGuards,
@@ -26,6 +27,7 @@ import { IAuthentication } from '@lib/typings/global';
 
 import { AssignPermissionDto } from '../dto/assign-permission.dto';
 import { AssignRouteDto } from '../dto/assign-route.dto';
+import { AssignUserRolesDto } from '../dto/assign-user-roles.dto';
 import { AssignUserDto } from '../dto/assign-user.dto';
 
 @UseGuards(AuthZGuard)
@@ -76,6 +78,35 @@ export class AuthorizationController {
     await this.authorizationService.assignUsers(
       new RoleAssignUserCommand(dto.roleId, dto.userIds),
     );
+    return ApiRes.ok();
+  }
+
+  @Get('user-roles/:userId')
+  @UsePermissions({ resource: 'authorization', action: 'assign-users' })
+  @ApiOperation({
+    summary: 'Get Role IDs of a User',
+    description:
+      'Retrieve the role IDs currently assigned to the specified user',
+  })
+  async getUserRoles(
+    @Param('userId') userId: string,
+  ): Promise<ApiRes<string[]>> {
+    return ApiRes.success(
+      await this.authorizationService.getUserRoleIds(userId),
+    );
+  }
+
+  @Post('assign-user-roles')
+  @UsePermissions({ resource: 'authorization', action: 'assign-users' })
+  @ApiOperation({
+    summary: 'Assign Roles to User',
+    description:
+      'Replaces all roles of the specified user with the given role IDs and refreshes the cached roles',
+  })
+  async assignUserRoles(
+    @Body() dto: AssignUserRolesDto,
+  ): Promise<ApiRes<null>> {
+    await this.authorizationService.assignUserRoles(dto.userId, dto.roleIds);
     return ApiRes.ok();
   }
 

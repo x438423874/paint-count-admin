@@ -674,6 +674,10 @@ async function saveEdit() {
         saving.value = false
         return
       }
+      // 负幅数自动识别为调整单（用于抵消/订正月报），统计时只贡献幅数、不计入工单数
+      const isAdjustment = validItems.some(
+        it => it.overridePaintCount !== undefined && it.overridePaintCount !== null && it.overridePaintCount < 0,
+      )
       // 1. 保存基本信息
       await updateWorkOrder({
         id: order.value.id,
@@ -687,6 +691,7 @@ async function saveEdit() {
         customerName: editForm.customerName || undefined,
         phone: editForm.phone || undefined,
         remark: editForm.remark || undefined,
+        isAdjustment,
         items: validItems.map(it => {
           const item: any = {
             categoryId: it.categoryId,
@@ -1029,6 +1034,23 @@ function getEditItemAutoPaintCount(item: CreateWorkOrderItemDto): number {
   return (item.quantity * coefficient + (item.newPartQuantity || 0) * newPartAddition) * specialMultiplier
 }
 
+// 幅数小数位控制：默认显示1位小数，聚焦输入时允许输入2位小数
+const paintFocusIndex = ref<number | null>(null)
+
+function getPaintDecimalLength(index: number, value?: number | string | null): number {
+  if (paintFocusIndex.value === index) return 2
+  const decimals = String(value ?? '').split('.')[1]?.length ?? 0
+  return Math.min(Math.max(decimals, 1), 2)
+}
+
+function onPaintCountBlur(item: CreateWorkOrderItemDto) {
+  paintFocusIndex.value = null
+  if (item.overridePaintCount !== undefined && item.overridePaintCount !== null) {
+    // 失焦后规范化为最多2位小数，避免浮点误差与超长小数
+    item.overridePaintCount = Number(Number(item.overridePaintCount).toFixed(2))
+  }
+}
+
 const editTotalPaintCount = computed(() => {
   return editForm.items.reduce((sum, item) => {
     if (!item.quantity || item.quantity <= 0) return sum
@@ -1285,11 +1307,13 @@ onMounted(() => {
                   <van-stepper
                     v-if="item.overridePaintCount !== undefined && item.overridePaintCount !== null"
                     :model-value="item.overridePaintCount"
-                    min="0" max="99" step="0.1" decimal-length="1"
+                    min="-99" max="99" step="0.1" :decimal-length="getPaintDecimalLength(index, item.overridePaintCount)"
                     input-width="48px"
+                    @focus="paintFocusIndex = index"
+                    @blur="onPaintCountBlur(item)"
                     @update:model-value="(val: number) => { item.overridePaintCount = val }"
                   />
-                  <span v-else class="paint-count-value" @click="item.overridePaintCount = getEditItemAutoPaintCount(item)">
+                  <span v-else class="paint-count-value" @click="item.overridePaintCount = Number(getEditItemAutoPaintCount(item).toFixed(1))">
                     {{ getEditItemAutoPaintCount(item).toFixed(1) }}
                   </span>
                   <van-icon

@@ -45,6 +45,8 @@ export const useUserStore = defineStore('user', () => {
         nickname: data.userName || data.username || data.nickname,
         roles: data.roles || [],
       })
+      // 用户信息就绪后预取权限点集合（登录/刷新统一入口；动态 import 避免循环依赖）
+      import('@/utils/permission').then(m => m.fetchMyPerms())
     }
     catch (error) {
       clearToken()

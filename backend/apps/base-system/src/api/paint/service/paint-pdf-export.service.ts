@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import * as pdfMake from 'pdfmake/build/pdfmake';
 import * as pdfFonts from 'pdfmake/build/vfs_fonts';
 import { PaintStatisticsService } from './paint-statistics.service';
+import type { OrderAccessScope } from './paint-calculation';
 
 // 注册字体（兼容不同版本的 pdfmake vfs_fonts 导出格式）
 (pdfMake as any).vfs = (pdfFonts as any).pdfMake?.vfs || (pdfFonts as any).vfs || pdfFonts;
@@ -44,12 +45,12 @@ export class PaintPdfExportService {
   async exportMonthlyPdf(
     settlementMonth: string,
     shopId?: string,
-    accessibleShopIds?: string[] | null,
+    orderScope?: OrderAccessScope,
   ): Promise<Buffer> {
     const data = await this.statisticsService.getExportData(
       settlementMonth,
       shopId,
-      accessibleShopIds,
+      orderScope,
     );
 
     // 汇总统计（口径与统计看板一致：返工单不计入总幅数）

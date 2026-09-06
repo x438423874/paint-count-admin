@@ -50,7 +50,7 @@ function createDefaultModel(): UserModel {
     nickName: '',
     phoneNumber: '',
     email: '',
-    status: null
+    status: 'ENABLED'
   };
 }
 
@@ -129,10 +129,10 @@ watch(visible, () => {
         <NFormItem :label="$t('page.manage.user.userName')" path="userName">
           <NInput v-model:value="model.username" :placeholder="$t('page.manage.user.form.userName')" />
         </NFormItem>
-        <NFormItem v-if="props.operateType === 'add'" label="password" path="password">
+        <NFormItem v-if="props.operateType === 'add'" :label="$t('page.manage.user.password')" path="password">
           <NInput v-model:value="model.password" :placeholder="$t('page.manage.user.form.password')" />
         </NFormItem>
-        <NFormItem v-if="props.operateType === 'add'" label="domain" path="domain">
+        <NFormItem v-if="props.operateType === 'add'" :label="$t('page.manage.user.domain')" path="domain">
           <NInput v-model:value="model.domain" :placeholder="$t('page.manage.user.form.domain')" />
         </NFormItem>
         <NFormItem :label="$t('page.manage.user.nickName')" path="nickName">

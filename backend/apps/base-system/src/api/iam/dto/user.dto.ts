@@ -4,42 +4,42 @@ import { IsNotEmpty, IsOptional, IsString, MinLength } from 'class-validator';
 
 export class UserCreateDto {
   @ApiProperty({ required: true })
-  @IsString({ message: 'username must be a string' })
-  @IsNotEmpty({ message: 'username cannot be empty' })
-  @MinLength(6)
+  @IsString({ message: '用户名必须是字符串' })
+  @IsNotEmpty({ message: '用户名不能为空' })
+  @MinLength(6, { message: '用户名长度不能少于 6 个字符' })
   username: string;
 
   @ApiProperty({ required: true })
-  @IsString({ message: 'password must be a string' })
-  @IsNotEmpty({ message: 'password cannot be empty' })
-  @MinLength(6)
+  @IsString({ message: '密码必须是字符串' })
+  @IsNotEmpty({ message: '密码不能为空' })
+  @MinLength(6, { message: '密码长度不能少于 6 个字符' })
   password: string;
 
-  @ApiProperty({ required: true })
-  @IsString({ message: 'domain must be a string' })
-  @IsNotEmpty({ message: 'domain cannot be empty' })
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString({ message: '域必须是字符串' })
   domain: string;
 
-  @ApiProperty({ required: true })
-  @IsString({ message: 'nickName must be a string' })
-  @IsNotEmpty({ message: 'nickName cannot be empty' })
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString({ message: '昵称必须是字符串' })
   nickName: string;
 
   @ApiProperty({ type: 'string', required: false, nullable: true })
   @IsOptional()
-  @IsString({ message: 'avatar must be a string or null' })
+  @IsString({ message: '头像必须是字符串或 null' })
   @Type(() => String)
   avatar: string | null;
 
   @ApiProperty({ type: 'string', required: false, nullable: true })
   @IsOptional()
-  @IsString({ message: 'email must be a string or null' })
+  @IsString({ message: '邮箱必须是字符串或 null' })
   @Type(() => String)
   email: string | null;
 
   @ApiProperty({ type: 'string', required: false, nullable: true })
   @IsOptional()
-  @IsString({ message: 'phoneNumber must be a string or null' })
+  @IsString({ message: '手机号必须是字符串或 null' })
   @Type(() => String)
   phoneNumber: string | null;
 }
@@ -49,7 +49,7 @@ export class UserUpdateDto extends OmitType(UserCreateDto, [
   'domain',
 ]) {
   @ApiProperty({ required: true })
-  @IsString({ message: 'id must be a string' })
-  @IsNotEmpty({ message: 'id cannot be empty' })
+  @IsString({ message: 'id 必须是字符串' })
+  @IsNotEmpty({ message: 'id 不能为空' })
   id: string;
 }

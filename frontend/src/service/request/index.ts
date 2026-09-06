@@ -10,6 +10,27 @@ import type { RequestInstanceState } from './type';
 const isHttpProxy = import.meta.env.DEV && import.meta.env.VITE_HTTP_PROXY === 'Y';
 const { baseURL, otherBaseURL } = getServiceBaseURL(import.meta.env, isHttpProxy);
 
+/** 将 class-validator 返回的嵌套 errors 结构拍平为一维的中文提示数组 */
+function flattenValidationErrors(
+  errors: Record<string, unknown> | null | undefined,
+): string[] {
+  if (!errors || typeof errors !== 'object') return [];
+
+  const result: string[] = [];
+
+  for (const value of Object.values(errors)) {
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        if (typeof item === 'string') result.push(item);
+      }
+    } else if (value && typeof value === 'object') {
+      result.push(...flattenValidationErrors(value as Record<string, unknown>));
+    }
+  }
+
+  return result;
+}
+
 export const request = createFlatRequest<App.Service.Response, RequestInstanceState>(
   {
     baseURL,
@@ -121,6 +142,16 @@ export const request = createFlatRequest<App.Service.Response, RequestInstanceSt
       if (error.code === BACKEND_ERROR_CODE) {
         message = error.response?.data?.message ?? message;
         backendErrorCode = String(error.response?.data?.code ?? (error.response?.data as any)?.statusCode ?? '');
+      }
+
+      // 参数校验失败（422）：把字段级错误拼成可读提示，而不是只显示“参数校验失败”
+      if (error.response?.status === 422) {
+        const validationErrors =
+          (error.response?.data as any)?.error?.errors ?? (error.response?.data as any)?.errors;
+        const msgs = flattenValidationErrors(validationErrors);
+        if (msgs.length > 0) {
+          message = msgs.join('；');
+        }
       }
 
       const httpStatus = error.response?.status;

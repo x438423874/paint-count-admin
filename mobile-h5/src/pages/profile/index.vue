@@ -1,9 +1,12 @@
 <script setup lang="ts">
 import { useUserStore } from '@/stores'
+import { canEdit as canEditRole } from '@/utils/permission'
 
 const router = useRouter()
 const userStore = useUserStore()
 const userInfo = computed(() => userStore.userInfo)
+
+const allowCreate = canEditRole()
 
 const appVersion = ref('1.0.0')
 
@@ -51,7 +54,7 @@ function clearCache() {
         </div>
         <span class="quick-text">我的工单</span>
       </div>
-      <div class="quick-item" @click="router.push({ name: 'WorkOrderCreate' })">
+      <div v-if="allowCreate" class="quick-item" @click="router.push({ name: 'WorkOrderCreate' })">
         <div class="quick-icon green">
           <van-icon name="photograph" size="22" color="#fff" />
         </div>

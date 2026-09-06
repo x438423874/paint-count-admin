@@ -16,9 +16,12 @@ import { ApiRes } from '@lib/infra/rest/res.response';
 import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
 import { PaintImageType } from '@prisma/client';
 import { FastifyRequest, FastifyReply } from 'fastify';
+import { UseGuards } from '@nestjs/common';
+import { AuthZGuard, UsePermissions } from '@lib/infra/casbin';
 
 @ApiTags('Paint - WorkOrder')
 @Controller('paint/work-order')
+@UseGuards(AuthZGuard)
 export class WorkOrderController {
   constructor(
     private readonly workOrderService: WorkOrderService,
@@ -32,71 +35,82 @@ export class WorkOrderController {
     private readonly userShopService: UserShopService,
   ) {}
 
+  /**
+   * 读取 multipart 请求：遍历全部片段，收集字段与文件（与字段/文件的先后顺序无关）。
+   *
+   * 不能用 request.file() + data.fields：data.fields 只保证包含「排在文件之前」的字段，
+   * 且其收集时机取决于 busboy 的解析进度，字段排在文件之后时会丢失
+   * （表现为前端明明传了 settlementMonth，后端却报"请选择结算月份"）。
+   */
+  private async readMultipart(request: FastifyRequest): Promise<{
+    fields: Record<string, string>;
+    file: { buffer: Buffer; filename: string; mimetype: string } | null;
+    fileBuffers: Record<string, Buffer>;
+  }> {
+    const fields: Record<string, string> = {};
+    const fileBuffers: Record<string, Buffer> = {};
+    let file: { buffer: Buffer; filename: string; mimetype: string } | null = null;
+
+    for await (const part of (request as any).parts()) {
+      if (part.type === 'file') {
+        const buffer = await part.toBuffer();
+        fileBuffers[part.fieldname] = buffer;
+        if (!file) file = { buffer, filename: part.filename, mimetype: part.mimetype };
+      } else {
+        fields[part.fieldname] = part.value?.toString() || '';
+      }
+    }
+
+    return { fields, file, fileBuffers };
+  }
+
   @Post('quick-create')
+  @UsePermissions({ resource: 'paint:work-order', action: 'quick-create' })
   @Throttle({ default: { limit: 300, ttl: 60000 } }) // 每分钟300次：支持批量上传场景（已鉴权）
   @ApiOperation({ summary: '快速创建工单（上传图片自动创建，可选OCR识别）' })
   async quickCreate(@Req() request: FastifyRequest) {
-    const data = await request.file();
-    if (!data) {
+    // 角色权限：只读/财务不可录单
+    const { fields, file, fileBuffers } = await this.readMultipart(request);
+    if (!file) {
       throw new BadRequestException('请选择图片文件');
     }
 
     // 校验文件类型
     const allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
-    if (!allowedTypes.includes(data.mimetype)) {
+    if (!allowedTypes.includes(file.mimetype)) {
       throw new BadRequestException('仅支持 JPG/PNG/GIF/WebP 格式的图片');
     }
 
-    // 校验文件大小（最大10MB）
-    const buffer = await data.toBuffer();
+    // 校验文件大小（最大20MB）
+    const buffer = file.buffer;
     if (buffer.length > 20 * 1024 * 1024) {
       throw new BadRequestException('图片大小不能超过20MB');
     }
 
-    const fields = data.fields;
-    const getFieldValue = (fieldName: string): string => {
-      const field = (fields as any)?.[fieldName];
-      if (!field) return '';
-      if (Array.isArray(field)) {
-        return field[0]?.value?.toString() || '';
-      }
-      return field?.value?.toString() || '';
-    };
-
-    const getFieldBuffer = async (fieldName: string): Promise<Buffer | null> => {
-      const field = (fields as any)?.[fieldName];
-      if (!field) return null;
-      const f = Array.isArray(field) ? field[0] : field;
-      if (f && f.type === 'file') {
-        return f.toBuffer ? await f.toBuffer() : null;
-      }
-      return null;
-    };
-
-    const shopId = getFieldValue('shopId');
+    const shopId = fields.shopId || '';
     if (!shopId) {
       throw new BadRequestException('请选择门店');
     }
 
-    // 数据权限：校验用户是否有权操作该门店
-    await this.userShopService.assertShopAccess((request as any).user?.uid, shopId);
+    // 数据权限：录单要求用户在该门店在岗中
+    await this.userShopService.assertShopOnDuty((request as any).user?.uid, shopId);
 
-    const settlementMonth = getFieldValue('settlementMonth') || undefined;
-    const thumbnailBuffer = await getFieldBuffer('thumbnail');
+    const settlementMonth = fields.settlementMonth || undefined;
+    const thumbnailBuffer = fileBuffers.thumbnail || null;
     // 是否启用 OCR 识别（默认启用）。批量上传时可关闭以加速创建
-    const enableOcr = getFieldValue('enableOcr') !== 'false';
+    const enableOcr = fields.enableOcr !== 'false';
     // OCR 识别模式：basic（仅基础资料）/ items（仅部位）/ all（全部），默认 basic
-    const ocrMode = (getFieldValue('ocrMode') as 'basic' | 'items' | 'all') || 'basic';
+    const ocrMode = (fields.ocrMode as 'basic' | 'items' | 'all') || 'basic';
 
     // 优先使用前端传入的值
-    const plateNumber = getFieldValue('plateNumber') || undefined;
-    const orderNo = getFieldValue('orderNo') || undefined;
-    const customerName = getFieldValue('customerName') || undefined;
-    const phone = getFieldValue('phone') || undefined;
-    const carModel = getFieldValue('carModel') || undefined;
-    const vin = getFieldValue('vin') || undefined;
-    const brand = getFieldValue('brand') || undefined;
-    const orderDate = getFieldValue('orderDate') || undefined;
+    const plateNumber = fields.plateNumber || undefined;
+    const orderNo = fields.orderNo || undefined;
+    const customerName = fields.customerName || undefined;
+    const phone = fields.phone || undefined;
+    const carModel = fields.carModel || undefined;
+    const vin = fields.vin || undefined;
+    const brand = fields.brand || undefined;
+    const orderDate = fields.orderDate || undefined;
 
     // 后端 OCR 识别（仅当启用 OCR 且前端未提供完整字段时执行）
     let ocrPlateNumber = '';
@@ -138,15 +152,17 @@ export class WorkOrderController {
     const finalBrand = brand || ocrBrand || undefined;
     const finalOrderDate = orderDate || ocrDate || undefined;
 
-    const saved = await this.workOrderService.quickCreate(shopId, buffer, data.filename, data.mimetype, settlementMonth, finalPlateNumber, finalOrderNo, thumbnailBuffer, finalCustomerName, finalPhone, finalCarModel, finalVin, finalBrand, finalOrderDate, ocrItems);
+    const saved = await this.workOrderService.quickCreate(shopId, buffer, file.filename, file.mimetype, settlementMonth, finalPlateNumber, finalOrderNo, thumbnailBuffer, finalCustomerName, finalPhone, finalCarModel, finalVin, finalBrand, finalOrderDate, ocrItems);
     return ApiRes.success(saved);
   }
 
   @Post('batch-ocr-preview')
+  @UsePermissions({ resource: 'paint:work-order', action: 'batch-ocr' })
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 30, ttl: 60000 } })
   @ApiOperation({ summary: '批量OCR预览：上传多张图片，返回识别结果与校验警告' })
   async batchOcrPreview(@Req() request: FastifyRequest) {
+    // 角色权限：批量OCR仅超管/门店管理员
     const parts = request.parts();
     const files: { id: string; filename: string; buffer: Buffer }[] = [];
     let shopId = '';
@@ -171,7 +187,7 @@ export class WorkOrderController {
 
     if (!shopId) throw new BadRequestException('请选择门店');
     if (files.length === 0) throw new BadRequestException('请选择图片');
-    await this.userShopService.assertShopAccess((request as any).user?.uid, shopId);
+    await this.userShopService.assertShopOnDuty((request as any).user?.uid, shopId);
 
     const rules = await this.noRuleService.getRules(shopId);
     const items: BatchOcrPreviewResponse['items'] = [];
@@ -221,9 +237,11 @@ export class WorkOrderController {
   }
 
   @Post('batch-create')
+  @UsePermissions({ resource: 'paint:work-order', action: 'batch-create' })
   @Throttle({ default: { limit: 30, ttl: 60000 } })
   @ApiOperation({ summary: '批量创建工单：根据批量OCR预览结果创建多个工单' })
   async batchCreate(@Req() request: FastifyRequest) {
+    // 角色权限：批量创建仅超管/门店管理员
     const parts = request.parts();
     const files = new Map<string, { filename: string; buffer: Buffer }>();
     let shopId = '';
@@ -244,7 +262,7 @@ export class WorkOrderController {
 
     if (!shopId) throw new BadRequestException('请选择门店');
     if (!itemsJson) throw new BadRequestException('缺少创建数据');
-    await this.userShopService.assertShopAccess((request as any).user?.uid, shopId);
+    await this.userShopService.assertShopOnDuty((request as any).user?.uid, shopId);
 
     let items: BatchCreateItem[] = [];
     try {
@@ -295,29 +313,20 @@ export class WorkOrderController {
   @Throttle({ default: { limit: 20, ttl: 60000 } }) // 每分钟20次：纯OCR识别
   @ApiOperation({ summary: 'OCR识别图片中的工单信息（支持门店模板精准识别）' })
   async ocrRecognize(@Req() request: FastifyRequest) {
-    const data = await request.file();
-    if (!data) {
+    const { fields, file } = await this.readMultipart(request);
+    if (!file) {
       throw new BadRequestException('请选择图片文件');
     }
 
-    const buffer = await data.toBuffer();
+    const buffer = file.buffer;
     if (buffer.length > 20 * 1024 * 1024) {
       throw new BadRequestException('图片大小不能超过20MB');
     }
 
     // 从表单字段获取 shopId，用于模板匹配
-    const fields = data.fields;
-    const getFieldValue = (fieldName: string): string => {
-      const field = (fields as any)?.[fieldName];
-      if (!field) return '';
-      if (Array.isArray(field)) {
-        return field[0]?.value?.toString() || '';
-      }
-      return field?.value?.toString() || '';
-    };
-    const shopId = getFieldValue('shopId') || undefined;
+    const shopId = fields.shopId || undefined;
     // OCR 识别模式：basic（仅基础资料）/ items（仅部位）/ all（全部），默认 basic
-    const ocrMode = (getFieldValue('ocrMode') as 'basic' | 'items' | 'all') || 'basic';
+    const ocrMode = (fields.ocrMode as 'basic' | 'items' | 'all') || 'basic';
 
     // 数据权限：校验用户是否有权访问该门店
     if (shopId) {
@@ -335,19 +344,23 @@ export class WorkOrderController {
   }
 
   @Post()
+  @UsePermissions({ resource: 'paint:work-order', action: 'create' })
   @ApiOperation({ summary: '创建工单' })
   async create(@Body() dto: CreateWorkOrderDto, @Request() req: AuthenticatedRequest) {
-    // 数据权限：校验用户是否有权操作该门店
+    // 角色权限：只读/财务不可录单
+    // 数据权限：录单要求用户在该门店在岗中
     if (dto.shopId) {
-      await this.userShopService.assertShopAccess(req.user.uid, dto.shopId);
+      await this.userShopService.assertShopOnDuty(req.user.uid, dto.shopId);
     }
     const data = await this.workOrderService.create(dto);
     return ApiRes.success(data);
   }
 
   @Put()
+  @UsePermissions({ resource: 'paint:work-order', action: 'update' })
   @ApiOperation({ summary: '更新工单（已审核的工单不允许修改）' })
   async update(@Body() dto: UpdateWorkOrderDto, @Request() req: AuthenticatedRequest) {
+    // 角色权限：只读/财务不可编辑
     if (dto.id) {
       await this.userShopService.assertWorkOrderAccess(req.user.uid, dto.id);
     }
@@ -356,16 +369,20 @@ export class WorkOrderController {
   }
 
   @Delete(':id')
+  @UsePermissions({ resource: 'paint:work-order', action: 'delete' })
   @ApiOperation({ summary: '删除工单（已审核的工单不允许删除）' })
   async delete(@Param('id') id: string, @Request() req: AuthenticatedRequest) {
+    // 角色权限：删除仅超管/门店管理员
     await this.userShopService.assertWorkOrderAccess(req.user.uid, id);
     await this.workOrderService.delete(id);
     return ApiRes.ok();
   }
 
   @Post('audit')
+  @UsePermissions({ resource: 'paint:work-order', action: 'audit' })
   @ApiOperation({ summary: '审核工单（审核后不可修改和删除）' })
   async audit(@Body() dto: AuditWorkOrderDto, @Request() req: AuthenticatedRequest) {
+    // 角色权限：审核仅超管/门店管理员
     if (dto.id) {
       await this.userShopService.assertWorkOrderAccess(req.user.uid, dto.id);
     }
@@ -374,8 +391,10 @@ export class WorkOrderController {
   }
 
   @Post('unaudit/:id')
+  @UsePermissions({ resource: 'paint:work-order', action: 'unaudit' })
   @ApiOperation({ summary: '取消审核' })
   async unaudit(@Param('id') id: string, @Request() req: AuthenticatedRequest) {
+    // 角色权限：反审核仅超管/门店管理员
     await this.userShopService.assertWorkOrderAccess(req.user.uid, id);
     const data = await this.auditService.unaudit(id);
     return ApiRes.success(data);
@@ -388,8 +407,8 @@ export class WorkOrderController {
     @Query('shopId') shopId?: string,
     @Query('settlementMonth') settlementMonth?: string,
   ) {
-    const accessibleShopIds = await this.userShopService.getAccessibleShopIds(req.user.uid);
-    const data = await this.workOrderService.getStatusCounts(shopId, settlementMonth, accessibleShopIds);
+    const orderScope = await this.userShopService.getOrderAccessScope(req.user.uid);
+    const data = await this.workOrderService.getStatusCounts(shopId, settlementMonth, orderScope);
     return ApiRes.success(data);
   }
 
@@ -397,9 +416,9 @@ export class WorkOrderController {
   @Throttle({ default: { limit: 120, ttl: 60000 } }) // 每分钟120次：列表页频繁刷新
   @ApiOperation({ summary: '分页查询工单（重复工单排前面，含结算历史）' })
   async page(@Query() dto: PageWorkOrderDto, @Request() req: AuthenticatedRequest) {
-    // 数据权限：获取当前用户可访问的门店ID（null 表示不限制）
-    const accessibleShopIds = await this.userShopService.getAccessibleShopIds(req.user.uid);
-    const data = await this.workOrderService.page(dto, accessibleShopIds);
+    // 数据权限：按门店在岗期过滤（超管/财务不限制）
+    const orderScope = await this.userShopService.getOrderAccessScope(req.user.uid);
+    const data = await this.workOrderService.page(dto, orderScope);
     return ApiRes.success(data);
   }
 
@@ -411,18 +430,20 @@ export class WorkOrderController {
     @Query('excludeId') excludeId?: string,
     @Query('settlementMonth') settlementMonth?: string,
   ) {
-    // 数据权限：仅返回当前用户有权访问的门店的重复工单
-    const accessibleShopIds = await this.userShopService.getAccessibleShopIds(req.user.uid);
-    const data = await this.mergeService.findDuplicateOrders(orderNo, excludeId, accessibleShopIds, settlementMonth);
+    // 数据权限：仅返回当前用户有权访问的门店（在岗期内）的重复工单
+    const orderScope = await this.userShopService.getOrderAccessScope(req.user.uid);
+    const data = await this.mergeService.findDuplicateOrders(orderNo, excludeId, orderScope, settlementMonth);
     return ApiRes.success(data);
   }
 
   @Post('merge')
+  @UsePermissions({ resource: 'paint:work-order', action: 'merge' })
   @ApiOperation({ summary: '合并重复工单' })
   async merge(@Body() body: { targetId: string; sourceIds: string[] }, @Request() req: AuthenticatedRequest) {
     if (!body.targetId || !body.sourceIds?.length) {
       throw new BadRequestException('请指定目标工单和待合并工单');
     }
+    // 角色权限：合并仅超管/门店管理员
     // 数据权限：批量校验目标工单和所有源工单的权限（避免 N+1 查询）
     await this.userShopService.assertWorkOrdersAccess(req.user.uid, [body.targetId, ...body.sourceIds]);
     const data = await this.mergeService.mergeOrders(body.targetId, body.sourceIds);
@@ -430,11 +451,13 @@ export class WorkOrderController {
   }
 
   @Post('batch-settle')
+  @UsePermissions({ resource: 'paint:work-order', action: 'batch-settle' })
   @ApiOperation({ summary: '批量结算工单' })
   async batchSettle(@Body() body: { ids: string[] }, @Request() req: AuthenticatedRequest) {
     if (!body.ids || !Array.isArray(body.ids) || body.ids.length === 0) {
       throw new BadRequestException('请选择要结算的工单');
     }
+    // 角色权限：结算仅超管/门店管理员
     // 数据权限：校验所有工单
     for (const id of body.ids) {
       await this.userShopService.assertWorkOrderAccess(req.user.uid, id);
@@ -444,11 +467,13 @@ export class WorkOrderController {
   }
 
   @Post('batch-unsettle')
+  @UsePermissions({ resource: 'paint:work-order', action: 'batch-unsettle' })
   @ApiOperation({ summary: '批量取消结算' })
   async batchUnsettle(@Body() body: { ids: string[] }, @Request() req: AuthenticatedRequest) {
     if (!body.ids || !Array.isArray(body.ids) || body.ids.length === 0) {
       throw new BadRequestException('请选择要取消结算的工单');
     }
+    // 角色权限：取消结算仅超管/门店管理员
     for (const id of body.ids) {
       await this.userShopService.assertWorkOrderAccess(req.user.uid, id);
     }
@@ -457,55 +482,67 @@ export class WorkOrderController {
   }
 
   @Post(':id/settlement')
+  @UsePermissions({ resource: 'paint:work-order', action: 'settle' })
   @ApiOperation({ summary: '结算工单（只改状态）' })
   async settle(@Param('id') id: string, @Body() body: { settlementMonth?: string }, @Request() req: AuthenticatedRequest) {
+    // 角色权限：结算仅超管/门店管理员
     await this.userShopService.assertWorkOrderAccess(req.user.uid, id);
     const data = await this.settlementService.settle(id, body.settlementMonth, req.user?.uid);
     return ApiRes.success(data);
   }
 
   @Post(':id/unsettle')
+  @UsePermissions({ resource: 'paint:work-order', action: 'unsettle' })
   @ApiOperation({ summary: '取消结算（只改状态）' })
   async unsettle(@Param('id') id: string, @Request() req: AuthenticatedRequest) {
+    // 角色权限：取消结算仅超管/门店管理员
     await this.userShopService.assertWorkOrderAccess(req.user.uid, id);
     const data = await this.settlementService.unsettle(id);
     return ApiRes.success(data);
   }
 
   @Post(':id/abnormal')
+  @UsePermissions({ resource: 'paint:work-order', action: 'abnormal' })
   @ApiOperation({ summary: '标记/取消异常标注' })
   async toggleAbnormal(@Param('id') id: string, @Body() body: { isAbnormal: boolean; abnormalRemark?: string }, @Request() req: AuthenticatedRequest) {
+    // 角色权限：异常标注仅超管/门店管理员
     await this.userShopService.assertWorkOrderAccess(req.user.uid, id);
     const data = await this.workOrderService.setAbnormal(id, body.isAbnormal, body.abnormalRemark);
     return ApiRes.success(data);
   }
 
   @Post(':id/void')
+  @UsePermissions({ resource: 'paint:work-order', action: 'void' })
   @ApiOperation({ summary: '作废工单（不计入幅数统计与对账）' })
   async voidWorkOrder(
     @Param('id') id: string,
     @Body() body: { voidReason?: string },
     @Request() req: AuthenticatedRequest,
   ) {
+    // 角色权限：作废仅超管/门店管理员
     await this.userShopService.assertWorkOrderAccess(req.user.uid, id);
     const data = await this.workOrderService.setVoid(id, body?.voidReason, req.user?.uid);
     return ApiRes.success(data);
   }
 
   @Post(':id/unvoid')
+  @UsePermissions({ resource: 'paint:work-order', action: 'unvoid' })
   @ApiOperation({ summary: '恢复已作废工单' })
   async unvoidWorkOrder(@Param('id') id: string, @Request() req: AuthenticatedRequest) {
+    // 角色权限：恢复作废仅超管/门店管理员
     await this.userShopService.assertWorkOrderAccess(req.user.uid, id);
     const data = await this.workOrderService.unvoid(id);
     return ApiRes.success(data);
   }
 
   @Post('reconcile')
+  @UsePermissions({ resource: 'paint:work-order', action: 'reconcile' })
   @Throttle({ default: { limit: 30, ttl: 60000 } })
   @ApiOperation({ summary: '工单对账：上传 Excel 与系统工单进行幅数对比' })
   async reconcile(@Req() request: FastifyRequest, @Request() req: AuthenticatedRequest) {
-    const data = await request.file();
-    if (!data) {
+    // 角色权限：对账仅超管/门店管理员
+    const { fields, file } = await this.readMultipart(request);
+    if (!file) {
       throw new BadRequestException('请上传 Excel 文件');
     }
 
@@ -515,27 +552,17 @@ export class WorkOrderController {
       'application/wps-office.xlsx',
       'application/wps-office.xls',
     ];
-    if (!allowedTypes.includes(data.mimetype)) {
+    if (!allowedTypes.includes(file.mimetype)) {
       throw new BadRequestException('仅支持 xlsx/xls 格式的 Excel 文件');
     }
 
-    const buffer = await data.toBuffer();
+    const buffer = file.buffer;
     if (buffer.length > 10 * 1024 * 1024) {
       throw new BadRequestException('Excel 文件大小不能超过 10MB');
     }
 
-    const fields = data.fields;
-    const getFieldValue = (fieldName: string): string => {
-      const field = (fields as any)?.[fieldName];
-      if (!field) return '';
-      if (Array.isArray(field)) {
-        return field[0]?.value?.toString() || '';
-      }
-      return field?.value?.toString() || '';
-    };
-
-    const shopId = getFieldValue('shopId');
-    const settlementMonth = getFieldValue('settlementMonth');
+    const shopId = fields.shopId || '';
+    const settlementMonth = fields.settlementMonth || '';
 
     if (!shopId) {
       throw new BadRequestException('请选择门店');
@@ -544,7 +571,7 @@ export class WorkOrderController {
       throw new BadRequestException('请选择结算月份');
     }
 
-    await this.userShopService.assertShopAccess(req.user.uid, shopId);
+    await this.userShopService.assertShopMonthAccess(req.user.uid, shopId, settlementMonth);
     const result = await this.reconcileService.reconcile(shopId, settlementMonth, buffer);
     return ApiRes.success(result);
   }
@@ -558,16 +585,20 @@ export class WorkOrderController {
   }
 
   @Post(':id/items')
+  @UsePermissions({ resource: 'paint:work-order', action: 'items' })
   @ApiOperation({ summary: '添加喷漆项目（已审核的工单不允许）' })
   async addItems(@Param('id') id: string, @Body() items: WorkOrderItemDto[], @Request() req: AuthenticatedRequest) {
+    // 角色权限：只读/财务不可编辑
     await this.userShopService.assertWorkOrderAccess(req.user.uid, id);
     const data = await this.workOrderService.addItems(id, items);
     return ApiRes.success(data);
   }
 
   @Delete(':orderId/items/:itemId')
+  @UsePermissions({ resource: 'paint:work-order', action: 'items' })
   @ApiOperation({ summary: '删除喷漆项目（已审核的工单不允许）' })
   async removeItem(@Param('orderId') orderId: string, @Param('itemId') itemId: string, @Request() req: AuthenticatedRequest) {
+    // 角色权限：只读/财务不可编辑
     await this.userShopService.assertWorkOrderAccess(req.user.uid, orderId);
     const data = await this.workOrderService.removeItem(orderId, itemId);
     return ApiRes.success(data);
@@ -579,47 +610,27 @@ export class WorkOrderController {
   async uploadImage(@Param('id') id: string, @Req() request: FastifyRequest) {
     // 数据权限校验（通过 header 中的 token 已解析出 req.user）
     await this.userShopService.assertWorkOrderAccess((request as any).user?.uid, id);
-    const data = await request.file();
-    if (!data) {
+    const { fields, file, fileBuffers } = await this.readMultipart(request);
+    if (!file) {
       throw new BadRequestException('请选择图片文件');
     }
 
     // 校验文件类型
     const allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
-    if (!allowedTypes.includes(data.mimetype)) {
+    if (!allowedTypes.includes(file.mimetype)) {
       throw new BadRequestException('仅支持 JPG/PNG/GIF/WebP 格式的图片');
     }
 
-    const fields = data.fields;
-    const getFieldValue = (fieldName: string): string => {
-      const field = (fields as any)?.[fieldName];
-      if (!field) return '';
-      if (Array.isArray(field)) {
-        return field[0]?.value?.toString() || '';
-      }
-      return field?.value?.toString() || '';
-    };
-
-    const getFieldBuffer = async (fieldName: string): Promise<Buffer | null> => {
-      const field = (fields as any)?.[fieldName];
-      if (!field) return null;
-      const f = Array.isArray(field) ? field[0] : field;
-      if (f && f.type === 'file') {
-        return f.toBuffer ? await f.toBuffer() : null;
-      }
-      return null;
-    };
-
-    const buffer = await data.toBuffer();
-    // 校验文件大小（最大10MB）
+    const buffer = file.buffer;
+    // 校验文件大小（最大20MB）
     if (buffer.length > 20 * 1024 * 1024) {
       throw new BadRequestException('图片大小不能超过20MB');
     }
 
-    const imageType = (getFieldValue('imageType') as PaintImageType) || PaintImageType.BEFORE;
-    const description = getFieldValue('description') || undefined;
-    const thumbnailBuffer = await getFieldBuffer('thumbnail');
-    const saved = await this.workOrderService.saveAndUploadImage(id, buffer, data.filename, data.mimetype, imageType, description, thumbnailBuffer);
+    const imageType = (fields.imageType as PaintImageType) || PaintImageType.BEFORE;
+    const description = fields.description || undefined;
+    const thumbnailBuffer = fileBuffers.thumbnail || null;
+    const saved = await this.workOrderService.saveAndUploadImage(id, buffer, file.filename, file.mimetype, imageType, description, thumbnailBuffer);
     return ApiRes.success(saved);
   }
 
@@ -637,6 +648,7 @@ export class WorkOrderController {
 
   @Post('import')
   @Throttle({ default: { limit: 5, ttl: 60000 } }) // 每分钟5次：Excel导入较重
+  @UsePermissions({ resource: 'paint:work-order', action: 'import' })
   @ApiOperation({ summary: '导入Excel台账数据' })
   async importExcel(@Req() request: FastifyRequest) {
     const parts = (request as any).parts();
@@ -658,8 +670,9 @@ export class WorkOrderController {
     }
     if (!shopId) throw new BadRequestException('请指定门店');
 
-    // 数据权限：校验用户是否有权操作该门店
-    await this.userShopService.assertShopAccess((request as any).user?.uid, shopId);
+    // 数据权限：导入要求在岗中，且结算月份在任期内
+    await this.userShopService.assertShopOnDuty((request as any).user?.uid, shopId);
+    await this.userShopService.assertShopMonthAccess((request as any).user?.uid, shopId, settlementMonth);
 
     const result = await this.excelService.importExcel(fileBuffer, shopId, settlementMonth || undefined);
     return ApiRes.success(result);
@@ -679,8 +692,8 @@ export class WorkOrderController {
       throw new BadRequestException('mode 参数只能是 detail 或 summary');
     }
 
-    // 数据权限：校验用户是否有权导出该门店数据
-    await this.userShopService.assertShopAccess(req.user.uid, shopId);
+    // 数据权限：导出要求结算月份在任期内
+    await this.userShopService.assertShopMonthAccess(req.user.uid, shopId, settlementMonth);
 
     const shopName = await this.workOrderService.getShopName(shopId);
     const filename = `${shopName}_${mode === 'summary' ? '汇总' : '台账'}_${settlementMonth || '全部'}.xlsx`;
@@ -738,7 +751,8 @@ export class WorkOrderController {
   async saveTemplate(@Body() body: { shopId: string; config: any }, @Request() req: AuthenticatedRequest) {
     if (!body.shopId || !body.config) throw new BadRequestException('参数不完整');
     // 数据权限：校验用户是否有权操作该门店
-    await this.userShopService.assertShopAccess(req.user.uid, body.shopId);
+    // 数据权限：改门店配置要求在岗中
+    await this.userShopService.assertShopOnDuty(req.user.uid, body.shopId);
     const shop = await this.excelService.saveTemplateConfig(body.shopId, body.config);
     return ApiRes.success(shop);
   }
@@ -750,7 +764,7 @@ export class WorkOrderController {
     @Request() req: AuthenticatedRequest,
   ) {
     if (!body.shopId || !body.config) throw new BadRequestException('参数不完整');
-    await this.userShopService.assertShopAccess(req.user.uid, body.shopId);
+    await this.userShopService.assertShopOnDuty(req.user.uid, body.shopId);
     const shop = await this.excelService.saveTemplateAndAliasMap(body.shopId, body.config, body.aliasMap || {});
     return ApiRes.success(shop);
   }
@@ -782,7 +796,7 @@ export class WorkOrderController {
   ) {
     if (!body.shopId) throw new BadRequestException('请指定门店');
     if (!Array.isArray(body.rules)) throw new BadRequestException('rules 必须是数组');
-    await this.userShopService.assertShopAccess(req.user.uid, body.shopId);
+    await this.userShopService.assertShopOnDuty(req.user.uid, body.shopId);
     await this.noRuleService.saveRules(body.shopId, body.rules);
     return ApiRes.ok();
   }
@@ -803,7 +817,7 @@ export class WorkOrderController {
     @Request() req: AuthenticatedRequest,
   ) {
     if (!body.shopId || !body.config) throw new BadRequestException('参数不完整');
-    await this.userShopService.assertShopAccess(req.user.uid, body.shopId);
+    await this.userShopService.assertShopOnDuty(req.user.uid, body.shopId);
     await this.workOrderService.saveShopOcrConfig(body.shopId, body.config);
     return ApiRes.ok();
   }
@@ -812,7 +826,7 @@ export class WorkOrderController {
   @ApiOperation({ summary: '分析已结算工单并自动生成/更新工单号规则' })
   async analyzeOrderNoRules(@Body() body: { shopId: string }, @Request() req: AuthenticatedRequest) {
     if (!body.shopId) throw new BadRequestException('请指定门店');
-    await this.userShopService.assertShopAccess(req.user.uid, body.shopId);
+    await this.userShopService.assertShopOnDuty(req.user.uid, body.shopId);
     const rules = await this.noRuleService.analyzeAndSaveRules(body.shopId);
     return ApiRes.success(rules);
   }

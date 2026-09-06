@@ -1,6 +1,11 @@
 <script setup lang="ts">
 import { getStatisticsOverview, getWorkOrderPage, getShopList, getLatestSettlementMonth } from '@/api/paint'
 import type { PaintShop, StatisticsOverview, PaintWorkOrder, PageResult } from '@/api/types/paint'
+import { canEdit as canEditRole } from '@/utils/permission'
+import { monthInTenure, latestTenureMonth, getMyScopeCached } from '@/utils/tenure'
+import type { MyScope } from '@/api/paint'
+
+const allowEdit = canEditRole()
 
 const currentMonth = computed(() => {
   const now = new Date()
@@ -22,13 +27,15 @@ const shopColumns = computed(() => {
   return cols
 })
 
+const scope = ref<MyScope | null>(null)
+
 const monthColumns = computed(() => {
   const list = []
   const now = new Date()
   for (let i = 0; i < 13; i++) {
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
     const value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
-    list.push({ text: value, value })
+    if (monthInTenure(value, scope.value)) list.push({ text: value, value })
   }
   return list
 })
@@ -41,7 +48,10 @@ async function initDefaultMonth() {
   try {
     const latest = await getLatestSettlementMonth()
     const latestMonth = (latest as any as string | null) || currentMonth.value
-    selectedMonth.value = latestMonth
+    // 默认月份若超出在岗期，回退到任期内最新月份
+    selectedMonth.value = monthInTenure(latestMonth, scope.value)
+      ? latestMonth
+      : (latestTenureMonth(scope.value) ?? currentMonth.value)
   }
   catch {
     selectedMonth.value = currentMonth.value
@@ -126,10 +136,6 @@ function goToImagePool() {
   router.push({ name: 'PendingImage' })
 }
 
-function goToAdjustment() {
-  router.push({ name: 'Adjustment' })
-}
-
 // 携带状态筛选跳转工单列表（工单页 onMounted/onActivated 读取该标记）
 function goToOrderListWithStatus(status?: string) {
   if (status) sessionStorage.setItem('work-order-status-query', status)
@@ -172,6 +178,7 @@ function statusType(status?: string): any {
 }
 
 onMounted(async () => {
+  scope.value = await getMyScopeCached()
   await loadShops()
   await initDefaultMonth()
   loadData()
@@ -254,7 +261,7 @@ onMounted(async () => {
 
       <!-- 功能宫格 -->
       <div class="func-grid">
-        <div class="func-item" @click="goToCreate">
+        <div v-if="allowEdit" class="func-item" @click="goToCreate">
           <div class="func-icon func-primary">
             <van-icon name="photograph" size="22" color="#fff" />
           </div>
@@ -272,17 +279,11 @@ onMounted(async () => {
           </div>
           <span class="func-label">车辆管理</span>
         </div>
-        <div class="func-item" @click="goToImagePool">
+        <div v-if="allowEdit" class="func-item" @click="goToImagePool">
           <div class="func-icon func-warning">
             <van-icon name="photo-o" size="22" color="#fff" />
           </div>
           <span class="func-label">图片池</span>
-        </div>
-        <div class="func-item" @click="goToAdjustment">
-          <div class="func-icon func-danger">
-            <van-icon name="balance-o" size="22" color="#fff" />
-          </div>
-          <span class="func-label">幅数调整</span>
         </div>
       </div>
 

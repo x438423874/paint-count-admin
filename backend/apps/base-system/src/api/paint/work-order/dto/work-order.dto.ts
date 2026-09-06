@@ -205,6 +205,11 @@ export class UpdateWorkOrderDto {
   @IsString()
   @MaxLength(200)
   reworkRemark?: string;
+
+  @ApiPropertyOptional({ description: '是否幅数调整单（负幅数工单，用于抵消/订正月报，不影响源工单与车辆去重）' })
+  @IsOptional()
+  @IsBoolean()
+  isAdjustment?: boolean;
 }
 
 export class AuditWorkOrderDto {

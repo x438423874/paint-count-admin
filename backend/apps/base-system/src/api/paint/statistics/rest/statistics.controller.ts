@@ -1,4 +1,4 @@
-import { Controller, Get, Query, Res, Request } from '@nestjs/common';
+import { Controller, Get, Query, Res, Request, UseGuards } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { PaintStatisticsService, ExportOrderRow } from '../../service/paint-statistics.service';
@@ -7,7 +7,9 @@ import { UserShopService } from '../../service/user-shop.service';
 import { ApiRes } from '@lib/infra/rest/res.response';
 import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
 import { FastifyReply } from 'fastify';
+import { AuthZGuard, UsePermissions } from '@lib/infra/casbin';
 import ExcelJS from 'exceljs';
+import type { OrderAccessScope } from '../../service/paint-calculation';
 
 /** 工单汇总表头（与 ExportOrderRow 字段顺序一致） */
 const SUMMARY_HEADERS = [
@@ -34,8 +36,8 @@ export class PaintStatisticsController {
   @Get('latest-month')
   @ApiOperation({ summary: '获取有数据的最新结算月份' })
   async latestMonth(@Request() req: AuthenticatedRequest) {
-    const accessibleShopIds = await this.userShopService.getAccessibleShopIds(req.user.uid);
-    const data = await this.statisticsService.getLatestSettlementMonth(accessibleShopIds);
+    const orderScope = await this.userShopService.getOrderAccessScope(req.user.uid);
+    const data = await this.statisticsService.getLatestSettlementMonth(orderScope);
     return ApiRes.success(data);
   }
 
@@ -53,8 +55,8 @@ export class PaintStatisticsController {
     @Query('shopId') shopId?: string,
     @Query('year') year?: number,
   ) {
-    const accessibleShopIds = await this.userShopService.getAccessibleShopIds(req.user.uid);
-    const data = await this.statisticsService.getDashboard(settlementMonth, shopId, accessibleShopIds, year);
+    const orderScope = await this.userShopService.getOrderAccessScope(req.user.uid);
+    const data = await this.statisticsService.getDashboard(settlementMonth, shopId, orderScope, year);
     return ApiRes.success(data);
   }
 
@@ -65,8 +67,8 @@ export class PaintStatisticsController {
     @Query('settlementMonth') settlementMonth?: string,
     @Query('shopId') shopId?: string,
   ) {
-    const accessibleShopIds = await this.userShopService.getAccessibleShopIds(req.user.uid);
-    const data = await this.statisticsService.getMonthlyStatistics(settlementMonth, shopId, accessibleShopIds);
+    const orderScope = await this.userShopService.getOrderAccessScope(req.user.uid);
+    const data = await this.statisticsService.getMonthlyStatistics(settlementMonth, shopId, orderScope);
     return ApiRes.success(data);
   }
 
@@ -77,8 +79,8 @@ export class PaintStatisticsController {
     @Query('settlementMonth') settlementMonth?: string,
     @Query('shopId') shopId?: string,
   ) {
-    const accessibleShopIds = await this.userShopService.getAccessibleShopIds(req.user.uid);
-    const data = await this.statisticsService.getOverview(settlementMonth, shopId, accessibleShopIds);
+    const orderScope = await this.userShopService.getOrderAccessScope(req.user.uid);
+    const data = await this.statisticsService.getOverview(settlementMonth, shopId, orderScope);
     return ApiRes.success(data);
   }
 
@@ -89,8 +91,8 @@ export class PaintStatisticsController {
     @Query('settlementMonth') settlementMonth?: string,
     @Query('shopId') shopId?: string,
   ) {
-    const accessibleShopIds = await this.userShopService.getAccessibleShopIds(req.user.uid);
-    const data = await this.statisticsService.getCategoryBreakdown(settlementMonth, shopId, accessibleShopIds);
+    const orderScope = await this.userShopService.getOrderAccessScope(req.user.uid);
+    const data = await this.statisticsService.getCategoryBreakdown(settlementMonth, shopId, orderScope);
     return ApiRes.success(data);
   }
 
@@ -98,8 +100,8 @@ export class PaintStatisticsController {
   @ApiOperation({ summary: '门店对比统计' })
   async shopComparison(@Request() req: AuthenticatedRequest, @Query('settlementMonth') settlementMonth?: string) {
     // 门店对比：非超管/财务仅返回自己绑定的门店数据
-    const accessibleShopIds = await this.userShopService.getAccessibleShopIds(req.user.uid);
-    const data = await this.statisticsService.getShopComparison(settlementMonth, accessibleShopIds);
+    const orderScope = await this.userShopService.getOrderAccessScope(req.user.uid);
+    const data = await this.statisticsService.getShopComparison(settlementMonth, orderScope);
     return ApiRes.success(data);
   }
 
@@ -110,18 +112,20 @@ export class PaintStatisticsController {
     @Query('year') year?: number,
     @Query('shopId') shopId?: string,
   ) {
-    const accessibleShopIds = await this.userShopService.getAccessibleShopIds(req.user.uid);
-    const data = await this.statisticsService.getYearOverview(year, shopId, accessibleShopIds);
+    const orderScope = await this.userShopService.getOrderAccessScope(req.user.uid);
+    const data = await this.statisticsService.getYearOverview(year, shopId, orderScope);
     return ApiRes.success(data);
   }
 
   // ==================== 导出 ====================
 
-  /** 导出权限校验（shopId 越权或用户未绑定任何门店时拒绝） */
-  private assertExportAccess(accessibleShopIds: string[] | null, shopId?: string): boolean {
-    if (!shopId) return true;
-    if (!accessibleShopIds) return true; // null = 不限制（超管/财务）
-    return accessibleShopIds.includes(shopId);
+  /**
+   * 导出权限校验：指定门店时要求该结算月份在用户任期内（超管/财务自动通过）
+   */
+  private async assertExportAccess(userId: string, settlementMonth: string, shopId?: string): Promise<void> {
+    if (shopId) {
+      await this.userShopService.assertShopMonthAccess(userId, shopId, settlementMonth);
+    }
   }
 
   @Get('export/csv')
@@ -133,12 +137,9 @@ export class PaintStatisticsController {
     @Res() res: FastifyReply,
     @Request() req: AuthenticatedRequest,
   ) {
-    const accessibleShopIds = await this.userShopService.getAccessibleShopIds(req.user.uid);
-    if (!this.assertExportAccess(accessibleShopIds, shopId)) {
-      res.status(403).send({ code: 403, message: '无权导出该门店数据' });
-      return;
-    }
-    const data = await this.statisticsService.getExportData(settlementMonth, shopId, accessibleShopIds);
+    await this.assertExportAccess(req.user.uid, settlementMonth, shopId);
+    const orderScope = await this.userShopService.getOrderAccessScope(req.user.uid);
+    const data = await this.statisticsService.getExportData(settlementMonth, shopId, orderScope);
 
     // 生成CSV，对包含逗号或引号的字段做转义
     const csvEscape = (val: any) => {
@@ -166,6 +167,8 @@ export class PaintStatisticsController {
     res.send(csvContent);
   }
 
+  @UseGuards(AuthZGuard)
+  @UsePermissions({ resource: 'paint:statistics', action: 'export' })
   @Get('export/excel')
   @Throttle({ default: { limit: 5, ttl: 60000 } }) // 每分钟5次：导出文件较大
   @ApiOperation({ summary: '导出月度统计Excel(xlsx格式，含工单汇总和项目明细两个Sheet)' })
@@ -175,11 +178,8 @@ export class PaintStatisticsController {
     @Res() res: FastifyReply,
     @Request() req: AuthenticatedRequest,
   ) {
-    const accessibleShopIds = await this.userShopService.getAccessibleShopIds(req.user.uid);
-    if (!this.assertExportAccess(accessibleShopIds, shopId)) {
-      res.status(403).send({ code: 403, message: '无权导出该门店数据' });
-      return;
-    }
+    await this.assertExportAccess(req.user.uid, settlementMonth, shopId);
+    const orderScope = await this.userShopService.getOrderAccessScope(req.user.uid);
 
     // hijack 后由 ExcelJS 流式写入器直接接管响应流，
     // 避免 workbook.xlsx.writeBuffer() 把整个工作簿缓冲在内存里
@@ -194,8 +194,8 @@ export class PaintStatisticsController {
     workbook.creator = '喷漆幅数统计系统';
     workbook.created = new Date();
 
-    await this.writeSummarySheet(workbook, settlementMonth, shopId, accessibleShopIds);
-    await this.writeDetailSheet(workbook, settlementMonth, shopId, accessibleShopIds);
+    await this.writeSummarySheet(workbook, settlementMonth, shopId, orderScope);
+    await this.writeDetailSheet(workbook, settlementMonth, shopId, orderScope);
 
     await workbook.commit();
     if (!res.raw.writableEnded) res.raw.end();
@@ -206,7 +206,7 @@ export class PaintStatisticsController {
     workbook: ExcelJS.stream.xlsx.WorkbookWriter,
     settlementMonth: string,
     shopId: string | undefined,
-    accessibleShopIds: string[] | null,
+    orderScope: OrderAccessScope,
   ) {
     const sheet = workbook.addWorksheet('工单汇总');
     SUMMARY_WIDTHS.forEach((w, idx) => {
@@ -233,7 +233,7 @@ export class PaintStatisticsController {
     headerRow.commit();
 
     let countedTotal = 0;
-    for await (const batch of this.statisticsService.iterateExportData(settlementMonth, shopId, accessibleShopIds)) {
+    for await (const batch of this.statisticsService.iterateExportData(settlementMonth, shopId, orderScope)) {
       for (const row of batch) {
         countedTotal += row.计入统计幅数;
         const dataRow = sheet.addRow([
@@ -280,7 +280,7 @@ export class PaintStatisticsController {
     workbook: ExcelJS.stream.xlsx.WorkbookWriter,
     settlementMonth: string,
     shopId: string | undefined,
-    accessibleShopIds: string[] | null,
+    orderScope: OrderAccessScope,
   ) {
     const sheet = workbook.addWorksheet('项目明细');
     DETAIL_WIDTHS.forEach((w, idx) => {
@@ -307,7 +307,7 @@ export class PaintStatisticsController {
     headerRow.commit();
 
     let detailTotal = 0;
-    for await (const batch of this.statisticsService.iterateExportData(settlementMonth, shopId, accessibleShopIds)) {
+    for await (const batch of this.statisticsService.iterateExportData(settlementMonth, shopId, orderScope)) {
       for (const order of batch as ExportOrderRow[]) {
         // 返工单不计入统计口径，其明细也不应计入明细合计
         if (order.是否返工 === '是') continue;
@@ -359,16 +359,13 @@ export class PaintStatisticsController {
     @Res() res: FastifyReply,
     @Request() req: AuthenticatedRequest,
   ) {
-    const accessibleShopIds = await this.userShopService.getAccessibleShopIds(req.user.uid);
-    if (!this.assertExportAccess(accessibleShopIds, shopId)) {
-      res.status(403).send({ code: 403, message: '无权导出该门店数据' });
-      return;
-    }
+    await this.assertExportAccess(req.user.uid, settlementMonth, shopId);
+    const orderScope = await this.userShopService.getOrderAccessScope(req.user.uid);
 
     const buffer = await this.pdfExportService.exportMonthlyPdf(
       settlementMonth,
       shopId,
-      accessibleShopIds,
+      orderScope,
     );
 
     res.header('Content-Type', 'application/pdf');
