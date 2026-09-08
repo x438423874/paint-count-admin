@@ -134,3 +134,13 @@ dist
 .pnp.*
 
 .idea
+
+# 业务台账/临时数据文件（客户隐私，严禁入库）
+/*.xlsx
+/*.jpg
+
+# 本地工具目录
+.dbg/
+.trae/
+.vite/
+.zcode/

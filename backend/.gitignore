@@ -43,3 +43,10 @@ backups
 !.vscode/extensions.json
 # One-off data backups (never commit)
 backup-*.json
+
+# 用户上传的工单照片（含客户隐私，严禁入库）
+uploads/
+
+# Redis 持久化与数据库备份
+*.rdb
+backup-db-*.sql
