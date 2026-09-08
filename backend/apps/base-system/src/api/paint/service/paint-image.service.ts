@@ -136,6 +136,12 @@ export class PaintImageService {
 
     // 3. 找出冗余文件（磁盘存在但数据库无记录）
     for (const diskFile of diskFiles) {
+      // 竞态防御：上传流程是「先写盘、后建记录」，刚写盘的文件尚未入库，
+      // 跳过 1 小时内的文件，避免凌晨清理任务误删正在上传的图片
+      const stat = await fs.stat(diskFile);
+      if (Date.now() - stat.mtimeMs < 60 * 60 * 1000) {
+        continue;
+      }
       const relativeUrl = `/${path.relative(BACKEND_ROOT, diskFile).replace(/\\/g, '/')}`;
       if (!dbUrls.has(relativeUrl)) {
         try {

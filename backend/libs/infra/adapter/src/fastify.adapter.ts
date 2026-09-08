@@ -12,9 +12,11 @@ export { app as fastifyApp };
 // @ts-ignore
 app.register(fastifyMultipart, {
   limits: {
-    fields: 10, // Max number of non-file fields
-    fileSize: 1024 * 1024 * 6, // limit size 6M
-    files: 5, // Max number of file fields
+    fields: 20, // Max number of non-file fields（批量建单：items JSON + shopId 等）
+    // 与各控制器「图片大小不能超过20MB」的业务校验保持一致；
+    // 此前全局 6MB 会先于业务校验触发 busboy 截断，导致大图上传收到费解的 500
+    fileSize: 1024 * 1024 * 20,
+    files: 50, // Max number of file fields（批量 OCR/批量建单一次请求可携带多个文件，此前 5 个会静默丢弃）
   },
 });
 
