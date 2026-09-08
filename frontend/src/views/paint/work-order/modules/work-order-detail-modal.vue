@@ -14,6 +14,7 @@ import {
 } from 'naive-ui';
 import { PAINT_ORDER_STATUS_LABEL, PAINT_ORDER_STATUS_TAG_TYPE } from '@/constants/paint';
 import { formatPaintCount } from '@/utils/paint-count';
+import { resolveUploadUrl } from '@/utils/upload-url';
 
 const props = defineProps<{
   show: boolean;
@@ -38,6 +39,6 @@ function getStatusLabel(status?: string): string {
 
 function getImageUrl(url: string) {
   if (!url || url.startsWith('http') || url.startsWith('blob:')) return url;
-  return `/proxy-demo${url}`;
+  return resolveUploadUrl(url);
 }
 </script>

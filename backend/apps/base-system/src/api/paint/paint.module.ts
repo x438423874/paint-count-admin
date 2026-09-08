@@ -33,6 +33,7 @@ import { PaintStandardTemplateController } from './standard/rest/standard-templa
 import { SealController } from './seal/rest/seal.controller';
 import { UserShopController } from './user-shop/rest/user-shop.controller';
 import { PendingImageController } from './pending-image/rest/pending-image.controller';
+import { UploadsController } from './upload-access/rest/uploads.controller';
 
 @Module({
   imports: [PrismaModule],
@@ -47,6 +48,7 @@ import { PendingImageController } from './pending-image/rest/pending-image.contr
     ScheduledTaskController,
     UserShopController,
     PendingImageController,
+    UploadsController,
   ],
   providers: [
     PaintImageService,

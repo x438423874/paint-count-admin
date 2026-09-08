@@ -16,6 +16,7 @@ import {
 } from 'naive-ui';
 import { ocrRecognizeImage } from '@/service/api';
 import { useThemeStore } from '@/store/modules/theme';
+import { resolveUploadUrl } from '@/utils/upload-url';
 
 defineOptions({
   name: 'OcrCanvasModal'
@@ -71,7 +72,7 @@ const hasCropRegion = ref(false);
 // 获取高清图URL（用于OCR识别）
 function getHdUrl(img: OcrImage): string {
   if (img.url.startsWith('blob:')) return img.url;
-  return `/proxy-demo${img.url}`;
+  return resolveUploadUrl(img.url);
 }
 
 // 打开时加载图片并绘制画布；autoRecognize 时直接全图识别

@@ -42,6 +42,7 @@ import { useShopOptions } from '@/hooks/business/use-shop-options';
 import { compressDualImage } from '@/utils/image-compress';
 import { canEdit as canEditRole } from '@/utils/permission';
 import { recentMonthOptions } from '@/utils/month-options';
+import { resolveUploadUrl } from '@/utils/upload-url';
 
 const message = useMessage();
 const allowEdit = canEditRole();
@@ -49,7 +50,7 @@ const allowEdit = canEditRole();
 // 图片URL拼接：通过Vite代理访问，避免跨域（与工单页保持一致）
 function getImageUrl(url: string) {
   if (!url || url.startsWith('http') || url.startsWith('blob:')) return url;
-  return `/proxy-demo${url}`;
+  return resolveUploadUrl(url);
 }
 
 // ==================== 筛选 ====================

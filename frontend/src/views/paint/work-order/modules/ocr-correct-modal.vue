@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref, reactive, watch, computed } from 'vue';
-import { NModal, NCard, NForm, NFormItem, NInput, NButton, NSpace, NImage, NAlert, NGrid, NGridItem } from 'naive-ui';
+import { computed, reactive, ref, watch } from 'vue';
+import { NAlert, NButton, NCard, NForm, NFormItem, NGrid, NGridItem, NImage, NInput, NModal, NSpace } from 'naive-ui';
 import { updateWorkOrder } from '@/service/api';
+import { resolveUploadUrl } from '@/utils/upload-url';
 
 interface Props {
   visible: boolean;
@@ -55,8 +56,8 @@ const getImageUrl = (url: string) => {
   if (!url) return '';
   // 已经是完整URL则直接返回
   if (url.startsWith('http://') || url.startsWith('https://')) return url;
-  // 相对路径则添加代理前缀
-  return `/proxy-demo${url}`;
+  // 相对路径走受控下载（登录 + 门店权限）
+  return resolveUploadUrl(url);
 };
 
 const imageSrc = computed(() => {
@@ -66,7 +67,7 @@ const imageSrc = computed(() => {
 
 watch(
   () => props.visible,
-  (visible) => {
+  visible => {
     if (!visible) {
       zoomLevel.value = 1;
       return;
@@ -112,7 +113,7 @@ async function handleSave() {
     });
 
     if (updateError) {
-      window.$message?.error('工单更新失败：' + updateError.message);
+      window.$message?.error(`工单更新失败：${updateError.message}`);
       return;
     }
 
@@ -130,13 +131,11 @@ async function handleSave() {
     :show="visible"
     preset="card"
     title="修正 OCR 识别结果"
-    style="width: 960px; max-width: 95vw;"
+    style="width: 960px; max-width: 95vw"
     :segmented="{ content: true }"
     @update:show="(v: boolean) => emit('update:visible', v)"
   >
-    <NAlert type="info" :show-icon="false" class="mb-16px">
-      修正后的结果会同步更新到工单。
-    </NAlert>
+    <NAlert type="info" :show-icon="false" class="mb-16px">修正后的结果会同步更新到工单。</NAlert>
 
     <div class="ocr-layout">
       <!-- 左侧：图片 -->
@@ -150,17 +149,10 @@ async function handleSave() {
             <NButton size="small" @click="resetZoom">还原</NButton>
           </div>
           <div class="image-wrap">
-            <img
-              :src="imageSrc"
-              :alt="'工单图片'"
-              class="zoomable-image"
-              :style="{ transform: `scale(${zoomLevel})` }"
-            />
+            <img :src="imageSrc" alt="工单图片" class="zoomable-image" :style="{ transform: `scale(${zoomLevel})` }" />
           </div>
         </div>
-        <NAlert v-else type="warning" :show-icon="false">
-          该工单没有图片，无法保存标注。
-        </NAlert>
+        <NAlert v-else type="warning" :show-icon="false">该工单没有图片，无法保存标注。</NAlert>
       </div>
 
       <!-- 右侧：基础信息 -->
@@ -195,11 +187,9 @@ async function handleSave() {
       </div>
     </div>
 
-    <div class="flex justify-end gap-12px mt-16px">
+    <div class="mt-16px flex justify-end gap-12px">
       <NButton @click="emit('update:visible', false)">取消</NButton>
-      <NButton type="primary" :loading="loading" @click="handleSave">
-        保存修正
-      </NButton>
+      <NButton type="primary" :loading="loading" @click="handleSave">保存修正</NButton>
     </div>
   </NModal>
 </template>

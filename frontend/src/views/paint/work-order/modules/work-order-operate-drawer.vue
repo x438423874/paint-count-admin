@@ -34,6 +34,7 @@ import { analyzeOrderNoErrors } from '@/utils/order-no-rule';
 import { phoneRegex, plateNumberRegex, vinRegex } from '@/utils/validators';
 import { formatPaintCount } from '@/utils/paint-count';
 import { applyOcrFields } from '@/utils/ocr-fields';
+import { resolveUploadUrl } from '@/utils/upload-url';
 import { $t } from '@/locales';
 import OcrCanvasModal from './ocr-canvas-modal.vue';
 
@@ -683,8 +684,8 @@ let ocrFilledTimer: ReturnType<typeof setTimeout> | null = null;
 function getImageDisplayUrl(img: ImageItem): string {
   if (img.url.startsWith('blob:')) return img.url;
   // 优先使用缩略图展示
-  if (img.thumbnailUrl) return `/proxy-demo${img.thumbnailUrl}`;
-  return `/proxy-demo${img.url}`;
+  if (img.thumbnailUrl) return resolveUploadUrl(img.thumbnailUrl);
+  return resolveUploadUrl(img.url);
 }
 
 // 打开OCR识别弹窗（画布交互与识别调用在子组件内完成）
@@ -1229,7 +1230,7 @@ watch(
           <div v-for="(img, index) in images" :key="index" class="image-card">
             <NImage
               :src="getImageDisplayUrl(img)"
-              :preview-src="img.url.startsWith('blob:') ? img.url : `/proxy-demo${img.url}`"
+              :preview-src="img.url.startsWith('blob:') ? img.url : resolveUploadUrl(img.url)"
               object-fit="cover"
               class="image-card-img"
               show-toolbar

@@ -5,7 +5,6 @@ import fs from 'node:fs';
 
 import fastifyCompress from '@fastify/compress';
 import fastifyCsrf from '@fastify/csrf-protection';
-import fastifyStatic from '@fastify/static';
 import {
   HttpStatus,
   Logger,
@@ -90,7 +89,8 @@ async function bootstrap() {
   }
 
   const GLOBAL_PREFIX = 'v1';
-  app.setGlobalPrefix(GLOBAL_PREFIX);
+  // uploads 受控下载控制器排除全局前缀，保持与库中存储的 /uploads/... 路径一致
+  app.setGlobalPrefix(GLOBAL_PREFIX, { exclude: ['uploads/(.*)'] });
 
   app.useGlobalPipes(new ValidationPipe(validationPipeOptions));
 
@@ -121,18 +121,12 @@ async function bootstrap() {
         },
   });
 
-  // 静态文件服务 - 提供上传图片访问
+  // 静态文件服务已移除：/uploads 现由 UploadsController 受控提供
+  // （登录 + 门店数据权限校验，见 api/paint/uploads/rest/uploads.controller.ts）
   const uploadsDir = UPLOAD_DIR;
   if (!fs.existsSync(uploadsDir)) {
     fs.mkdirSync(uploadsDir, { recursive: true });
   }
-  const fastifyInstance = fastifyApp.getInstance();
-  // @ts-ignore
-  fastifyInstance.register(fastifyStatic, {
-    root: uploadsDir,
-    prefix: '/uploads/',
-    decorateReply: false,
-  });
 
   await app.listen(port, '0.0.0.0', async () => {
     const url = await app.getUrl();

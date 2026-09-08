@@ -56,6 +56,7 @@ import { useShopOptions } from '@/hooks/business/use-shop-options';
 import { compressDualImage } from '@/utils/image-compress';
 import { formatPaintCount } from '@/utils/paint-count';
 import { canAudit, canBatchOcr, canDelete, canEdit, canMerge, canSettle } from '@/utils/permission';
+import { resolveUploadUrl } from '@/utils/upload-url';
 import EmptyState from '@/components/common/EmptyState.vue';
 import { $t } from '@/locales';
 import WorkOrderOperateDrawer from './modules/work-order-operate-drawer.vue';
@@ -467,7 +468,7 @@ const createdOrderIds = ref<string[]>([]);
 // 图片URL拼接：通过Vite代理访问，避免跨域
 function getImageUrl(url: string) {
   if (!url || url.startsWith('http') || url.startsWith('blob:')) return url;
-  return `/proxy-demo${url}`;
+  return resolveUploadUrl(url);
 }
 
 async function loadShops() {

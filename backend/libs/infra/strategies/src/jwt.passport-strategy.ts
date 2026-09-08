@@ -12,7 +12,12 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
     private readonly securityConfig: ISecurityConfig,
   ) {
     super({
-      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      // <img> 等资源请求无法携带 Authorization 头，允许通过 ?access_token= 查询参数鉴权
+      // （仅用于 /uploads 受控下载；token 会进入访问日志，主接口仍以 Header 为准）
+      jwtFromRequest: ExtractJwt.fromExtractors([
+        ExtractJwt.fromAuthHeaderAsBearerToken(),
+        ExtractJwt.fromUrlQueryParameter('access_token'),
+      ]),
       ignoreExpiration: false,
       secretOrKey: securityConfig.jwtSecret,
     });
