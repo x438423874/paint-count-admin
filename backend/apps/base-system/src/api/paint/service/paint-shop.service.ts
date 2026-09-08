@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '@lib/shared/prisma/prisma.service';
 import { CreateShopDto, UpdateShopDto, PageShopDto } from '../shop/dto/shop.dto';
-import { PaginationResult } from '@lib/shared/prisma/pagination';
+import { PaginationResult, pageArgs } from '@lib/shared/prisma/pagination';
 
 @Injectable()
 export class PaintShopService {
@@ -118,8 +118,7 @@ export class PaintShopService {
   }
 
   async page(dto: PageShopDto, accessibleShopIds?: string[] | null): Promise<PaginationResult<any>> {
-    const current = dto.current ?? 1;
-    const size = dto.size ?? 10;
+    const { current, size, skip, take } = pageArgs(dto.current, dto.size);
 
     // 数据权限：accessibleShopIds 为 null 表示不限制，数组表示限制到这些门店
     const where = {
@@ -130,8 +129,8 @@ export class PaintShopService {
     const [records, total] = await Promise.all([
       this.prisma.paintShop.findMany({
         where,
-        skip: (current - 1) * size,
-        take: size,
+        skip,
+        take,
         orderBy: { createdAt: 'desc' },
         include: { standardTemplate: { select: { id: true, name: true } } },
       }),

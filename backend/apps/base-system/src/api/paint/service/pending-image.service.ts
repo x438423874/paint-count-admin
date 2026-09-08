@@ -1,6 +1,6 @@
 import { Injectable, BadRequestException, NotFoundException, Inject, Logger, OnApplicationBootstrap } from '@nestjs/common';
 import { PrismaService } from '@lib/shared/prisma/prisma.service';
-import { PaginationResult } from '@lib/shared/prisma/pagination';
+import { PaginationResult, pageArgs } from '@lib/shared/prisma/pagination';
 import { OcrStatus, PaintImageType, PendingImageStatus, Prisma } from '@prisma/client';
 import { WINSTON_MODULE_PROVIDER } from 'nest-winston';
 import { Logger as WinstonLogger } from 'winston';
@@ -526,8 +526,7 @@ export class PendingImageService implements OnApplicationBootstrap {
   }
 
   async page(dto: PagePendingImageDto, accessibleShopIds: string[] | null): Promise<PaginationResult<any>> {
-    const current = dto.current ?? 1;
-    const size = dto.size ?? 20;
+    const { current, size, skip, take } = pageArgs(dto.current, dto.size, 20);
 
     const where: Prisma.PaintPendingImageWhereInput = {};
     if (dto.shopId) where.shopId = dto.shopId;
@@ -551,8 +550,8 @@ export class PendingImageService implements OnApplicationBootstrap {
     const [records, total] = await Promise.all([
       this.prisma.paintPendingImage.findMany({
         where,
-        skip: (current - 1) * size,
-        take: size,
+        skip,
+        take,
         orderBy: { createdAt: 'desc' },
         include: {
           shop: { select: { id: true, name: true, code: true } },

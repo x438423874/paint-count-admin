@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsNotEmpty, IsOptional, IsString } from 'class-validator';
-import { Type } from 'class-transformer';
+
+import { PageDto } from '@lib/infra/rest/page.dto';
 
 export class CreateShopDto {
   @ApiProperty({ description: '店铺名称' })
@@ -66,17 +67,7 @@ export class UpdateShopDto {
   standardTemplateId?: string;
 }
 
-export class PageShopDto {
-  @ApiPropertyOptional({ description: '当前页' })
-  @Type(() => Number)
-  @IsOptional()
-  current?: number = 1;
-
-  @ApiPropertyOptional({ description: '每页数量' })
-  @Type(() => Number)
-  @IsOptional()
-  size?: number = 10;
-
+export class PageShopDto extends PageDto {
   @ApiPropertyOptional({ description: '店铺名称' })
   @IsOptional()
   @IsString()

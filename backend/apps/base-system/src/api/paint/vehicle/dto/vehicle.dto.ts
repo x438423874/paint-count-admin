@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsBoolean, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
-import { Type } from 'class-transformer';
+
+import { PageDto } from '@lib/infra/rest/page.dto';
 
 export class CreateVehicleDto {
   @ApiProperty({ description: '车牌号（全局唯一，存储时统一大写）' })
@@ -100,17 +101,7 @@ export class UpdateVehicleDto {
   syncToOrders?: boolean;
 }
 
-export class PageVehicleDto {
-  @ApiPropertyOptional({ description: '当前页' })
-  @Type(() => Number)
-  @IsOptional()
-  current?: number = 1;
-
-  @ApiPropertyOptional({ description: '每页数量' })
-  @Type(() => Number)
-  @IsOptional()
-  size?: number = 10;
-
+export class PageVehicleDto extends PageDto {
   @ApiPropertyOptional({ description: '车牌号（模糊查询）' })
   @IsOptional()
   @IsString()
