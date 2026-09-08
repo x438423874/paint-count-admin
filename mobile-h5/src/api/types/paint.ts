@@ -6,12 +6,14 @@ export enum PaintOrderStatus {
   AUDITED = 'AUDITED',
   SETTLED = 'SETTLED',
   ABNORMAL = 'ABNORMAL',
+  VOID = 'VOID',
 }
 
+/** 与后端 Prisma 枚举 PaintImageType 对齐（OTHER 为历史笔误，库中不存在） */
 export enum PaintImageType {
   BEFORE = 'BEFORE',
+  DURING = 'DURING',
   AFTER = 'AFTER',
-  OTHER = 'OTHER',
 }
 
 export interface WorkOrderItem {

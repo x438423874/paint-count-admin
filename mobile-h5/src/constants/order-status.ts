@@ -13,6 +13,7 @@ export const ORDER_STATUS_TAG_TYPE: Record<string, string> = {
   AUDITED: 'primary',
   SETTLED: 'success',
   ABNORMAL: 'danger',
+  VOID: 'default',
 }
 
 /** 完整文案（列表、详情等空间充足处） */
@@ -22,6 +23,7 @@ export const ORDER_STATUS_LABEL: Record<string, string> = {
   AUDITED: '已审核',
   SETTLED: '已结算',
   ABNORMAL: '异常',
+  VOID: '作废',
 }
 
 /** 短文案（空间受限处，如车辆历史工单卡片） */
@@ -31,6 +33,7 @@ export const ORDER_STATUS_SHORT_LABEL: Record<string, string> = {
   AUDITED: '已审',
   SETTLED: '已结',
   ABNORMAL: '异常',
+  VOID: '作废',
 }
 
 /** 详情页状态 banner 的 CSS class 后缀 */
@@ -40,6 +43,7 @@ export const ORDER_STATUS_CLASS: Record<string, string> = {
   AUDITED: 'audited',
   SETTLED: 'settled',
   ABNORMAL: 'abnormal',
+  VOID: 'void',
 }
 
 /** vant 图标名 */
@@ -49,6 +53,7 @@ export const ORDER_STATUS_ICON: Record<string, string> = {
   AUDITED: 'success',
   SETTLED: 'balance-o',
   ABNORMAL: 'warning-o',
+  VOID: 'cross',
 }
 
 /** 文字态颜色（车辆历史卡片等用色值着色的场景） */
@@ -58,6 +63,7 @@ export const ORDER_STATUS_COLOR: Record<string, string> = {
   AUDITED: '#409eff',
   SETTLED: '#67c23a',
   ABNORMAL: '#f56c6c',
+  VOID: '#909399',
 }
 
 /** 状态文案；未知/空返回原值或 '-' */
