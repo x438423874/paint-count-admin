@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useUserStore } from '@/stores'
 import { canEdit as canEditRole } from '@/utils/permission'
+import { confirmAction } from '@/composables/useConfirm'
 
 const router = useRouter()
 const userStore = useUserStore()
@@ -11,7 +12,7 @@ const allowCreate = canEditRole()
 const appVersion = ref('1.0.0')
 
 function handleLogout() {
-  showDialog({
+  confirmAction({
     title: '确认退出',
     message: '退出后需要重新登录',
   }).then(async () => {

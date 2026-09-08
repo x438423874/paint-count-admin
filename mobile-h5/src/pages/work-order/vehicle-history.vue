@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { fetchVehicleHistory, fetchVehicleByPlate } from '@/api/paint'
 import type { PaintWorkOrder, VehicleHistorySummary } from '@/api/types/paint'
-import { PaintOrderStatus } from '@/api/types/paint'
 
 const route = useRoute()
 const router = useRouter()
@@ -14,22 +13,6 @@ const total = ref(0)
 const summary = ref<VehicleHistorySummary | null>(null)
 const scope = ref<'all_shops' | 'current_shop'>('all_shops')
 const resolvedVehicleId = ref('') // 可能从车牌号解析得到
-
-const statusText: Record<PaintOrderStatus, string> = {
-  [PaintOrderStatus.DRAFT]: '草稿',
-  [PaintOrderStatus.PENDING]: '待审',
-  [PaintOrderStatus.AUDITED]: '已审',
-  [PaintOrderStatus.SETTLED]: '已结',
-  [PaintOrderStatus.ABNORMAL]: '异常',
-}
-
-const statusColor: Record<PaintOrderStatus, string> = {
-  [PaintOrderStatus.DRAFT]: '#909399',
-  [PaintOrderStatus.PENDING]: '#e6a23c',
-  [PaintOrderStatus.AUDITED]: '#409eff',
-  [PaintOrderStatus.SETTLED]: '#67c23a',
-  [PaintOrderStatus.ABNORMAL]: '#f56c6c',
-}
 
 function formatDate(val?: string | null) {
   if (!val) return '-'
@@ -138,7 +121,7 @@ onMounted(() => {
     <!-- 工单列表 -->
     <div v-loading="loading" class="order-list">
       <div v-if="records.length === 0 && !loading" class="empty-tip">
-        <van-empty description="暂无历史工单" />
+        <AppEmpty description="暂无历史工单" />
       </div>
       <div
         v-for="order in records"
@@ -148,12 +131,12 @@ onMounted(() => {
       >
         <div class="order-header">
           <span class="order-no">{{ order.orderNo || '(无工单号)' }}</span>
-          <span
+          <OrderStatusTag
             class="order-status"
-            :style="{ color: statusColor[order.status], borderColor: statusColor[order.status] }"
-          >
-            {{ statusText[order.status] }}
-          </span>
+            :status="order.status"
+            variant="text"
+            short
+          />
         </div>
         <div class="order-body">
           <span class="order-info-item">日期：{{ formatDate(order.orderDate) }}</span>

@@ -1,16 +1,34 @@
 <script setup lang="ts">
 import {
-  getWorkOrderDetail, auditWorkOrder, unauditWorkOrder, deleteWorkOrder,
-  uploadWorkOrderImage, deleteWorkOrderImage, getShopList, updateWorkOrder, getShopCategoriesWithStandard,
-  settleWorkOrder, unsettleWorkOrder, setAbnormal, ocrRecognizeImage,
-  getSpecialPaintList, fetchOrderNoRules, fetchVehicleByPlate,
+  auditWorkOrder,
+  deleteWorkOrder,
+  deleteWorkOrderImage,
+  fetchOrderNoRules,
+  fetchVehicleByPlate,
+  getShopCategoriesWithStandard,
+  getSpecialPaintList,
+  getWorkOrderDetail,
+  ocrRecognizeImage,
+  setAbnormal,
+  settleWorkOrder,
+  unauditWorkOrder,
+  unsettleWorkOrder,
+  updateWorkOrder,
+  uploadWorkOrderImage,
 } from '@/api/paint'
-import type { PaintWorkOrder, PaintShop, PaintStandard, PaintSpecialPaint, PaintVehicle, CreateWorkOrderItemDto } from '@/api/types/paint'
+import type { CreateWorkOrderItemDto, PaintSpecialPaint, PaintStandard, PaintVehicle, PaintWorkOrder } from '@/api/types/paint'
 import type { OrderNoRule } from '@/api/paint'
 import { compressImage } from '@/utils/image-compress'
 import { resolveImageUrl } from '@/utils/image-url'
+import { phoneRegex, plateNumberRegex, vinRegex } from '@/utils/validators'
+import { computeItemPaintCount, computeTotalPaintCount, getPaintDecimalLength, normalizeOverridePaintCount } from '@/utils/paint-count'
+import { applyOcrFields } from '@/utils/ocr-fields'
+import { fetchImageAsFile, uploadCompressed } from '@/composables/useImageUpload'
 import { canAudit, canDelete, canEdit } from '@/utils/permission'
 import { analyzeOrderNoErrors } from '@/utils/order-no-rule'
+import { useShopOptions } from '@/composables/useShopOptions'
+import { orderStatusClass, orderStatusIcon, orderStatusLabel } from '@/constants/order-status'
+import { confirmAction } from '@/composables/useConfirm'
 
 // 权限标志
 const allowAudit = canAudit()
@@ -21,8 +39,11 @@ const route = useRoute()
 const router = useRouter()
 const orderId = ref('')
 const order = ref<PaintWorkOrder | null>(null)
+// 返工备注输入（loadDetail 中会根据工单初始化，声明前置）
+const reworkRemarkInput = ref('')
 const loading = ref(false)
-const shops = ref<PaintShop[]>([])
+// 门店走 dict store 共享缓存，全应用只请求一次（原为每页各自 getShopList）
+const { shops, ensureShops } = useShopOptions()
 const isEditing = ref(false)
 const saving = ref(false)
 const ocrCorrectionMode = ref(false)
@@ -32,7 +53,7 @@ const showMoreActions = ref(false)
 const moreActions = computed(() => {
   const o = order.value
   const s = o?.status
-  const list: { name: string; color?: string }[] = []
+  const list: { name: string, color?: string }[] = []
   if (s && !isUnauditedStatus(s) && allowEdit && o.images && o.images.length) {
     list.push({ name: '修正OCR', color: 'var(--color-warning)' })
   }
@@ -48,10 +69,18 @@ const moreActions = computed(() => {
 function onMoreSelect(action: { name: string }) {
   showMoreActions.value = false
   switch (action.name) {
-    case '修正OCR': enterOcrCorrection(); break
-    case '取消审核': handleUnaudit(); break
-    case '标记异常': openAbnormalPopup(); break
-    case '删除': handleDelete(); break
+    case '修正OCR':
+      enterOcrCorrection()
+      break
+    case '取消审核':
+      handleUnaudit()
+      break
+    case '标记异常':
+      openAbnormalPopup()
+      break
+    case '删除':
+      handleDelete()
+      break
   }
 }
 
@@ -91,13 +120,7 @@ const editPhoneError = ref('')
 const editOrderNoRules = ref<OrderNoRule[]>([])
 const ocrVinCorrectionMsg = ref('')
 
-// 校验正则
-// 车牌号正则：支持普通7位（省份+字母+5位）、新能源8位、旧6位（字母+5位字母数字）
-// 省份含：31省市+使领+军警武警+军区(海空北沈兰济南广成武翼)
-const PLATE_PROVINCE = '京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼使领军警海空北沈兰济南广成武翼'
-const plateNumberRegex = new RegExp(`^([${PLATE_PROVINCE}][A-Z][A-HJ-NP-Z0-9]{4,5}[A-HJ-NP-Z0-9挂学警港澳]|[A-Z][A-HJ-NP-Z0-9]{5})$`)
-const phoneRegex = /^1[3-9]\d{9}$/
-const vinRegex = /^[A-HJ-NPR-Z0-9]{17}$/
+// 校验正则统一维护在 utils/validators（车牌/手机号/车架号）
 
 // 日期选择器
 const showEditDatePicker = ref(false)
@@ -129,7 +152,6 @@ const showCategoryPicker = ref(false)
 const editingItemIndex = ref(-1)
 // 多选弹层
 const showCategoryMultiPicker = ref(false)
-const checkedCategoryIds = ref<string[]>([])
 const categoryColumns = computed(() => {
   const currentItem = editForm.items[editingItemIndex.value]
   const currentCategoryId = currentItem?.categoryId
@@ -146,50 +168,19 @@ const categoryColumns = computed(() => {
 })
 
 // 编辑模式下的图片状态
-const editPendingUploads = ref<{ file: File; previewUrl: string }[]>([])
+const editPendingUploads = ref<{ file: File, previewUrl: string }[]>([])
 const editPendingDeleteIds = ref<string[]>([])
 const editImages = computed(() => {
-  if (!order.value?.images) return []
+  if (!order.value?.images)
+    return []
   return order.value.images.filter(img => !editPendingDeleteIds.value.includes(img.id))
 })
 
 function getShopName(shopId: string) {
-  if (!shopId) return '-'
+  if (!shopId)
+    return '-'
   const shop = shops.value.find(s => s.id === shopId)
   return shop?.name || shopId
-}
-
-function getStatusClass(status?: string): string {
-  const map: Record<string, string> = {
-    DRAFT: 'draft',
-    PENDING: 'pending',
-    AUDITED: 'audited',
-    SETTLED: 'settled',
-    ABNORMAL: 'abnormal',
-  }
-  return map[status || ''] || 'pending'
-}
-
-function getStatusIcon(status?: string): string {
-  const map: Record<string, string> = {
-    DRAFT: 'notes-o',
-    PENDING: 'clock-o',
-    AUDITED: 'success',
-    SETTLED: 'balance-o',
-    ABNORMAL: 'warning-o',
-  }
-  return map[status || ''] || 'clock-o'
-}
-
-function getStatusLabel(status?: string): string {
-  const map: Record<string, string> = {
-    DRAFT: '草稿',
-    PENDING: '待审核',
-    AUDITED: '已审核',
-    SETTLED: '已结算',
-    ABNORMAL: '异常',
-  }
-  return map[status || ''] || status || '-'
 }
 
 function isUnauditedStatus(status?: string): boolean {
@@ -204,18 +195,9 @@ function isAbnormalStatus(status?: string): boolean {
   return status === 'ABNORMAL'
 }
 
-async function loadShops() {
-  try {
-    const res = await getShopList()
-    shops.value = res as any as PaintShop[]
-  }
-  catch {
-    shops.value = []
-  }
-}
-
 async function loadDetail() {
-  if (!orderId.value) return
+  if (!orderId.value)
+    return
   loading.value = true
   try {
     const res = await getWorkOrderDetail(orderId.value)
@@ -224,7 +206,7 @@ async function loadDetail() {
     // 查看模式下：若有车牌号则预查车辆主数据（显示累计工单数等）
     if (order.value?.plateNumber && order.value.plateNumber.trim()) {
       fetchVehicleByPlate(order.value.plateNumber.trim().toUpperCase())
-        .then(data => { viewModeVehicle.value = data })
+        .then((data) => { viewModeVehicle.value = data })
         .catch(() => { viewModeVehicle.value = null })
     }
     else {
@@ -244,7 +226,8 @@ async function loadDetail() {
 }
 
 function enterEdit() {
-  if (!order.value || !isUnauditedStatus(order.value.status)) return
+  if (!order.value || !isUnauditedStatus(order.value.status))
+    return
   ocrCorrectionMode.value = false
   initEditForm(order.value)
   editPendingUploads.value = []
@@ -257,7 +240,8 @@ function enterEdit() {
 }
 
 function enterOcrCorrection() {
-  if (!order.value || !isAuditedStatus(order.value.status)) return
+  if (!order.value || !isAuditedStatus(order.value.status))
+    return
   ocrCorrectionMode.value = true
   initEditForm(order.value)
   editPendingUploads.value = []
@@ -304,13 +288,14 @@ async function lookupVehicle(plate: string, overwrite = false) {
     vehicleMatchedFields.value = []
     return
   }
-  if (vehicleFound.value?.plateNumber === normalized && !overwrite) return
+  if (vehicleFound.value?.plateNumber === normalized && !overwrite)
+    return
   vehicleLookingUp.value = true
   try {
     const data = await fetchVehicleByPlate(normalized)
     if (data) {
       vehicleFound.value = data
-      const fieldMap: Array<{ key: 'vin' | 'carModel' | 'brand' | 'customerName' | 'phone'; vehicleKey: 'vin' | 'carModel' | 'brand' | 'customerName' | 'phone'; label: string }> = [
+      const fieldMap: Array<{ key: 'vin' | 'carModel' | 'brand' | 'customerName' | 'phone', vehicleKey: 'vin' | 'carModel' | 'brand' | 'customerName' | 'phone', label: string }> = [
         { key: 'vin', vehicleKey: 'vin', label: '车架号' },
         { key: 'carModel', vehicleKey: 'carModel', label: '车型' },
         { key: 'brand', vehicleKey: 'brand', label: '品牌' },
@@ -380,7 +365,8 @@ function onEditPlateNumberInput() {
 }
 
 function goVehicleHistory() {
-  if (!vehicleFound.value) return
+  if (!vehicleFound.value)
+    return
   router.push({ name: '/work-order/vehicle-history', query: { id: vehicleFound.value.id, plate: vehicleFound.value.plateNumber } })
 }
 
@@ -428,12 +414,13 @@ async function loadSpecialPaints() {
 }
 
 async function loadEditStandards() {
-  if (!order.value?.shopId) return
+  if (!order.value?.shopId)
+    return
   try {
     const res = await getShopCategoriesWithStandard(order.value.shopId)
     editStandards.value = (res as any as PaintStandard[]).filter(s => Number(s.coefficient) > 0)
     // 清理与自动计算值一致的 overridePaintCount
-    editForm.items.forEach(item => {
+    editForm.items.forEach((item) => {
       if (item.overridePaintCount !== undefined && item.overridePaintCount !== null && item.categoryId) {
         const autoCount = getEditItemAutoPaintCount(item)
         if (Math.abs(item.overridePaintCount - autoCount) < 0.01) {
@@ -469,9 +456,10 @@ function handleOcrRecognize() {
   // 只有一张图片时直接识别
   if (totalCount === 1) {
     if (savedImages.length === 1) {
-      doOcrRecognizeByUrl(savedImages[0].url)
-    } else {
-      doOcrRecognizeByFile(pendingImages[0].file)
+      doOcrRecognize(resolveImageUrl(savedImages[0].url))
+    }
+    else {
+      doOcrRecognize(pendingImages[0].file)
     }
     return
   }
@@ -482,7 +470,7 @@ function handleOcrRecognize() {
 // 选择图片后识别
 function onPickImage(url: string) {
   showImagePicker.value = false
-  doOcrRecognizeByUrl(url)
+  doOcrRecognize(resolveImageUrl(url))
 }
 
 // 选择待上传图片后识别
@@ -490,12 +478,12 @@ function onPickPendingImage(index: number) {
   showImagePicker.value = false
   const item = editPendingUploads.value[index]
   if (item) {
-    doOcrRecognizeByFile(item.file)
+    doOcrRecognize(item.file)
   }
 }
 
-// 根据待上传的 File 对象进行 OCR 识别
-async function doOcrRecognizeByFile(file: File) {
+// OCR 识别：来源为待上传的 File 或已保存图片的 URL（URL 来源先拉取转 File）
+async function doOcrRecognize(source: File | string) {
   const shopId = order.value?.shopId
   if (!shopId) {
     showNotify({ type: 'warning', message: '门店信息缺失，无法识别' })
@@ -503,7 +491,8 @@ async function doOcrRecognizeByFile(file: File) {
   }
   ocrLoading.value = true
   try {
-    const compressed = await compressImage(file)
+    const raw = typeof source === 'string' ? await fetchImageAsFile(source) : source
+    const compressed = await compressImage(raw)
     const result = await ocrRecognizeImage(compressed, shopId, editOcrMode.value)
     applyOcrResult(result)
   }
@@ -515,43 +504,18 @@ async function doOcrRecognizeByFile(file: File) {
   }
 }
 
-// 将 OCR 识别结果应用到编辑表单（仅填充空白字段）
+// 将 OCR 识别结果应用到编辑表单（基础字段统一走 applyOcrFields，仅填充空白字段）
 function applyOcrResult(result: any) {
-  const fieldMap = [
-    { key: 'plateNumber', label: '车牌号', ocrKey: 'plateNumber' },
-    { key: 'orderNo', label: '工单号', ocrKey: 'orderNo' },
-    { key: 'customerName', label: '客户名称', ocrKey: 'customerName' },
-    { key: 'phone', label: '联系电话', ocrKey: 'phone' },
-    { key: 'carModel', label: '车型', ocrKey: 'carModel' },
-    { key: 'vin', label: '车架号', ocrKey: 'vin' },
-    { key: 'brand', label: '品牌', ocrKey: 'brand' },
-    { key: 'orderDate', label: '工单日期', ocrKey: 'date' },
-  ]
-
-  const filledMessages: string[] = []
-
-  for (const { key, label, ocrKey } of fieldMap) {
-    const ocrValue = ((result as any)[ocrKey] || '').trim()
-    if (!ocrValue) continue
-
-    const currentValue = ((editForm as any)[key] || '').trim()
-    if (!currentValue) {
-      ;(editForm as any)[key] = ocrValue
-      filledMessages.push(`${label}：${ocrValue}`)
-    }
-  }
+  const { filledMessages, orderNoCorrected, vinCorrected } = applyOcrFields(editForm, result)
 
   // 工单号修正提示：OCR 识别的工单号不符合规则，后端已自动修正
-  const candidates = result.orderNoCandidates || []
-  const orderNoValid = result.orderNoValid
-  if (candidates.length > 0 && orderNoValid === false) {
-    const correctedNo = result.orderNo || ''
-    showNotify({ type: 'warning', message: `工单号已自动修正为 ${correctedNo}` })
+  if (orderNoCorrected) {
+    showNotify({ type: 'warning', message: `工单号已自动修正为 ${orderNoCorrected}` })
   }
 
   // VIN 车架号修正提示：OCR 识别的 VIN 含易混淆字符（O↔0、I↔1、Q↔0），后端已自动修正
-  if (result.vinCorrected && result.vinOriginal) {
-    ocrVinCorrectionMsg.value = `OCR识别车架号含易混淆字符，已自动修正：「${result.vinOriginal}」→「${result.vin}」`
+  if (vinCorrected) {
+    ocrVinCorrectionMsg.value = `OCR识别车架号含易混淆字符，已自动修正：「${vinCorrected.original}」→「${vinCorrected.corrected}」`
     showNotify({ type: 'warning', message: ocrVinCorrectionMsg.value })
   }
   else {
@@ -568,39 +532,14 @@ function applyOcrResult(result: any) {
   if (filledMessages.length > 0) {
     showNotify({ type: 'success', message: `已填充 ${filledMessages.join('、')}` })
   }
-  else if (candidates.length === 0 || orderNoValid !== false) {
+  else if (!orderNoCorrected) {
     showNotify({ type: 'warning', message: '未识别到有效信息或所有字段已填写' })
   }
 }
 
-// 根据图片 URL 进行 OCR 识别
-async function doOcrRecognizeByUrl(imageUrl: string) {
-  const shopId = order.value?.shopId
-  if (!shopId) {
-    showNotify({ type: 'warning', message: '门店信息缺失，无法识别' })
-    return
-  }
-  ocrLoading.value = true
-  try {
-    // 获取工单图片并转为 File
-    const resp = await fetch(resolveImageUrl(imageUrl))
-    if (!resp.ok) throw new Error('获取图片失败')
-    const blob = await resp.blob()
-    const file = new File([blob], 'image.jpg', { type: blob.type || 'image/jpeg' })
-    const compressed = await compressImage(file)
-    const result = await ocrRecognizeImage(compressed, shopId, editOcrMode.value)
-    applyOcrResult(result)
-  }
-  catch {
-    showNotify({ type: 'danger', message: 'OCR识别失败' })
-  }
-  finally {
-    ocrLoading.value = false
-  }
-}
-
 async function saveEdit() {
-  if (!order.value) return
+  if (!order.value)
+    return
 
   // 校验工单号规则
   if (editForm.orderNo && editForm.orderNo.trim() && editOrderNoRules.value.length > 0) {
@@ -692,7 +631,7 @@ async function saveEdit() {
         phone: editForm.phone || undefined,
         remark: editForm.remark || undefined,
         isAdjustment,
-        items: validItems.map(it => {
+        items: validItems.map((it) => {
           const item: any = {
             categoryId: it.categoryId,
             quantity: it.quantity,
@@ -716,15 +655,9 @@ async function saveEdit() {
         }
       }
 
-      // 3. 批量上传新图片（压缩后上传）
+      // 3. 批量上传新图片（压缩 + 429/5xx 自动重试统一走 useImageUpload）
       for (const item of editPendingUploads.value) {
-        try {
-          const compressed = await compressImage(item.file)
-          await uploadWorkOrderImage(orderId.value, compressed, 'BEFORE')
-        }
-        catch {
-          // 单个图片上传失败不阻断整体流程
-        }
+        await uploadCompressed(item.file, compressed => uploadWorkOrderImage(orderId.value, compressed, 'BEFORE'))
       }
     }
 
@@ -752,7 +685,8 @@ function removeEditItem(index: number) {
 // 部位数量修改：部位数量为 0 时直接删除该项目；并收敛超过部位数量的新件数量
 function onEditQuantityChange(index: number) {
   const item = editForm.items[index]
-  if (!item) return
+  if (!item)
+    return
   if (!item.quantity || item.quantity <= 0) {
     removeEditItem(index)
     return
@@ -773,8 +707,7 @@ function addEditItem() {
     showNotify({ type: 'warning', message: '所有部位已选择' })
     return
   }
-  // 打开多选弹层
-  checkedCategoryIds.value = []
+  // 打开多选弹层（勾选状态由组件内部管理，打开时自动重置）
   showCategoryMultiPicker.value = true
 }
 
@@ -789,27 +722,17 @@ const categoryMultiOptions = computed(() => {
     }))
 })
 
-function toggleCategoryCheck(id: string) {
-  const idx = checkedCategoryIds.value.indexOf(id)
-  if (idx >= 0) checkedCategoryIds.value.splice(idx, 1)
-  else checkedCategoryIds.value.push(id)
-}
-
-function onCategoryMultiConfirm() {
-  if (checkedCategoryIds.value.length === 0) {
-    showCategoryMultiPicker.value = false
-    return
-  }
-  for (const categoryId of checkedCategoryIds.value) {
+function onCategoryMultiConfirm(ids: string[]) {
+  for (const categoryId of ids) {
     // 防御：跳过已被选中的部位
-    if (editForm.items.some(i => i.categoryId === categoryId)) continue
+    if (editForm.items.some(i => i.categoryId === categoryId))
+      continue
     editForm.items.push({
       categoryId,
       quantity: 1,
       newPartQuantity: 0,
     })
   }
-  showCategoryMultiPicker.value = false
 }
 
 function openCategoryPicker(index: number) {
@@ -817,23 +740,24 @@ function openCategoryPicker(index: number) {
   showCategoryPicker.value = true
 }
 
-function onCategoryConfirm({ selectedValues }: any) {
-  if (editingItemIndex.value >= 0 && selectedValues[0]) {
-    editForm.items[editingItemIndex.value].categoryId = selectedValues[0]
+function onCategoryConfirm(value: string) {
+  if (editingItemIndex.value >= 0 && value) {
+    editForm.items[editingItemIndex.value].categoryId = value
   }
-  showCategoryPicker.value = false
 }
 
 function getEditItemName(index: number) {
   const item = editForm.items[index]
-  if (!item) return ''
+  if (!item)
+    return ''
   const std = editStandards.value.find(s => s.categoryId === item.categoryId)
   return std?.category?.name || std?.alias || item.categoryId || `项目${index + 1}`
 }
 
 async function handleAudit() {
-  if (!order.value) return
-  showDialog({
+  if (!order.value)
+    return
+  confirmAction({
     title: '确认审核',
     message: '审核后工单将不可修改，确认审核？',
   }).then(async () => {
@@ -849,8 +773,9 @@ async function handleAudit() {
 }
 
 async function handleUnaudit() {
-  if (!order.value) return
-  showDialog({
+  if (!order.value)
+    return
+  confirmAction({
     title: '取消审核',
     message: '确认取消审核？',
   }).then(async () => {
@@ -867,10 +792,12 @@ async function handleUnaudit() {
 }
 
 async function handleDelete() {
-  if (!order.value) return
-  showDialog({
+  if (!order.value)
+    return
+  confirmAction({
     title: '确认删除',
     message: '删除后不可恢复，确认删除？',
+    danger: true,
   }).then(async () => {
     try {
       await deleteWorkOrder(order.value!.id)
@@ -886,8 +813,9 @@ async function handleDelete() {
 // ===== 结算相关 =====
 
 async function handleSettle() {
-  if (!order.value) return
-  showDialog({
+  if (!order.value)
+    return
+  confirmAction({
     title: '确认结算',
     message: '确认结算此工单？',
   }).then(async () => {
@@ -908,14 +836,16 @@ const abnormalFlag = ref(true)
 const abnormalRemarkInput = ref('')
 
 function openAbnormalPopup() {
-  if (!order.value) return
+  if (!order.value)
+    return
   abnormalFlag.value = order.value.status !== 'ABNORMAL'
   abnormalRemarkInput.value = order.value.abnormalRemark || ''
   showAbnormalPopup.value = true
 }
 
 async function confirmAbnormal() {
-  if (!order.value) return
+  if (!order.value)
+    return
   try {
     await setAbnormal(order.value.id, abnormalFlag.value, abnormalRemarkInput.value || undefined)
     showNotify({ type: 'success', message: abnormalFlag.value ? '已标记异常' : '已取消异常' })
@@ -928,17 +858,17 @@ async function confirmAbnormal() {
 }
 
 // ===== 返工标记相关 =====
-const reworkRemarkInput = ref('')
 const reworkSaving = ref(false)
 
 async function toggleRework(isRework: boolean) {
-  if (!order.value || reworkSaving.value) return
+  if (!order.value || reworkSaving.value)
+    return
   reworkSaving.value = true
   try {
     await updateWorkOrder({
       id: order.value.id,
       isRework,
-      reworkRemark: isRework ? (reworkRemarkInput.value || undefined) : undefined
+      reworkRemark: isRework ? (reworkRemarkInput.value || undefined) : undefined,
     })
     showNotify({ type: 'success', message: isRework ? '已标记返工' : '已取消返工' })
     await loadDetail()
@@ -952,8 +882,9 @@ async function toggleRework(isRework: boolean) {
 }
 
 async function handleUnsettle() {
-  if (!order.value) return
-  showDialog({
+  if (!order.value)
+    return
+  confirmAction({
     title: '确认取消结算',
     message: '确认取消结算？',
   }).then(async () => {
@@ -975,7 +906,8 @@ function handleAddImage() {
   input.multiple = true
   input.onchange = (e: Event) => {
     const files = (e.target as HTMLInputElement).files
-    if (!files) return
+    if (!files)
+      return
     for (const file of Array.from(files)) {
       const previewUrl = URL.createObjectURL(file)
       editPendingUploads.value.push({ file, previewUrl })
@@ -1014,64 +946,29 @@ function removePendingUpload(index: number) {
 }
 
 function formatDate(dateStr: string) {
-  if (!dateStr) return ''
+  if (!dateStr)
+    return ''
   return dateStr.slice(0, 10)
 }
 
 // 编辑模式下的总幅数和部位数
 /** 获取编辑模式下单个 item 的自动计算幅数 */
 function getEditItemAutoPaintCount(item: CreateWorkOrderItemDto): number {
-  if (!item.quantity || item.quantity <= 0) return 0
+  if (!item.quantity || item.quantity <= 0)
+    return 0
   const std = editStandards.value.find(s => s.categoryId === item.categoryId)
-  if (!std) return 0
-  const coefficient = Number(std.coefficient) || 0
-  const newPartAddition = Number(std.newPartAddition) || 0
-  let specialMultiplier = 1
-  if (item.specialPaintId) {
-    const sp = specialPaints.value.find(s => s.id === item.specialPaintId)
-    if (sp) specialMultiplier = Number(sp.multiplier) || 1
-  }
-  return (item.quantity * coefficient + (item.newPartQuantity || 0) * newPartAddition) * specialMultiplier
+  return computeItemPaintCount(item, std, specialPaints.value)
 }
 
 // 幅数小数位控制：默认显示1位小数，聚焦输入时允许输入2位小数
 const paintFocusIndex = ref<number | null>(null)
 
-function getPaintDecimalLength(index: number, value?: number | string | null): number {
-  if (paintFocusIndex.value === index) return 2
-  const decimals = String(value ?? '').split('.')[1]?.length ?? 0
-  return Math.min(Math.max(decimals, 1), 2)
-}
-
 function onPaintCountBlur(item: CreateWorkOrderItemDto) {
   paintFocusIndex.value = null
-  if (item.overridePaintCount !== undefined && item.overridePaintCount !== null) {
-    // 失焦后规范化为最多2位小数，避免浮点误差与超长小数
-    item.overridePaintCount = Number(Number(item.overridePaintCount).toFixed(2))
-  }
+  normalizeOverridePaintCount(item)
 }
 
-const editTotalPaintCount = computed(() => {
-  return editForm.items.reduce((sum, item) => {
-    if (!item.quantity || item.quantity <= 0) return sum
-    // 手动覆盖幅数
-    if (item.overridePaintCount !== undefined && item.overridePaintCount !== null) {
-      return sum + item.overridePaintCount
-    }
-    const std = editStandards.value.find(s => s.categoryId === item.categoryId)
-    if (!std) return sum
-    const coefficient = Number(std.coefficient) || 0
-    const newPartAddition = Number(std.newPartAddition) || 0
-    // 特殊车漆倍数
-    let specialMultiplier = 1
-    if (item.specialPaintId) {
-      const sp = specialPaints.value.find(s => s.id === item.specialPaintId)
-      if (sp) specialMultiplier = Number(sp.multiplier) || 1
-    }
-    const paintCount = (item.quantity * coefficient + item.newPartQuantity * newPartAddition) * specialMultiplier
-    return sum + paintCount
-  }, 0)
-})
+const editTotalPaintCount = computed(() => computeTotalPaintCount(editForm.items, editStandards.value, specialPaints.value))
 
 const editPartCount = computed(() => {
   return editForm.items.reduce((sum, item) => sum + (item.quantity || 0), 0)
@@ -1079,14 +976,15 @@ const editPartCount = computed(() => {
 
 // 查看模式下的部位数
 const viewPartCount = computed(() => {
-  if (!order.value?.items) return 0
+  if (!order.value?.items)
+    return 0
   return order.value.items.reduce((sum, item) => sum + (item.quantity || 0), 0)
 })
 
 onMounted(() => {
   orderId.value = (route.query.id as string) || ''
   window.scrollTo(0, 0)
-  loadShops()
+  ensureShops()
   loadDetail()
 })
 </script>
@@ -1107,10 +1005,10 @@ onMounted(() => {
 
     <div v-else-if="order" class="detail-content">
       <!-- 顶部状态栏 -->
-      <div :class="['status-banner', getStatusClass(order.status)]">
+      <div class="status-banner" :class="[orderStatusClass(order.status)]">
         <div class="status-left">
-          <van-icon :name="getStatusIcon(order.status)" size="20" color="#fff" />
-          <span class="status-text">{{ getStatusLabel(order.status) }}</span>
+          <van-icon :name="orderStatusIcon(order.status)" size="20" color="#fff" />
+          <span class="status-text">{{ orderStatusLabel(order.status) }}</span>
         </div>
         <span class="order-no">{{ order.orderNo }}</span>
       </div>
@@ -1171,10 +1069,10 @@ onMounted(() => {
             <span class="info-value">{{ order.settlementMonth || '-' }}</span>
           </div>
           <div v-if="isAbnormalStatus(order.status)" class="info-item" style="grid-column: 1 / -1">
-            <van-notice-bar left-icon="warning" :text="'异常原因: ' + (order.abnormalRemark || '未填写')" background="var(--color-error-bg)" color="var(--color-error)" />
+            <van-notice-bar left-icon="warning" :text="`异常原因: ${order.abnormalRemark || '未填写'}`" background="var(--color-error-bg)" color="var(--color-error)" />
           </div>
           <div v-if="order.isRework && order.reworkRemark" class="info-item" style="grid-column: 1 / -1">
-            <van-notice-bar left-icon="warning" :text="'返工原因: ' + order.reworkRemark" background="var(--color-error-bg)" color="var(--color-error)" />
+            <van-notice-bar left-icon="warning" :text="`返工原因: ${order.reworkRemark}`" background="var(--color-error-bg)" color="var(--color-error)" />
           </div>
         </div>
 
@@ -1185,9 +1083,15 @@ onMounted(() => {
               OCR识别填充
             </van-button>
             <van-radio-group v-model="editOcrMode" direction="horizontal" style="margin-left: 8px;">
-              <van-radio name="basic" style="font-size: 12px;">基础资料</van-radio>
-              <van-radio name="items" style="font-size: 12px;">部位</van-radio>
-              <van-radio name="all" style="font-size: 12px;">全部</van-radio>
+              <van-radio name="basic" style="font-size: 12px;">
+                基础资料
+              </van-radio>
+              <van-radio name="items" style="font-size: 12px;">
+                部位
+              </van-radio>
+              <van-radio name="all" style="font-size: 12px;">
+                全部
+              </van-radio>
             </van-radio-group>
           </div>
           <van-field v-model="editForm.orderNo" label="工单号" placeholder="请输入工单号" :error-message="editOrderNoError" @update:model-value="editOrderNoError = ''" />
@@ -1209,7 +1113,7 @@ onMounted(() => {
           <van-notice-bar
             v-if="vehicleFound"
             left-icon="checked"
-            :text="`已匹配历史车辆${vehicleMatchedFields.length ? '，已填充：' + vehicleMatchedFields.join('、') : ''}（累计 ${vehicleFound.totalOrderCount} 单 / ${Number(vehicleFound.totalPaintCount).toFixed(1)} 幅）`"
+            :text="`已匹配历史车辆${vehicleMatchedFields.length ? `，已填充：${vehicleMatchedFields.join('、')}` : ''}（累计 ${vehicleFound.totalOrderCount} 单 / ${Number(vehicleFound.totalPaintCount).toFixed(1)} 幅）`"
             background="var(--color-success-bg)"
             color="var(--color-success)"
             style="margin: 0 16px 8px;"
@@ -1307,7 +1211,7 @@ onMounted(() => {
                   <van-stepper
                     v-if="item.overridePaintCount !== undefined && item.overridePaintCount !== null"
                     :model-value="item.overridePaintCount"
-                    min="-99" max="99" step="0.1" :decimal-length="getPaintDecimalLength(index, item.overridePaintCount)"
+                    min="-99" max="99" step="0.1" :decimal-length="getPaintDecimalLength(paintFocusIndex, index, item.overridePaintCount)"
                     input-width="48px"
                     @focus="paintFocusIndex = index"
                     @blur="onPaintCountBlur(item)"
@@ -1334,7 +1238,7 @@ onMounted(() => {
           </div>
         </div>
 
-        <van-empty v-if="!isEditing && (!order.items || !order.items.length)" description="暂无喷漆项目" image="search" />
+        <AppEmpty v-if="!isEditing && (!order.items || !order.items.length)" description="暂无喷漆项目" image="search" />
 
         <!-- 总幅数和部位数 -->
         <div v-if="!isEditing" class="total-bar">
@@ -1395,7 +1299,7 @@ onMounted(() => {
               @click="previewImage(img.url)"
             />
           </div>
-          <van-empty v-else description="暂无图片" image="search" />
+          <AppEmpty v-else description="暂无图片" image="search" />
         </div>
       </div>
 
@@ -1453,45 +1357,19 @@ onMounted(() => {
     </div>
 
     <!-- 分类选择器（单选：修改已有部位类别） -->
-    <van-popup v-model:show="showCategoryPicker" position="bottom" round>
-      <van-picker
-        :columns="categoryColumns"
-        @confirm="onCategoryConfirm"
-        @cancel="showCategoryPicker = false"
-      />
-    </van-popup>
+    <PopupPicker
+      v-model:show="showCategoryPicker"
+      :columns="categoryColumns"
+      title="选择部位"
+      @confirm="onCategoryConfirm"
+    />
 
     <!-- 分类多选弹层（添加部位） -->
-    <van-popup v-model:show="showCategoryMultiPicker" position="bottom" round>
-      <div class="category-multi-picker">
-        <div class="category-multi-header">
-          <span class="category-multi-title">选择部位（可多选）</span>
-          <span class="category-multi-count">已选 {{ checkedCategoryIds.length }}</span>
-        </div>
-        <div class="category-multi-list">
-          <van-checkbox-group v-model="checkedCategoryIds">
-            <van-cell-group inset>
-              <van-cell
-                v-for="opt in categoryMultiOptions"
-                :key="opt.id"
-                clickable
-                @click="toggleCategoryCheck(opt.id)"
-              >
-                <template #title>
-                  <van-checkbox :name="opt.id" shape="square" @click.stop>
-                    {{ opt.label }}
-                  </van-checkbox>
-                </template>
-              </van-cell>
-            </van-cell-group>
-          </van-checkbox-group>
-        </div>
-        <div class="category-multi-footer">
-          <van-button block plain type="primary" @click="showCategoryMultiPicker = false">取消</van-button>
-          <van-button block type="primary" :disabled="checkedCategoryIds.length === 0" @click="onCategoryMultiConfirm">确定</van-button>
-        </div>
-      </div>
-    </van-popup>
+    <CategoryMultiPicker
+      v-model:show="showCategoryMultiPicker"
+      :options="categoryMultiOptions"
+      @confirm="onCategoryMultiConfirm"
+    />
 
     <!-- 编辑日期选择器 -->
     <van-popup v-model:show="showEditDatePicker" position="bottom" round>
@@ -1521,12 +1399,18 @@ onMounted(() => {
     <!-- 异常标注弹窗 -->
     <van-popup v-model:show="showAbnormalPopup" position="bottom" round :style="{ padding: '20px' }">
       <div class="settle-popup">
-        <div class="settle-title">{{ abnormalFlag ? '标记异常' : '取消异常' }}</div>
+        <div class="settle-title">
+          {{ abnormalFlag ? '标记异常' : '取消异常' }}
+        </div>
         <van-notice-bar v-if="abnormalFlag" left-icon="warning" text="标记异常后该工单将无法结算" background="var(--color-warning-bg)" color="var(--color-warning)" />
         <van-field v-model="abnormalRemarkInput" label="异常原因" type="textarea" :placeholder="abnormalFlag ? '请输入异常原因' : '备注（选填）'" rows="3" />
         <div class="settle-actions">
-          <van-button block @click="showAbnormalPopup = false">取消</van-button>
-          <van-button :type="abnormalFlag ? 'warning' : 'success'" block @click="confirmAbnormal">{{ abnormalFlag ? '确认标记' : '确认取消异常' }}</van-button>
+          <van-button block @click="showAbnormalPopup = false">
+            取消
+          </van-button>
+          <van-button :type="abnormalFlag ? 'warning' : 'success'" block @click="confirmAbnormal">
+            {{ abnormalFlag ? '确认标记' : '确认取消异常' }}
+          </van-button>
         </div>
       </div>
     </van-popup>
@@ -1534,28 +1418,36 @@ onMounted(() => {
     <!-- 多图片选择弹窗 -->
     <van-popup v-model:show="showImagePicker" position="bottom" round :style="{ padding: '16px' }">
       <div class="image-picker">
-        <div class="picker-title">选择要识别的图片</div>
+        <div class="picker-title">
+          选择要识别的图片
+        </div>
         <div class="picker-grid">
           <div
             v-for="(img, index) in editImages"
-            :key="'saved-' + img.id"
+            :key="`saved-${img.id}`"
             class="picker-item"
             @click="onPickImage(img.url)"
           >
             <van-image :src="resolveImageUrl(img.thumbnailUrl || img.url)" fit="cover" class="picker-image" />
-            <div class="picker-index">{{ index + 1 }}</div>
+            <div class="picker-index">
+              {{ index + 1 }}
+            </div>
           </div>
           <div
             v-for="(item, index) in editPendingUploads"
-            :key="'pending-' + index"
+            :key="`pending-${index}`"
             class="picker-item"
             @click="onPickPendingImage(index)"
           >
             <van-image :src="item.previewUrl" fit="cover" class="picker-image" />
-            <div class="picker-index">{{ editImages.length + index + 1 }}</div>
+            <div class="picker-index">
+              {{ editImages.length + index + 1 }}
+            </div>
           </div>
         </div>
-        <div class="picker-cancel" @click="showImagePicker = false">取消</div>
+        <div class="picker-cancel" @click="showImagePicker = false">
+          取消
+        </div>
       </div>
     </van-popup>
   </div>
@@ -1595,11 +1487,21 @@ onMounted(() => {
   padding: 16px;
   color: #fff;
 
-  &.draft { background: linear-gradient(135deg, #8c8c8c, #bfbfbf); }
-  &.pending { background: linear-gradient(135deg, var(--color-warning), #ffa940); }
-  &.audited { background: linear-gradient(135deg, #52c41a, #73d13d); }
-  &.settled { background: linear-gradient(135deg, #1890ff, #40a9ff); }
-  &.abnormal { background: linear-gradient(135deg, var(--color-error), color-mix(in srgb, var(--color-error) 65%, #fff)); }
+  &.draft {
+    background: linear-gradient(135deg, #8c8c8c, #bfbfbf);
+  }
+  &.pending {
+    background: linear-gradient(135deg, var(--color-warning), #ffa940);
+  }
+  &.audited {
+    background: linear-gradient(135deg, #52c41a, #73d13d);
+  }
+  &.settled {
+    background: linear-gradient(135deg, #1890ff, #40a9ff);
+  }
+  &.abnormal {
+    background: linear-gradient(135deg, var(--color-error), color-mix(in srgb, var(--color-error) 65%, #fff));
+  }
 }
 
 .status-left {
@@ -1639,7 +1541,9 @@ onMounted(() => {
   align-items: center;
   margin-bottom: 12px;
 
-  .section-title { margin-bottom: 0; }
+  .section-title {
+    margin-bottom: 0;
+  }
 }
 
 .add-image-btn {
@@ -1785,7 +1689,9 @@ onMounted(() => {
   font-size: 12px;
   color: var(--text-secondary);
 
-  &.special { color: #722ed1; }
+  &.special {
+    color: #722ed1;
+  }
 }
 
 .edit-items-list {
@@ -1974,36 +1880,6 @@ onMounted(() => {
     display: flex;
     gap: 12px;
     margin-top: 16px;
-  }
-}
-
-.category-multi-picker {
-  .category-multi-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 14px 16px;
-
-    .category-multi-title {
-      font-size: 16px;
-      font-weight: 600;
-    }
-
-    .category-multi-count {
-      font-size: 12px;
-      color: var(--color-text-tertiary, #999);
-    }
-  }
-
-  .category-multi-list {
-    max-height: 45vh;
-    overflow-y: auto;
-  }
-
-  .category-multi-footer {
-    display: flex;
-    gap: 12px;
-    padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
   }
 }
 </style>

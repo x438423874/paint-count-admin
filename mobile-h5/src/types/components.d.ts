@@ -11,9 +11,15 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
+    AppEmpty: typeof import('./../components/AppEmpty.vue')['default']
+    AppLoading: typeof import('./../components/AppLoading.vue')['default']
+    CategoryMultiPicker: typeof import('./../components/CategoryMultiPicker.vue')['default']
     NavBar: typeof import('./../components/NavBar.vue')['default']
+    OrderStatusTag: typeof import('./../components/OrderStatusTag.vue')['default']
+    PopupPicker: typeof import('./../components/PopupPicker.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
+    ShopPicker: typeof import('./../components/ShopPicker.vue')['default']
     TabBar: typeof import('./../components/TabBar.vue')['default']
     TenureMonthPicker: typeof import('./../components/TenureMonthPicker.vue')['default']
     VanActionSheet: typeof import('vant/es')['ActionSheet']

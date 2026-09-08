@@ -1,22 +1,25 @@
 <script setup lang="ts">
 import {
-  getWorkOrderPage,
-  getShopList,
-  getCategories,
-  getWorkOrderStatusCounts,
-  ocrRecognizeImage,
-  updateWorkOrder,
-  findDuplicateWorkOrders,
-  mergeWorkOrders,
   batchSettleWorkOrders,
   batchUnsettleWorkOrders,
+  findDuplicateWorkOrders,
+  getCategories,
+  getWorkOrderPage,
+  getWorkOrderStatusCounts,
+  mergeWorkOrders,
+  ocrRecognizeImage,
+  updateWorkOrder,
 } from '@/api/paint'
 import type { MyScope } from '@/api/paint'
-import type { PaintWorkOrder, PaintShop, PaintCategory, PageResult, PaintOrderStatus } from '@/api/types/paint'
-import { monthInTenure, getMyScopeCached } from '@/utils/tenure'
+import type { PageResult, PaintCategory, PaintOrderStatus, PaintWorkOrder } from '@/api/types/paint'
+import { getMyScopeCached, monthInTenure } from '@/utils/tenure'
+import { orderStatusTagType } from '@/constants/order-status'
 import { showNotify } from 'vant'
 import { compressImage } from '@/utils/image-compress'
+import { fetchImageAsFile } from '@/composables/useImageUpload'
+import { recentMonthOptions } from '@/utils/month-options'
 import { canBatchOcr as canBatchOcrRole, canEdit as canEditRole } from '@/utils/permission'
+import { useShopOptions } from '@/composables/useShopOptions'
 
 const router = useRouter()
 const allowBatchOcr = canBatchOcrRole()
@@ -32,7 +35,8 @@ const searchForm = reactive({
   isNewPart: undefined as boolean | undefined,
 })
 
-const shops = ref<PaintShop[]>([])
+// 门店走 dict store 共享缓存，全应用只请求一次（原为每页各自 getShopList）
+const { shops, shopColumns, ensureShops, getShopName } = useShopOptions()
 const categories = ref<PaintCategory[]>([])
 const orders = ref<PaintWorkOrder[]>([])
 const loading = ref(false)
@@ -71,57 +75,28 @@ const statusOptions = [
 const activeStatus = ref(0)
 const showFilterPopup = ref(false)
 
-const monthColumns = computed(() => {
-  const list = [{ text: '全部月份', value: '' }]
-  const now = new Date()
-  for (let i = 0; i < 12; i++) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
-    const value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
-    if (monthInTenure(value, scope.value)) list.push({ text: value, value })
-  }
-  return list
-})
-
-const shopColumns = computed(() => {
-  const cols = shops.value.map(s => ({ text: s.name, value: s.id }))
-  return [{ text: '全部门店', value: '' }, ...cols]
-})
-
-function getShopName(shopId: string) {
-  if (!shopId) return '全部门店'
-  const shop = shops.value.find(s => s.id === shopId)
-  return shop?.name || shopId
-}
-
-async function loadShops() {
-  try {
-    const res = await getShopList()
-    shops.value = res as any as PaintShop[]
-    if (shops.value.length === 1 && !searchForm.shopId) {
-      searchForm.shopId = shops.value[0].id
-    }
-  }
-  catch {
-    shops.value = []
-  }
-}
+const scope = ref<MyScope | null>(null)
+// 月份列统一走 recentMonthOptions（全部月份 + 近 12 个月 ∩ 在岗期）
+const monthColumns = computed(() => recentMonthOptions({ includeAll: true, scope: scope.value }))
 
 // ==================== 数据可见范围提示（在岗期口径） ====================
 
-const scope = ref<MyScope | null>(null)
 const scopeHintDismissed = ref(false)
 
 const scopeHintText = computed(() => {
-  if (!scope.value || scope.value.kind !== 'tenure') return ''
+  if (!scope.value || scope.value.kind !== 'tenure')
+    return ''
   // ISO 时间按本地时区格式化为 yyyy-MM-dd（避免 UTC 截断出现前一天）
   const fmt = (v?: string | null) => {
-    if (!v) return ''
+    if (!v)
+      return ''
     const d = new Date(v)
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
   }
   const parts = scope.value.shops.map((s) => {
     const start = fmt(s.startAt)
-    if (s.endAt) return `${s.shopName}（${start} ~ ${fmt(s.endAt)}，已离岗）`
+    if (s.endAt)
+      return `${s.shopName}（${start} ~ ${fmt(s.endAt)}，已离岗）`
     return `${s.shopName}（${start} 至今）`
   })
   return `数据范围：仅可查看您在岗期间结算的工单（按结算月份归属）。${parts.join('；')}`
@@ -157,8 +132,10 @@ async function loadStatusCounts() {
 }
 
 async function loadOrders(reset = false) {
-  if (loading.value) return
-  if (!reset && finished.value) return
+  if (loading.value)
+    return
+  if (!reset && finished.value)
+    return
 
   if (reset) {
     current.value = 1
@@ -172,13 +149,20 @@ async function loadOrders(reset = false) {
       current: current.value,
       size,
     }
-    if (searchForm.plateNumber) params.plateNumber = searchForm.plateNumber
-    if (searchForm.shopId) params.shopId = searchForm.shopId
-    if (searchForm.settlementMonth) params.settlementMonth = searchForm.settlementMonth
-    if (searchForm.status) params.status = searchForm.status
-    if (searchForm.isRework !== undefined) params.isRework = searchForm.isRework
-    if (searchForm.categoryId) params.categoryId = searchForm.categoryId
-    if (searchForm.isNewPart !== undefined) params.isNewPart = searchForm.isNewPart
+    if (searchForm.plateNumber)
+      params.plateNumber = searchForm.plateNumber
+    if (searchForm.shopId)
+      params.shopId = searchForm.shopId
+    if (searchForm.settlementMonth)
+      params.settlementMonth = searchForm.settlementMonth
+    if (searchForm.status)
+      params.status = searchForm.status
+    if (searchForm.isRework !== undefined)
+      params.isRework = searchForm.isRework
+    if (searchForm.categoryId)
+      params.categoryId = searchForm.categoryId
+    if (searchForm.isNewPart !== undefined)
+      params.isNewPart = searchForm.isNewPart
 
     const res = await getWorkOrderPage(params)
     const data = res as any as PageResult<PaintWorkOrder>
@@ -253,39 +237,20 @@ function goToCreate() {
 }
 
 function goVehicleHistory(order: any) {
-  if (!order.plateNumber) return
+  if (!order.plateNumber)
+    return
   if (order.vehicleId) {
     router.push({ name: '/work-order/vehicle-history', query: { id: order.vehicleId, plate: order.plateNumber } })
-  } else {
+  }
+  else {
     router.push({ name: '/work-order/vehicle-history', query: { plate: order.plateNumber } })
   }
 }
 
 function formatDate(dateStr?: string) {
-  if (!dateStr) return '-'
+  if (!dateStr)
+    return '-'
   return dateStr.slice(0, 10)
-}
-
-function getStatusType(status?: string): any {
-  const map: Record<string, any> = {
-    DRAFT: 'default',
-    PENDING: 'warning',
-    AUDITED: 'primary',
-    SETTLED: 'success',
-    ABNORMAL: 'danger',
-  }
-  return map[status || ''] || 'default'
-}
-
-function getStatusLabel(status?: string): string {
-  const map: Record<string, string> = {
-    DRAFT: '草稿',
-    PENDING: '待审核',
-    AUDITED: '已审核',
-    SETTLED: '已结算',
-    ABNORMAL: '异常',
-  }
-  return map[status || ''] || status || '-'
 }
 
 // ===== 列表状态缓存 =====
@@ -312,7 +277,8 @@ function saveListState() {
 
 function restoreListState(): boolean {
   const raw = sessionStorage.getItem(LIST_STATE_KEY)
-  if (!raw) return false
+  if (!raw)
+    return false
   try {
     const state = JSON.parse(raw)
     if (!state.timestamp || Date.now() - state.timestamp > STATE_MAX_AGE) {
@@ -320,11 +286,16 @@ function restoreListState(): boolean {
       return false
     }
     Object.assign(searchForm, state.searchForm || {})
-    if (state.activeStatus !== undefined) activeStatus.value = state.activeStatus
-    if (state.current !== undefined) current.value = state.current
-    if (state.orders) orders.value = state.orders
-    if (state.finished !== undefined) finished.value = state.finished
-    if (state.totalPaintCount !== undefined) totalPaintCount.value = state.totalPaintCount
+    if (state.activeStatus !== undefined)
+      activeStatus.value = state.activeStatus
+    if (state.current !== undefined)
+      current.value = state.current
+    if (state.orders)
+      orders.value = state.orders
+    if (state.finished !== undefined)
+      finished.value = state.finished
+    if (state.totalPaintCount !== undefined)
+      totalPaintCount.value = state.totalPaintCount
     nextTick(() => {
       window.scrollTo(0, state.scrollTop || 0)
     })
@@ -344,10 +315,12 @@ function clearListState() {
 const STATUS_QUERY_KEY = 'work-order-status-query'
 function applyStatusFromSession(): boolean {
   const q = sessionStorage.getItem(STATUS_QUERY_KEY)
-  if (!q) return false
+  if (!q)
+    return false
   sessionStorage.removeItem(STATUS_QUERY_KEY)
   const idx = statusOptions.findIndex(o => o.value === q)
-  if (idx === -1) return false
+  if (idx === -1)
+    return false
   activeStatus.value = idx
   searchForm.status = q as PaintOrderStatus
   return true
@@ -410,7 +383,7 @@ const batchOcrMode = ref<'selected' | 'all'>('selected')
 const batchOcrFillMode = ref<'basic' | 'items' | 'all'>('all')
 const batchOcrCancelled = ref(false)
 const batchOcrProgress = ref({ current: 0, total: 0, success: 0, failed: 0, skipped: 0 })
-const batchOcrResult = ref<{ success: number; failed: number; skipped: number; details: string[] } | null>(null)
+const batchOcrResult = ref<{ success: number, failed: number, skipped: number, details: string[] } | null>(null)
 
 function canBatchOcr(order: PaintWorkOrder): boolean {
   return (order.status === 'DRAFT' || order.status === 'PENDING') && !!order.images && order.images.length > 0
@@ -421,12 +394,14 @@ const ocrPendingAllCount = computed(() => orders.value.filter(o => canBatchOcr(o
 
 function toggleSelectionMode() {
   selectionMode.value = !selectionMode.value
-  if (!selectionMode.value) checkedOrderIds.value = []
+  if (!selectionMode.value)
+    checkedOrderIds.value = []
 }
 
 function toggleOrderChecked(id: string) {
   const idx = checkedOrderIds.value.indexOf(id)
-  if (idx >= 0) checkedOrderIds.value.splice(idx, 1)
+  if (idx >= 0)
+    checkedOrderIds.value.splice(idx, 1)
   else checkedOrderIds.value.push(id)
 }
 
@@ -465,7 +440,8 @@ function cancelBatchOcr() {
 }
 
 function closeBatchOcr() {
-  if (batchOcrLoading.value) return
+  if (batchOcrLoading.value)
+    return
   showBatchOcr.value = false
 }
 
@@ -498,10 +474,7 @@ async function handleBatchOcrFill() {
 
     try {
       const imageUrl = order.images![0].url
-      const resp = await fetch(imageUrl)
-      if (!resp.ok) throw new Error('获取图片失败')
-      const blob = await resp.blob()
-      const file = new File([blob], 'image.jpg', { type: blob.type || 'image/jpeg' })
+      const file = await fetchImageAsFile(imageUrl)
       const compressed = await compressImage(file)
       const ocrResult = await ocrRecognizeImage(compressed, order.shopId, batchOcrFillMode.value)
 
@@ -616,14 +589,17 @@ async function handleBatchSettle() {
     const res = await batchSettleWorkOrders(ids)
     if (res.failed === 0) {
       showNotify({ type: 'success', message: `批量结算成功：${res.success} 条` })
-    } else {
+    }
+    else {
       showNotify({ type: 'warning', message: `结算完成：成功 ${res.success} 条，失败 ${res.failed} 条` })
     }
     checkedOrderIds.value = []
     await loadOrders(true)
-  } catch (e: any) {
+  }
+  catch (e: any) {
     showNotify({ type: 'danger', message: e?.message || '批量结算失败' })
-  } finally {
+  }
+  finally {
     batchSettleLoading.value = false
   }
 }
@@ -639,20 +615,24 @@ async function handleBatchUnsettle() {
     const res = await batchUnsettleWorkOrders(ids)
     if (res.failed === 0) {
       showNotify({ type: 'success', message: `批量取消结算成功：${res.success} 条` })
-    } else {
+    }
+    else {
       showNotify({ type: 'warning', message: `取消结算完成：成功 ${res.success} 条，失败 ${res.failed} 条` })
     }
     checkedOrderIds.value = []
     await loadOrders(true)
-  } catch (e: any) {
+  }
+  catch (e: any) {
     showNotify({ type: 'danger', message: e?.message || '批量取消结算失败' })
-  } finally {
+  }
+  finally {
     batchUnsettleLoading.value = false
   }
 }
 
 function onCardClick(order: PaintWorkOrder) {
-  if (selectionMode.value) toggleOrderChecked(order.id)
+  if (selectionMode.value)
+    toggleOrderChecked(order.id)
   else goToDetail(order.id)
 }
 
@@ -662,10 +642,6 @@ const mergeLoading = ref(false)
 const mergeTarget = ref<PaintWorkOrder | null>(null)
 const mergeCandidates = ref<PaintWorkOrder[]>([])
 const mergeSelectedIds = ref<string[]>([])
-
-function canMerge(order: PaintWorkOrder): boolean {
-  return !!order._isDuplicate && (order.status === 'DRAFT' || order.status === 'PENDING')
-}
 
 async function openMergePopup(order: PaintWorkOrder) {
   if (!order.orderNo) {
@@ -693,12 +669,14 @@ async function openMergePopup(order: PaintWorkOrder) {
 
 function toggleMergeSelect(orderId: string) {
   const idx = mergeSelectedIds.value.indexOf(orderId)
-  if (idx >= 0) mergeSelectedIds.value.splice(idx, 1)
+  if (idx >= 0)
+    mergeSelectedIds.value.splice(idx, 1)
   else mergeSelectedIds.value.push(orderId)
 }
 
 async function handleMerge() {
-  if (!mergeTarget.value || mergeSelectedIds.value.length === 0) return
+  if (!mergeTarget.value || mergeSelectedIds.value.length === 0)
+    return
   mergeLoading.value = true
   try {
     await mergeWorkOrders(mergeTarget.value.id, mergeSelectedIds.value)
@@ -721,7 +699,8 @@ const sentinelRef = ref<HTMLElement | null>(null)
 let scrollObserver: IntersectionObserver | null = null
 
 function setupScrollObserver() {
-  if (!sentinelRef.value) return
+  if (!sentinelRef.value)
+    return
   if (scrollObserver) {
     scrollObserver.disconnect()
     scrollObserver = null
@@ -739,7 +718,11 @@ function setupScrollObserver() {
 }
 
 onMounted(() => {
-  loadShops()
+  // 仅绑定 1 个门店时自动选中（沿用原 loadShops 的副作用，改为消费共享缓存）
+  ensureShops().then((list) => {
+    if (list.length === 1 && !searchForm.shopId)
+      searchForm.shopId = list[0].id
+  })
   loadCategories()
   loadScope()
   initOnMounted()
@@ -852,7 +835,7 @@ onActivated(() => {
     <!-- 列表 -->
     <van-pull-refresh v-model="refreshing" @refresh="onRefresh">
       <div class="order-list">
-        <van-empty v-if="orders.length === 0 && !loading" description="暂无工单数据" />
+        <AppEmpty v-if="orders.length === 0 && !loading" description="暂无工单数据" />
 
         <div
           v-for="order in orders"
@@ -861,7 +844,7 @@ onActivated(() => {
           :class="{ checked: selectionMode && checkedOrderIds.includes(order.id), selecting: selectionMode }"
           @click="onCardClick(order)"
         >
-          <div class="status-stripe" :class="`stripe-${getStatusType(order.status)}`" />
+          <div class="status-stripe" :class="`stripe-${orderStatusTagType(order.status)}`" />
           <van-checkbox
             v-if="selectionMode"
             :model-value="checkedOrderIds.includes(order.id)"
@@ -872,8 +855,8 @@ onActivated(() => {
           <div class="card-body">
             <div class="card-top">
               <div class="plate-wrap" @click.stop="goVehicleHistory(order)">
-              <van-icon name="logistics" size="16" color="var(--color-primary)" />
-              <span class="plate-number">{{ order.plateNumber || '未识别车牌' }}</span>
+                <van-icon name="logistics" size="16" color="var(--color-primary)" />
+                <span class="plate-number">{{ order.plateNumber || '未识别车牌' }}</span>
               </div>
               <div class="card-tags">
                 <van-tag v-if="order._isDuplicate" type="danger" size="medium" class="dup-tag">
@@ -889,9 +872,7 @@ onActivated(() => {
                   <van-icon name="photo-o" size="12" />
                   <span>{{ order._count?.images ?? order.images?.length }}</span>
                 </van-tag>
-                <van-tag :type="getStatusType(order.status)" size="medium">
-                  {{ getStatusLabel(order.status) }}
-                </van-tag>
+                <OrderStatusTag :status="order.status" size="medium" />
                 <van-tag v-if="order.isRework" type="danger" size="medium">
                   返工
                 </van-tag>
@@ -934,9 +915,7 @@ onActivated(() => {
           </div>
         </div>
 
-        <div v-if="loading" class="loading-wrap">
-          <van-loading size="24px">加载中...</van-loading>
-        </div>
+        <AppLoading v-if="loading" />
 
         <div v-if="finished && orders.length > 0" class="finished-text">
           没有更多了
@@ -984,7 +963,9 @@ onActivated(() => {
         </div>
         <div class="filter-popup-body">
           <div class="filter-group">
-            <div class="filter-group-title">结算月份</div>
+            <div class="filter-group-title">
+              结算月份
+            </div>
             <div class="filter-options">
               <div
                 v-for="m in monthColumns"
@@ -998,7 +979,9 @@ onActivated(() => {
             </div>
           </div>
           <div class="filter-group">
-            <div class="filter-group-title">所属门店</div>
+            <div class="filter-group-title">
+              所属门店
+            </div>
             <div class="filter-options">
               <div
                 v-for="s in shopColumns"
@@ -1012,7 +995,9 @@ onActivated(() => {
             </div>
           </div>
           <div class="filter-group">
-            <div class="filter-group-title">返工标记</div>
+            <div class="filter-group-title">
+              返工标记
+            </div>
             <div class="filter-options">
               <div
                 class="filter-option"
@@ -1038,7 +1023,9 @@ onActivated(() => {
             </div>
           </div>
           <div class="filter-group">
-            <div class="filter-group-title">部位</div>
+            <div class="filter-group-title">
+              部位
+            </div>
             <div class="filter-options">
               <div
                 class="filter-option"
@@ -1059,7 +1046,9 @@ onActivated(() => {
             </div>
           </div>
           <div class="filter-group">
-            <div class="filter-group-title">新件</div>
+            <div class="filter-group-title">
+              新件
+            </div>
             <div class="filter-options">
               <div
                 class="filter-option"
@@ -1079,10 +1068,10 @@ onActivated(() => {
           </div>
         </div>
         <div class="filter-popup-footer">
-          <van-button block round @click="resetFilter">
+          <van-button round block @click="resetFilter">
             重置
           </van-button>
-          <van-button type="primary" block round @click="confirmFilter">
+          <van-button type="primary" round block @click="confirmFilter">
             确定
           </van-button>
         </div>
@@ -1105,7 +1094,9 @@ onActivated(() => {
         <div class="batch-ocr-desc">
           仅处理待审核/草稿状态、含图片且存在空白字段的工单。
         </div>
-        <div class="batch-ocr-section-title">处理范围</div>
+        <div class="batch-ocr-section-title">
+          处理范围
+        </div>
         <van-radio-group v-model="batchOcrMode" :disabled="batchOcrLoading" direction="horizontal" class="batch-ocr-mode">
           <van-radio name="selected" :disabled="checkedOrderIds.length === 0">
             选中工单
@@ -1114,14 +1105,24 @@ onActivated(() => {
             已加载全部
           </van-radio>
         </van-radio-group>
-        <div class="batch-ocr-section-title">识别模式</div>
+        <div class="batch-ocr-section-title">
+          识别模式
+        </div>
         <van-radio-group v-model="batchOcrFillMode" :disabled="batchOcrLoading" direction="horizontal" class="batch-ocr-mode">
-          <van-radio name="all">全部</van-radio>
-          <van-radio name="basic">仅基础资料</van-radio>
-          <van-radio name="items">仅部位</van-radio>
+          <van-radio name="all">
+            全部
+          </van-radio>
+          <van-radio name="basic">
+            仅基础资料
+          </van-radio>
+          <van-radio name="items">
+            仅部位
+          </van-radio>
         </van-radio-group>
         <div class="batch-ocr-pending">
-          可处理数量：<van-tag type="success">{{ batchOcrMode === 'selected' ? ocrPendingSelectedCount : ocrPendingAllCount }} 条</van-tag>
+          可处理数量：<van-tag type="success">
+            {{ batchOcrMode === 'selected' ? ocrPendingSelectedCount : ocrPendingAllCount }} 条
+          </van-tag>
         </div>
         <div v-if="batchOcrLoading || batchOcrResult" class="batch-ocr-progress">
           <div class="progress-head">
@@ -1133,9 +1134,15 @@ onActivated(() => {
             stroke-width="6"
           />
           <div class="progress-stats">
-            <van-tag type="success" size="medium">成功 {{ batchOcrProgress.success }}</van-tag>
-            <van-tag type="danger" size="medium">失败 {{ batchOcrProgress.failed }}</van-tag>
-            <van-tag type="warning" size="medium">跳过 {{ batchOcrProgress.skipped }}</van-tag>
+            <van-tag type="success" size="medium">
+              成功 {{ batchOcrProgress.success }}
+            </van-tag>
+            <van-tag type="danger" size="medium">
+              失败 {{ batchOcrProgress.failed }}
+            </van-tag>
+            <van-tag type="warning" size="medium">
+              跳过 {{ batchOcrProgress.skipped }}
+            </van-tag>
           </div>
         </div>
         <div v-if="batchOcrResult" class="batch-ocr-result">
@@ -1149,17 +1156,17 @@ onActivated(() => {
           </div>
         </div>
         <div class="batch-ocr-actions">
-          <van-button v-if="batchOcrLoading" type="danger" block round @click="cancelBatchOcr">
+          <van-button v-if="batchOcrLoading" type="danger" round block @click="cancelBatchOcr">
             取消处理
           </van-button>
-          <van-button v-else-if="batchOcrResult" type="primary" block round @click="closeBatchOcr">
+          <van-button v-else-if="batchOcrResult" type="primary" round block @click="closeBatchOcr">
             关闭
           </van-button>
           <van-button
             v-else
             type="primary"
-            block
-            round
+
+            round block
             :disabled="(batchOcrMode === 'selected' ? ocrPendingSelectedCount : ocrPendingAllCount) === 0"
             :loading="batchOcrLoading"
             @click="handleBatchOcrFill"
@@ -1177,9 +1184,7 @@ onActivated(() => {
           <span class="merge-popup-title">合并重复工单</span>
           <van-icon name="cross" size="20" color="var(--text-tertiary)" @click="showMergePopup = false" />
         </div>
-        <div v-if="mergeLoading && mergeCandidates.length === 0" class="merge-loading">
-          <van-loading size="24px">加载中...</van-loading>
-        </div>
+        <AppLoading v-if="mergeLoading && mergeCandidates.length === 0" />
         <div v-else-if="mergeCandidates.length === 0" class="merge-empty">
           未找到重复工单
         </div>
@@ -1229,7 +1234,7 @@ onActivated(() => {
           </div>
         </div>
         <div class="merge-actions">
-          <van-button block round :disabled="mergeSelectedIds.length === 0" :loading="mergeLoading" type="danger" @click="handleMerge">
+          <van-button round block :disabled="mergeSelectedIds.length === 0" :loading="mergeLoading" type="danger" @click="handleMerge">
             合并选中的 {{ mergeSelectedIds.length }} 条工单
           </van-button>
         </div>
@@ -1367,10 +1372,18 @@ onActivated(() => {
   bottom: 0;
   width: 4px;
 
-  &.stripe-primary { background: var(--color-primary); }
-  &.stripe-success { background: var(--color-success); }
-  &.stripe-warning { background: var(--color-warning); }
-  &.stripe-danger { background: var(--color-danger); }
+  &.stripe-primary {
+    background: var(--color-primary);
+  }
+  &.stripe-success {
+    background: var(--color-success);
+  }
+  &.stripe-warning {
+    background: var(--color-warning);
+  }
+  &.stripe-danger {
+    background: var(--color-danger);
+  }
 }
 
 .card-checkbox {

@@ -25,14 +25,15 @@ export type RequestError = AxiosError<{
 const REFRESH_LOCK_KEY = 'paint_h5_refresh_lock'
 const REFRESH_CHANNEL = 'paint_h5_token_refresh'
 
-const refreshChannel: BroadcastChannel | null =
-  typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel(REFRESH_CHANNEL) : null
+const refreshChannel: BroadcastChannel | null
+  = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel(REFRESH_CHANNEL) : null
 
 let leaderWaiters: Array<(ok: boolean) => void> = []
 
 if (refreshChannel) {
   refreshChannel.onmessage = (ev: MessageEvent<{ type: 'done' | 'fail' }>) => {
-    if (!leaderWaiters.length) return
+    if (!leaderWaiters.length)
+      return
     const waiters = leaderWaiters
     leaderWaiters = []
     const ok = ev.data.type === 'done'
@@ -42,18 +43,20 @@ if (refreshChannel) {
 
 /** 抢占跨标签页刷新锁；成功表示本标签页作为 leader 执行刷新。 */
 function claimLeader(): boolean {
-  if (!refreshChannel) return true
+  if (!refreshChannel)
+    return true
   const now = Date.now()
   const raw = localStorage.getItem(REFRESH_LOCK_KEY)
   const lock = raw ? Number(raw) : 0
-  if (now - lock < 15000) return false
+  if (now - lock < 15000)
+    return false
   localStorage.setItem(REFRESH_LOCK_KEY, String(now))
   return true
 }
 
 /** follower 等待 leader 的刷新结果；带超时保护，避免 leader 崩溃后一直挂起。 */
 function waitForLeader(): Promise<boolean> {
-  return new Promise(resolve => {
+  return new Promise((resolve) => {
     leaderWaiters.push(resolve)
     setTimeout(() => {
       const idx = leaderWaiters.indexOf(resolve)
@@ -77,7 +80,7 @@ function notifyLeaderFail() {
 
 // 刷新 token 状态管理
 let refreshPromise: Promise<void> | null = null
-let taskQueue: Array<{ resolve: (value: any) => void; reject: (reason?: any) => void; config: any }> = []
+let taskQueue: Array<{ resolve: (value: any) => void, reject: (reason?: any) => void, config: any }> = []
 
 /** 用最新 token 重放队列中的请求（leader 刷新成功或 follower 收到 done 后调用） */
 function replayQueue() {
@@ -124,10 +127,12 @@ async function refreshOnce(): Promise<void> {
 /** 解析 token 剩余有效时间（秒） */
 function getTokenRemainingTime(): number {
   const accessToken = getToken()
-  if (!accessToken) return -1
+  if (!accessToken)
+    return -1
   try {
     const payload = JSON.parse(atob(accessToken.split('.')[1]))
-    if (!payload.exp) return -1
+    if (!payload.exp)
+      return -1
     return payload.exp - Math.floor(Date.now() / 1000)
   }
   catch {
@@ -139,10 +144,12 @@ function getTokenRemainingTime(): number {
 async function tryProactiveRefresh(): Promise<boolean> {
   const accessToken = getToken()
   // 未登录（无 access token）：无需刷新，直接放行请求（如登录接口本身需要无 token 发出）
-  if (!accessToken) return true
+  if (!accessToken)
+    return true
 
   const remaining = getTokenRemainingTime()
-  if (remaining > 120) return true
+  if (remaining > 120)
+    return true
 
   await refreshOnce()
   // 刷新成功会写入新 token；失败则已 clearToken 并跳转登录
@@ -183,8 +190,9 @@ function errorHandler(error: RequestError): Promise<any> {
 }
 
 async function doRefreshToken() {
+  // 提到 try 外声明：catch 块中需与其它标签页写入的最新 token 比较
+  const refreshTokenValue = getRefreshToken()
   try {
-    const refreshTokenValue = getRefreshToken()
     const { data } = await axios.post('/auth/refreshToken', { refreshToken: refreshTokenValue }, {
       baseURL: import.meta.env.VITE_APP_API_BASE_URL,
       timeout: 10000,

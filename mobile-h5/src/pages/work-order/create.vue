@@ -1,14 +1,21 @@
 <script setup lang="ts">
-import { createWorkOrder, getShopList, getShopCategoriesWithStandard, uploadPendingImage, uploadPendingImageToOrder, ocrRecognizeImage, getSpecialPaintList, fetchOrderNoRules, fetchVehicleByPlate } from '@/api/paint'
+import { createWorkOrder, fetchOrderNoRules, fetchVehicleByPlate, getShopCategoriesWithStandard, getSpecialPaintList, ocrRecognizeImage, uploadPendingImage, uploadPendingImageToOrder } from '@/api/paint'
 import type { OrderNoRule } from '@/api/paint'
-import type { PaintShop, PaintStandard, PaintSpecialPaint, PaintVehicle, CreateWorkOrderItemDto } from '@/api/types/paint'
+import type { CreateWorkOrderItemDto, PaintSpecialPaint, PaintStandard, PaintVehicle } from '@/api/types/paint'
 import { compressImage } from '@/utils/image-compress'
 import { analyzeOrderNoErrors } from '@/utils/order-no-rule'
+import { phoneRegex, plateNumberRegex, vinRegex } from '@/utils/validators'
+import { computeItemPaintCount, computeTotalPaintCount, getPaintDecimalLength, normalizeOverridePaintCount } from '@/utils/paint-count'
+import { applyOcrFields } from '@/utils/ocr-fields'
+import { recentMonthOptions } from '@/utils/month-options'
+import { describeUploadError, uploadCompressed } from '@/composables/useImageUpload'
+import { useShopOptions } from '@/composables/useShopOptions'
 
 const route = useRoute()
 const router = useRouter()
 const isManual = ref(false)
-const shops = ref<PaintShop[]>([])
+// 门店走 dict store 共享缓存，全应用只请求一次（原为每页各自 getShopList）
+const { shops, ensureShops } = useShopOptions({ includeAll: false })
 const standards = ref<PaintStandard[]>([])
 const specialPaints = ref<PaintSpecialPaint[]>([])
 const submitting = ref(false)
@@ -24,13 +31,7 @@ const vehicleLookingUp = ref(false)
 const vehicleFound = ref<PaintVehicle | null>(null)
 const vehicleMatchedFields = ref<string[]>([])
 
-// 校验正则
-// 车牌号正则：支持普通7位（省份+字母+5位）、新能源8位、旧6位（字母+5位字母数字）
-// 省份含：31省市+使领+军警武警+军区(海空北沈兰济南广成武翼)
-const PLATE_PROVINCE = '京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼使领军警海空北沈兰济南广成武翼'
-const plateNumberRegex = new RegExp(`^([${PLATE_PROVINCE}][A-Z][A-HJ-NP-Z0-9]{4,5}[A-HJ-NP-Z0-9挂学警港澳]|[A-Z][A-HJ-NP-Z0-9]{5})$`)
-const phoneRegex = /^1[3-9]\d{9}$/
-const vinRegex = /^[A-HJ-NPR-Z0-9]{17}$/
+// 校验正则统一维护在 utils/validators（车牌/手机号/车架号）
 
 const form = reactive({
   shopId: '',
@@ -53,26 +54,21 @@ const shopName = computed(() => {
 })
 
 const showShopPicker = ref(false)
-const shopColumns = computed(() => shops.value.map(s => ({ text: s.name, value: s.id })))
 const showDatePicker = ref(false)
 const showMonthPicker = ref(false)
 
-// 结算月份选择列：当前月份及往前12个月
-const monthColumns = computed(() => {
-  const list = []
-  const now = new Date()
-  for (let i = 0; i < 13; i++) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
-    const value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
-    list.push({ text: value, value })
-  }
-  return list
-})
+// 批量上传模式：
+//  'create' = 直接创建工单：图片作为当前工单的 BEFORE 图（需先提交创建工单拿到工单号）
+//  'ocr'    = OCR 创建工单：图片进图片池，OCR 后自动按门店/结算月份 + OCR 资料补建新工单
+const uploadMode = ref<'create' | 'ocr'>('ocr')
+// 提交创建工单成功后记录工单 id，供“直接创建工单”模式上传图片使用
+const createdOrderId = ref<string>('')
+const createdOrderNo = ref<string>('')
+// 上传模式选择弹窗
+const showUploadModePicker = ref(false)
 
-function onMonthConfirm({ selectedValues }: any) {
-  form.settlementMonth = selectedValues[0]
-  showMonthPicker.value = false
-}
+// 结算月份选择列统一走 recentMonthOptions（当月及往前共 13 个月）
+const monthColumns = computed(() => recentMonthOptions({ months: 13 }))
 
 const dateColumns = computed(() => {
   const list = []
@@ -87,36 +83,18 @@ const dateColumns = computed(() => {
   return list
 })
 
-function onShopConfirm({ selectedValues }: any) {
-  form.shopId = selectedValues[0]
-  showShopPicker.value = false
-  if (selectedValues[0]) {
-    loadStandards(selectedValues[0])
-    loadOrderNoRules(selectedValues[0])
+function onShopConfirm(value: string) {
+  form.shopId = value
+  if (value) {
+    loadStandards(value)
+    loadOrderNoRules(value)
   }
 }
 
-function onDateConfirm({ selectedValues }: any) {
-  form.orderDate = selectedValues[0]
-  showDatePicker.value = false
-  if (selectedValues[0] && selectedValues[0].length >= 7) {
-    form.settlementMonth = selectedValues[0].slice(0, 7)
-  }
-}
-
-async function loadShops() {
-  try {
-    const res = await getShopList()
-    shops.value = res as any as PaintShop[]
-    // 数据权限：若用户仅绑定 1 个门店，自动选中并加载该门店标准
-    if (shops.value.length === 1 && !form.shopId) {
-      form.shopId = shops.value[0].id
-      await loadStandards(form.shopId)
-      loadOrderNoRules(form.shopId)
-    }
-  }
-  catch {
-    shops.value = []
+function onDateConfirm(value: string) {
+  form.orderDate = value
+  if (value && value.length >= 7) {
+    form.settlementMonth = value.slice(0, 7)
   }
 }
 
@@ -157,27 +135,8 @@ async function loadOrderNoRules(shopId: string) {
   }
 }
 
-// 总幅数计算
-const totalPaintCount = computed(() => {
-  return form.items.reduce((sum, item) => {
-    if (!item.quantity || item.quantity <= 0) return sum
-    // 手动覆盖幅数
-    if (item.overridePaintCount !== undefined && item.overridePaintCount !== null) {
-      return sum + item.overridePaintCount
-    }
-    const std = standards.value.find(s => s.categoryId === item.categoryId)
-    if (!std) return sum
-    const coefficient = Number(std.coefficient) || 0
-    const newPartAddition = Number(std.newPartAddition) || 0
-    let specialMultiplier = 1
-    if (item.specialPaintId) {
-      const sp = specialPaints.value.find(s => s.id === item.specialPaintId)
-      if (sp) specialMultiplier = Number(sp.multiplier) || 1
-    }
-    const paintCount = (item.quantity * coefficient + item.newPartQuantity * newPartAddition) * specialMultiplier
-    return sum + paintCount
-  }, 0)
-})
+// 总幅数计算（统一走 utils/paint-count，与详情页编辑口径一致）
+const totalPaintCount = computed(() => computeTotalPaintCount(form.items, standards.value, specialPaints.value))
 
 /**
  * 负幅数自动识别为调整单：
@@ -197,34 +156,18 @@ const isAdjustmentOrder = computed(() =>
 /** 获取单个 item 的自动计算幅数 */
 function getItemAutoPaintCount(index: number): number {
   const item = form.items[index]
-  if (!item || !item.quantity || item.quantity <= 0) return 0
+  if (!item || !item.quantity || item.quantity <= 0)
+    return 0
   const std = standards.value.find(s => s.categoryId === item.categoryId)
-  if (!std) return 0
-  const coefficient = Number(std.coefficient) || 0
-  const newPartAddition = Number(std.newPartAddition) || 0
-  let specialMultiplier = 1
-  if (item.specialPaintId) {
-    const sp = specialPaints.value.find(s => s.id === item.specialPaintId)
-    if (sp) specialMultiplier = Number(sp.multiplier) || 1
-  }
-  return (item.quantity * coefficient + (item.newPartQuantity || 0) * newPartAddition) * specialMultiplier
+  return computeItemPaintCount(item, std, specialPaints.value)
 }
 
 // 幅数小数位控制：默认显示1位小数，聚焦输入时允许输入2位小数
 const paintFocusIndex = ref<number | null>(null)
 
-function getPaintDecimalLength(index: number, value?: number | string | null): number {
-  if (paintFocusIndex.value === index) return 2
-  const decimals = String(value ?? '').split('.')[1]?.length ?? 0
-  return Math.min(Math.max(decimals, 1), 2)
-}
-
 function onPaintCountBlur(item: CreateWorkOrderItemDto) {
   paintFocusIndex.value = null
-  if (item.overridePaintCount !== undefined && item.overridePaintCount !== null) {
-    // 失焦后规范化为最多2位小数，避免浮点误差与超长小数
-    item.overridePaintCount = Number(Number(item.overridePaintCount).toFixed(2))
-  }
+  normalizeOverridePaintCount(item)
 }
 
 // 特殊车漆选项
@@ -241,16 +184,15 @@ function openSpecialPaintPicker(index: number) {
   showSpecialPaintPicker.value = true
 }
 
-function onSpecialPaintConfirm({ selectedValues }: any) {
-  const value = selectedValues[0]
+function onSpecialPaintConfirm(value: string) {
   if (editingSpecialPaintIndex.value >= 0 && form.items[editingSpecialPaintIndex.value]) {
     form.items[editingSpecialPaintIndex.value].specialPaintId = value || undefined
   }
-  showSpecialPaintPicker.value = false
 }
 
 function getSpecialPaintName(specialPaintId?: string) {
-  if (!specialPaintId) return '无'
+  if (!specialPaintId)
+    return '无'
   const sp = specialPaints.value.find(s => s.id === specialPaintId)
   return sp ? `${sp.name} x${sp.multiplier}` : '无'
 }
@@ -333,18 +275,20 @@ async function handleSubmit(opts?: { skipStrict?: boolean }) {
       phone: form.phone || undefined,
       remark: form.remark || undefined,
       isAdjustment: isAdjustmentOrder.value || undefined,
-      items: validItems.length > 0 ? validItems.map((it) => {
-        const item: any = {
-          categoryId: it.categoryId,
-          quantity: it.quantity,
-          newPartQuantity: it.newPartQuantity,
-          specialPaintId: it.specialPaintId || undefined,
-        }
-        if (it.overridePaintCount !== undefined && it.overridePaintCount !== null) {
-          item.overridePaintCount = it.overridePaintCount
-        }
-        return item
-      }) : undefined,
+      items: validItems.length > 0
+        ? validItems.map((it) => {
+            const item: any = {
+              categoryId: it.categoryId,
+              quantity: it.quantity,
+              newPartQuantity: it.newPartQuantity,
+              specialPaintId: it.specialPaintId || undefined,
+            }
+            if (it.overridePaintCount !== undefined && it.overridePaintCount !== null) {
+              item.overridePaintCount = it.overridePaintCount
+            }
+            return item
+          })
+        : undefined,
     })
     // 记录新建工单，供“直接创建工单”模式上传图片使用
     createdOrderId.value = created?.id || ''
@@ -368,13 +312,14 @@ async function lookupVehicle(plate: string) {
     return
   }
   // 已匹配到同一车牌则不重复查询
-  if (vehicleFound.value?.plateNumber === normalized) return
+  if (vehicleFound.value?.plateNumber === normalized)
+    return
   vehicleLookingUp.value = true
   try {
     const data = await fetchVehicleByPlate(normalized)
     if (data) {
       vehicleFound.value = data
-      const fieldMap: Array<{ key: 'vin' | 'carModel' | 'brand' | 'customerName' | 'phone' | 'contactPerson'; vehicleKey: 'vin' | 'carModel' | 'brand' | 'customerName' | 'phone' | 'contactPerson'; label: string }> = [
+      const fieldMap: Array<{ key: 'vin' | 'carModel' | 'brand' | 'customerName' | 'phone' | 'contactPerson', vehicleKey: 'vin' | 'carModel' | 'brand' | 'customerName' | 'phone' | 'contactPerson', label: string }> = [
         { key: 'vin', vehicleKey: 'vin', label: '车架号' },
         { key: 'carModel', vehicleKey: 'carModel', label: '车型' },
         { key: 'brand', vehicleKey: 'brand', label: '品牌' },
@@ -436,7 +381,8 @@ function onPlateNumberInput() {
 
 // 跳转车辆历史工单页
 function goVehicleHistory() {
-  if (!vehicleFound.value) return
+  if (!vehicleFound.value)
+    return
   router.push({ name: '/work-order/vehicle-history', query: { id: vehicleFound.value.id, plate: vehicleFound.value.plateNumber } })
 }
 
@@ -451,6 +397,17 @@ function handleTakePhoto() {
   }
   // 先选择上传模式（直接创建工单 / OCR 创建工单）
   showUploadModePicker.value = true
+}
+
+// 上传模式选择（van-action-sheet，选择后自动关闭并继续）
+const uploadModeActions = [
+  { name: '直接创建工单', subname: '图片作为当前工单的施工前照片，直接归入工单（需先提交创建工单）' },
+  { name: 'OCR 创建工单', subname: '图片存入图片池，系统后台 OCR 识别后按门店/月份自动补建新工单' },
+]
+
+function onUploadModeSelect(action: { name: string }) {
+  uploadMode.value = action.name === '直接创建工单' ? 'create' : 'ocr'
+  onUploadModeConfirm()
 }
 
 // 选择上传模式后进入文件选择
@@ -479,7 +436,8 @@ function pickFilesAndUpload() {
   input.multiple = true
   input.onchange = async (e: Event) => {
     const files = Array.from((e.target as HTMLInputElement).files || [])
-    if (files.length === 0) return
+    if (files.length === 0)
+      return
     await batchQuickCreate(files)
   }
   input.click()
@@ -488,20 +446,10 @@ function pickFilesAndUpload() {
 // 批量快速创建相关状态
 const batchCreating = ref(false)
 const batchProgress = ref({ current: 0, total: 0, success: 0, failed: 0 })
-const batchResults = ref<Array<{ fileName: string; success: boolean; message: string }>>([])
+const batchResults = ref<Array<{ fileName: string, success: boolean, message: string }>>([])
 const showBatchResult = ref(false)
 // OCR 识别模式：basic 仅基础资料 / items 仅部位 / all 全部（用于单张图片手动智能识别）
 const ocrMode = ref<'basic' | 'items' | 'all'>('basic')
-
-// 批量上传模式：
-//  'create' = 直接创建工单：图片作为当前工单的 BEFORE 图（需先提交创建工单拿到工单号）
-//  'ocr'    = OCR 创建工单：图片进图片池，OCR 后自动按门店/结算月份 + OCR 资料补建新工单
-const uploadMode = ref<'create' | 'ocr'>('ocr')
-// 提交创建工单成功后记录工单 id，供“直接创建工单”模式上传图片使用
-const createdOrderId = ref<string>('')
-const createdOrderNo = ref<string>('')
-// 上传模式选择弹窗
-const showUploadModePicker = ref(false)
 
 async function batchQuickCreate(files: File[]) {
   batchCreating.value = true
@@ -513,49 +461,21 @@ async function batchQuickCreate(files: File[]) {
     duration: 0,
   })
 
-  // 串行上传 + 失败重试，避免并发压垮后端和触发限流
-  const MAX_RETRY = 2
-  const RETRY_DELAY = 2000
-
+  // 串行上传（压缩 + 429/5xx 自动重试统一走 useImageUpload），避免并发压垮后端和触发限流
   for (const file of files) {
     batchProgress.value.current++
-    let lastErr: any = null
-    let success = false
 
-    for (let attempt = 0; attempt <= MAX_RETRY; attempt++) {
-      try {
-        const compressed = await compressImage(file)
-        if (uploadMode.value === 'create') {
-          // 直接创建工单：图片作为当前工单的 BEFORE 图，不经图片池
-          await uploadPendingImageToOrder(compressed, form.shopId, createdOrderId.value)
-        }
-        else {
-          // OCR 创建工单：上传到图片池，后端 OCR 后自动按门店/结算月份 + OCR 资料补建工单
-          await uploadPendingImage(compressed, form.shopId, form.settlementMonth || undefined, 'CREATE')
-        }
-        success = true
-        lastErr = null
-        break
+    const doUpload = (compressed: File) => {
+      if (uploadMode.value === 'create') {
+        // 直接创建工单：图片作为当前工单的 BEFORE 图，不经图片池
+        return uploadPendingImageToOrder(compressed, form.shopId, createdOrderId.value)
       }
-      catch (err: any) {
-        lastErr = err
-        // 429 限流或 5xx 服务端错误：等待后重试
-        const status = err?.response?.status || err?.statusCode
-        if ((status === 429 || (status >= 500 && status < 600)) && attempt < MAX_RETRY) {
-          await new Promise(r => setTimeout(r, RETRY_DELAY))
-          continue
-        }
-        // 401 未登录不重试，直接提示
-        if (status === 401) {
-          showNotify({ type: 'danger', message: '登录已过期，请重新登录' })
-          setTimeout(() => router.push({ name: 'Login' }), 1500)
-        }
-        // 其他错误（如 400 参数错误）不重试
-        break
-      }
+      // OCR 创建工单：上传到图片池，后端 OCR 后自动按门店/结算月份 + OCR 资料补建工单
+      return uploadPendingImage(compressed, form.shopId, form.settlementMonth || undefined, 'CREATE')
     }
+    const result = await uploadCompressed(file, doUpload)
 
-    if (success) {
+    if (result.ok) {
       batchProgress.value.success++
       batchResults.value.push({
         fileName: file.name,
@@ -565,16 +485,13 @@ async function batchQuickCreate(files: File[]) {
     }
     else {
       batchProgress.value.failed++
-      const status = lastErr?.response?.status || lastErr?.statusCode
-      const responseMsg = lastErr?.response?.data?.message || lastErr?.response?.data?.error?.message || lastErr?.response?.data?.msg
-      let msg = responseMsg || lastErr?.message || '上传失败'
-      if (status === 429)
-        msg = '请求过于频繁，已重试仍失败'
-      else if (status === 401)
-        msg = '登录已过期，请重新登录'
-      else if (status >= 500)
-        msg = `服务器错误(${status})`
-      batchResults.value.push({ fileName: file.name, success: false, message: msg })
+      const status = result.error?.response?.status || result.error?.statusCode
+      // 401 未登录不重试，直接提示并跳登录
+      if (status === 401) {
+        showNotify({ type: 'danger', message: '登录已过期，请重新登录' })
+        setTimeout(() => router.push({ name: 'Login' }), 1500)
+      }
+      batchResults.value.push({ fileName: file.name, success: false, message: describeUploadError(result.error) })
     }
 
     // 更新进度提示
@@ -602,7 +519,8 @@ function onBatchResultConfirm() {
 // 部位数量改变时，收敛超过部位数量的新件数量
 function clampNewPart(index: number) {
   const item = form.items[index]
-  if (!item) return
+  if (!item)
+    return
   if (item.newPartQuantity && item.newPartQuantity > (item.quantity || 0)) {
     item.newPartQuantity = item.quantity || 0
   }
@@ -623,36 +541,15 @@ function handleOcrRecognize() {
   // 不设置 capture，允许用户选择"拍照"或"从相册选择"
   input.onchange = async (e: Event) => {
     const file = (e.target as HTMLInputElement).files?.[0]
-    if (!file) return
+    if (!file)
+      return
     ocrLoading.value = true
     try {
       const compressed = await compressImage(file)
       const result = await ocrRecognizeImage(compressed, form.shopId, ocrMode.value)
 
-      const fieldMap = [
-        { key: 'plateNumber', label: '车牌号', ocrKey: 'plateNumber' },
-        { key: 'orderNo', label: '工单号', ocrKey: 'orderNo' },
-        { key: 'customerName', label: '客户名称', ocrKey: 'customerName' },
-        { key: 'phone', label: '联系电话', ocrKey: 'phone' },
-        { key: 'carModel', label: '车型', ocrKey: 'carModel' },
-        { key: 'vin', label: '车架号', ocrKey: 'vin' },
-        { key: 'brand', label: '品牌', ocrKey: 'brand' },
-        { key: 'orderDate', label: '工单日期', ocrKey: 'date' },
-      ]
-
-      const filledMessages: string[] = []
-
-      for (const { key, label, ocrKey } of fieldMap) {
-        const ocrValue = ((result as any)[ocrKey] || '').trim()
-        if (!ocrValue) continue
-
-        const currentValue = ((form as any)[key] || '').trim()
-        if (!currentValue) {
-          ;(form as any)[key] = ocrValue
-          filledMessages.push(`${label}：${ocrValue}`)
-        }
-        // 已填字段不再覆盖，跳过
-      }
+      // 基础字段填充统一走 applyOcrFields（仅填充空白字段，与详情页口径一致）
+      const { filledMessages, orderNoCorrected, vinCorrected } = applyOcrFields(form, result)
 
       // 部位项目：用 OCR 识别到的部位填充（仅填充数量为0的部位）
       if (result.items && result.items.length > 0) {
@@ -676,16 +573,13 @@ function handleOcrRecognize() {
       }
 
       // 工单号修正提示：OCR 识别的工单号不符合规则，后端已自动修正
-      const candidates = (result as any).orderNoCandidates || []
-      const orderNoValid = (result as any).orderNoValid
-      if (candidates.length > 0 && orderNoValid === false) {
-        const correctedNo = (result as any).orderNo || ''
-        showNotify({ type: 'warning', message: `工单号已自动修正为 ${correctedNo}` })
+      if (orderNoCorrected) {
+        showNotify({ type: 'warning', message: `工单号已自动修正为 ${orderNoCorrected}` })
       }
 
       // VIN 车架号修正提示：OCR 识别的 VIN 含易混淆字符（O↔0、I↔1、Q↔0），后端已自动修正
-      if ((result as any).vinCorrected && (result as any).vinOriginal) {
-        ocrVinCorrectionMsg.value = `OCR识别车架号含易混淆字符，已自动修正：「${(result as any).vinOriginal}」→「${(result as any).vin}」`
+      if (vinCorrected) {
+        ocrVinCorrectionMsg.value = `OCR识别车架号含易混淆字符，已自动修正：「${vinCorrected.original}」→「${vinCorrected.corrected}」`
         showNotify({ type: 'warning', message: ocrVinCorrectionMsg.value })
       }
       else {
@@ -700,7 +594,7 @@ function handleOcrRecognize() {
         await lookupVehicle(form.plateNumber)
       }
 
-      if (filledMessages.length === 0 && (candidates.length === 0 || orderNoValid !== false)) {
+      if (filledMessages.length === 0 && !orderNoCorrected) {
         showNotify({ type: 'warning', message: '未识别到有效信息或所有字段已填写' })
       }
     }
@@ -719,8 +613,15 @@ onMounted(() => {
   const today = new Date().toISOString().slice(0, 10)
   // 工单日期默认不填，可通过OCR识别填充
   form.settlementMonth = today.slice(0, 7)
-  loadShops()
   loadSpecialPaints()
+  // 仅绑定 1 个门店时自动选中并加载其标准/工单号规则（沿用原 loadShops 副作用）
+  ensureShops().then(async (list) => {
+    if (list.length === 1 && !form.shopId) {
+      form.shopId = list[0].id
+      await loadStandards(form.shopId)
+      loadOrderNoRules(form.shopId)
+    }
+  })
 })
 </script>
 
@@ -792,7 +693,7 @@ onMounted(() => {
       <van-notice-bar
         v-if="vehicleFound"
         left-icon="checked"
-        :text="`已匹配历史车辆${vehicleMatchedFields.length ? '，已填充：' + vehicleMatchedFields.join('、') : ''}（累计 ${vehicleFound.totalOrderCount} 单 / ${Number(vehicleFound.totalPaintCount).toFixed(1)} 幅）`"
+        :text="`已匹配历史车辆${vehicleMatchedFields.length ? `，已填充：${vehicleMatchedFields.join('、')}` : ''}（累计 ${vehicleFound.totalOrderCount} 单 / ${Number(vehicleFound.totalPaintCount).toFixed(1)} 幅）`"
         background="var(--color-success-bg)"
         color="var(--color-success)"
         style="margin: 0 16px 8px;"
@@ -836,7 +737,7 @@ onMounted(() => {
               <van-stepper
                 v-if="item.overridePaintCount !== undefined && item.overridePaintCount !== null"
                 :model-value="item.overridePaintCount"
-                min="-99" max="99" step="0.1" :decimal-length="getPaintDecimalLength(index, item.overridePaintCount)"
+                min="-99" max="99" step="0.1" :decimal-length="getPaintDecimalLength(paintFocusIndex, index, item.overridePaintCount)"
                 input-width="48px"
                 @focus="paintFocusIndex = index"
                 @blur="onPaintCountBlur(item)"
@@ -869,68 +770,51 @@ onMounted(() => {
 
     <!-- 提交按钮 -->
     <div class="submit-bar">
-      <van-button type="primary" block round :loading="submitting" loading-text="提交中..." @click="handleSubmit">
+      <van-button type="primary" round block :loading="submitting" loading-text="提交中..." @click="handleSubmit">
         提交工单
       </van-button>
     </div>
 
     <!-- 选择器 -->
-    <van-popup v-model:show="showShopPicker" position="bottom" round>
-      <van-picker
-        :columns="shopColumns"
-        @confirm="onShopConfirm"
-        @cancel="showShopPicker = false"
-      />
-    </van-popup>
+    <ShopPicker
+      v-model:show="showShopPicker"
+      :model-value="form.shopId"
+      :include-all="false"
+      @confirm="onShopConfirm"
+    />
 
-    <van-popup v-model:show="showMonthPicker" position="bottom" round>
-      <van-picker
-        :columns="monthColumns"
-        @confirm="onMonthConfirm"
-        @cancel="showMonthPicker = false"
-      />
-    </van-popup>
+    <PopupPicker
+      v-model:show="showMonthPicker"
+      :columns="monthColumns"
+      :model-value="form.settlementMonth"
+      title="选择结算月份"
+      @confirm="(v: string) => { form.settlementMonth = v }"
+    />
 
-    <van-popup v-model:show="showDatePicker" position="bottom" round>
-      <van-picker
-        :columns="dateColumns"
-        @confirm="onDateConfirm"
-        @cancel="showDatePicker = false"
-      />
-    </van-popup>
+    <PopupPicker
+      v-model:show="showDatePicker"
+      :columns="dateColumns"
+      :model-value="form.orderDate"
+      title="选择工单日期"
+      @confirm="onDateConfirm"
+    />
 
     <!-- 特殊车漆选择器 -->
-    <van-popup v-model:show="showSpecialPaintPicker" position="bottom" round>
-      <van-picker
-        :columns="specialPaintOptions"
-        @confirm="onSpecialPaintConfirm"
-        @cancel="showSpecialPaintPicker = false"
-      />
-    </van-popup>
+    <PopupPicker
+      v-model:show="showSpecialPaintPicker"
+      :columns="specialPaintOptions"
+      title="特殊车漆"
+      @confirm="onSpecialPaintConfirm"
+    />
 
-    <!-- 上传模式选择弹窗 -->
-    <van-popup v-model:show="showUploadModePicker" position="bottom" round>
-      <div class="mode-popup">
-        <div class="mode-popup-title">选择上传方式</div>
-        <div
-          class="mode-option"
-          :class="{ active: uploadMode === 'create' }"
-          @click="uploadMode = 'create'; onUploadModeConfirm()"
-        >
-          <div class="mode-option-name">直接创建工单</div>
-          <div class="mode-option-desc">图片作为当前工单的施工前照片，直接归入工单（需先提交创建工单）</div>
-        </div>
-        <div
-          class="mode-option"
-          :class="{ active: uploadMode === 'ocr' }"
-          @click="uploadMode = 'ocr'; onUploadModeConfirm()"
-        >
-          <div class="mode-option-name">OCR 创建工单</div>
-          <div class="mode-option-desc">图片存入图片池，系统后台 OCR 识别后按门店/月份自动补建新工单</div>
-        </div>
-        <div class="mode-popup-cancel" @click="showUploadModePicker = false">取消</div>
-      </div>
-    </van-popup>
+    <!-- 上传模式选择 -->
+    <van-action-sheet
+      v-model:show="showUploadModePicker"
+      :actions="uploadModeActions"
+      cancel-text="取消"
+      description="选择上传方式"
+      @select="onUploadModeSelect"
+    />
 
     <!-- 批量上传结果弹窗 -->
     <van-dialog
@@ -944,9 +828,15 @@ onMounted(() => {
     >
       <div style="padding: 12px 16px; max-height: 400px; overflow-y: auto;">
         <div style="display: flex; gap: 12px; margin-bottom: 12px;">
-          <van-tag type="success" size="large">成功 {{ batchProgress.success }}</van-tag>
-          <van-tag type="danger" size="large">失败 {{ batchProgress.failed }}</van-tag>
-          <van-tag type="primary" size="large">共 {{ batchProgress.total }}</van-tag>
+          <van-tag type="success" size="large">
+            成功 {{ batchProgress.success }}
+          </van-tag>
+          <van-tag type="danger" size="large">
+            失败 {{ batchProgress.failed }}
+          </van-tag>
+          <van-tag type="primary" size="large">
+            共 {{ batchProgress.total }}
+          </van-tag>
         </div>
         <div
           v-for="(item, index) in batchResults"
@@ -955,13 +845,16 @@ onMounted(() => {
         >
           <van-icon :name="item.success ? 'success' : 'cross'" :color="item.success ? 'var(--color-success)' : 'var(--color-error)'" />
           <div style="flex: 1; min-width: 0;">
-            <div style="font-size: 13px; color: var(--text-regular); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ item.fileName }}</div>
-            <div style="font-size: 12px; color: var(--text-tertiary);">{{ item.message }}</div>
+            <div style="font-size: 13px; color: var(--text-regular); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+              {{ item.fileName }}
+            </div>
+            <div style="font-size: 12px; color: var(--text-tertiary);">
+              {{ item.message }}
+            </div>
           </div>
         </div>
       </div>
     </van-dialog>
-
   </div>
 </template>
 
@@ -1044,7 +937,7 @@ onMounted(() => {
   background: var(--color-surface);
   border-radius: 10px;
   overflow: hidden;
-  box-shadow: 0 1px 6px rgba(0,0,0,0.04);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.04);
 }
 
 .ocr-btn-wrap {
@@ -1095,7 +988,9 @@ onMounted(() => {
   padding: 10px 0;
   border-bottom: 1px solid var(--neutral-100);
 
-  &:last-child { border-bottom: none; }
+  &:last-child {
+    border-bottom: none;
+  }
 }
 
 .item-name {
@@ -1211,50 +1106,5 @@ onMounted(() => {
   font-size: 12px;
   line-height: 1.5;
   color: rgba(255, 255, 255, 0.8);
-}
-
-// 上传模式选择弹窗
-.mode-popup {
-  padding: 8px 0 16px;
-
-  .mode-popup-title {
-    text-align: center;
-    font-size: 15px;
-    font-weight: 600;
-    color: var(--text-regular);
-    padding: 14px 0;
-  }
-  .mode-option {
-    margin: 0 16px 12px;
-    padding: 14px 16px;
-    border-radius: 12px;
-    border: 1.5px solid var(--neutral-200);
-    background: var(--color-surface);
-
-    &.active {
-      border-color: var(--color-primary);
-      background: var(--color-primary-bg);
-    }
-    .mode-option-name {
-      font-size: 15px;
-      font-weight: 600;
-      color: var(--text-primary);
-    }
-    .mode-option-desc {
-      margin-top: 4px;
-      font-size: 12px;
-      line-height: 1.5;
-      color: var(--text-tertiary);
-    }
-  }
-  .mode-popup-cancel {
-    margin: 4px 16px 0;
-    text-align: center;
-    padding: 13px 0;
-    border-radius: 12px;
-    font-size: 15px;
-    color: var(--text-regular);
-    background: var(--neutral-100);
-  }
 }
 </style>

@@ -1,14 +1,16 @@
 <script setup lang="ts">
 import {
   createPaintVehicle,
-  updatePaintVehicle,
   deletePaintVehicle,
   fetchVehicleById,
   fetchVehicleByPlate,
+  updatePaintVehicle,
 } from '@/api/paint'
 import type { PaintVehicle } from '@/api/types/paint'
 import { canEdit } from '@/utils/permission'
-import { showDialog, showNotify } from 'vant'
+import { phoneRegex, plateNumberRegex, vinRegex } from '@/utils/validators'
+import { showNotify } from 'vant'
+import { confirmDeleteVehicle } from '@/composables/useConfirm'
 
 const route = useRoute()
 const router = useRouter()
@@ -21,11 +23,7 @@ const saving = ref(false)
 const deleting = ref(false)
 const vehicleData = ref<PaintVehicle | null>(null)
 
-// 校验正则
-const PLATE_PROVINCE = '京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼使领军警海空北沈兰济南广成武翼'
-const plateNumberRegex = new RegExp(`^([${PLATE_PROVINCE}][A-Z][A-HJ-NP-Z0-9]{4,5}[A-HJ-NP-Z0-9挂学警港澳]|[A-Z][A-HJ-NP-Z0-9]{5})$`)
-const vinRegex = /^[A-HJ-NPR-Z0-9]{17}$/
-const phoneRegex = /^1[3-9]\d{9}$/
+// 校验正则统一维护在 utils/validators（车牌/手机号/车架号）
 
 const form = reactive({
   plateNumber: '',
@@ -45,7 +43,8 @@ const plateConflict = ref('')
 
 // 加载车辆数据（编辑模式）
 async function loadVehicle() {
-  if (mode.value !== 'edit' || !vehicleId.value) return
+  if (mode.value !== 'edit' || !vehicleId.value)
+    return
   loading.value = true
   try {
     const data = await fetchVehicleById(vehicleId.value)
@@ -87,7 +86,8 @@ function validatePlateNumber(): boolean {
 // VIN 校验
 function validateVin(): boolean {
   vinError.value = ''
-  if (!form.vin.trim()) return true
+  if (!form.vin.trim())
+    return true
   if (!vinRegex.test(form.vin.trim().toUpperCase())) {
     vinError.value = 'VIN应为17位字母数字（不含I/O/Q）'
     return false
@@ -98,7 +98,8 @@ function validateVin(): boolean {
 // 手机号校验
 function validatePhone(): boolean {
   phoneError.value = ''
-  if (!form.phone.trim()) return true
+  if (!form.phone.trim())
+    return true
   if (!phoneRegex.test(form.phone.trim())) {
     phoneError.value = '手机号格式不正确'
     return false
@@ -109,9 +110,11 @@ function validatePhone(): boolean {
 // 新增模式下：车牌号失焦查询是否已存在
 async function onPlateNumberBlur() {
   plateConflict.value = ''
-  if (mode.value !== 'add') return
+  if (mode.value !== 'add')
+    return
   const plate = form.plateNumber.trim().toUpperCase()
-  if (!plate || !plateNumberRegex.test(plate)) return
+  if (!plate || !plateNumberRegex.test(plate))
+    return
   try {
     const data = await fetchVehicleByPlate(plate)
     if (data) {
@@ -127,7 +130,8 @@ async function handleSave() {
   const plateValid = validatePlateNumber()
   const vinValid = validateVin()
   const phoneValid = validatePhone()
-  if (!plateValid || !vinValid || !phoneValid) return
+  if (!plateValid || !vinValid || !phoneValid)
+    return
   if (plateConflict.value) {
     showNotify({ type: 'warning', message: plateConflict.value })
     return
@@ -168,10 +172,7 @@ async function handleSave() {
 // 删除
 async function handleDelete() {
   try {
-    await showDialog({
-      title: '确认删除',
-      message: '删除车辆不会删除关联工单，仅解除关联。确认删除？',
-    })
+    await confirmDeleteVehicle()
     deleting.value = true
     await deletePaintVehicle(vehicleId.value)
     showNotify({ type: 'success', message: '删除成功' })
@@ -188,7 +189,8 @@ async function handleDelete() {
 
 // 跳转历史工单
 function goHistory() {
-  if (!vehicleId.value) return
+  if (!vehicleId.value)
+    return
   router.push({
     name: '/work-order/vehicle-history',
     query: { id: vehicleId.value, plate: form.plateNumber },
@@ -212,9 +214,7 @@ onMounted(() => {
       </template>
     </van-nav-bar>
 
-    <div v-if="loading" class="loading-wrap">
-      <van-loading size="24px">加载中...</van-loading>
-    </div>
+    <AppLoading v-if="loading" />
 
     <template v-else>
       <div class="form-section">

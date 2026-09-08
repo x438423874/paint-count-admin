@@ -5,7 +5,8 @@ import {
 } from '@/api/paint'
 import type { PaintVehicle, PageResult } from '@/api/types/paint'
 import { canEdit } from '@/utils/permission'
-import { showDialog, showNotify } from 'vant'
+import { showNotify } from 'vant'
+import { confirmDeleteVehicle } from '@/composables/useConfirm'
 
 const route = useRoute()
 const router = useRouter()
@@ -133,10 +134,7 @@ function goHistory(v: PaintVehicle) {
 // 删除车辆
 async function handleDelete(id: string) {
   try {
-    await showDialog({
-      title: '确认删除',
-      message: '删除车辆不会删除关联工单，仅解除关联。确认删除？',
-    })
+    await confirmDeleteVehicle()
     await deletePaintVehicle(id)
     showNotify({ type: 'success', message: '删除成功' })
     // 从列表中移除
@@ -339,7 +337,7 @@ onActivated(() => {
     <!-- 列表 -->
     <van-pull-refresh v-model="refreshing" @refresh="onRefresh">
       <div class="vehicle-list">
-        <van-empty v-if="vehicles.length === 0 && !loading" description="暂无车辆数据" />
+        <AppEmpty v-if="vehicles.length === 0 && !loading" description="暂无车辆数据" />
 
         <van-swipe-cell
           v-for="v in vehicles"
@@ -408,9 +406,7 @@ onActivated(() => {
           </template>
         </van-swipe-cell>
 
-        <div v-if="loading" class="loading-wrap">
-          <van-loading size="24px">加载中...</van-loading>
-        </div>
+        <AppLoading v-if="loading" />
 
         <div v-if="finished && vehicles.length > 0" class="finished-text">
           没有更多了

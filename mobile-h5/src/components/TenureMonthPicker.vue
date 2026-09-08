@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import type { MyScope } from '@/api/paint'
-import { monthInTenure, getMyScopeCached } from '@/utils/tenure'
+import { getMyScopeCached } from '@/utils/tenure'
+import { recentMonthOptions } from '@/utils/month-options'
 
 /**
  * 在岗期月份选择弹窗（统一口径，供数据统计/幅数管理等页面复用）
@@ -34,37 +35,27 @@ onMounted(async () => {
   scope.value = await getMyScopeCached()
 })
 
-const columns = computed(() => {
-  const list: { text: string, value: string }[] = []
-  if (props.includeAll)
-    list.push({ text: '全部月份', value: '' })
-  const now = new Date()
-  for (let i = 0; i < props.months; i++) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
-    const value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
-    if (monthInTenure(value, scope.value))
-      list.push({ text: value, value })
-  }
-  return list
-})
+const columns = computed(() =>
+  recentMonthOptions({
+    months: props.months,
+    includeAll: props.includeAll,
+    allText: '全部月份',
+    scope: scope.value,
+  }),
+)
 
-function onConfirm({ selectedValues }: any) {
-  emit('update:show', false)
-  emit('confirm', selectedValues[0] ?? '')
-}
-function onCancel() {
-  emit('update:show', false)
+function onConfirm(month: string) {
+  emit('confirm', month)
 }
 </script>
 
 <template>
-  <van-popup :show="show" position="bottom" round @update:show="emit('update:show', $event)">
-    <van-picker
-      :title="title"
-      :columns="columns"
-      :model-value="[modelValue]"
-      @confirm="onConfirm"
-      @cancel="onCancel"
-    />
-  </van-popup>
+  <PopupPicker
+    :show="show"
+    :columns="columns"
+    :title="title"
+    :model-value="modelValue"
+    @update:show="emit('update:show', $event)"
+    @confirm="onConfirm"
+  />
 </template>

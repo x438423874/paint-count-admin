@@ -110,6 +110,8 @@ export interface PaintWorkOrder {
   updatedAt: string
   _isDuplicate?: boolean
   _duplicateCount?: number
+  /** 运行时标记：同车牌在其它结算月份也有结算工单（列表「跨月结算」标签） */
+  _hasOtherMonthSettlement?: boolean
 }
 
 export interface PaintOrderImage {

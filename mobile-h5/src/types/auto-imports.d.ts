@@ -15,6 +15,8 @@ declare global {
   const computedEager: typeof import('@vueuse/core').computedEager
   const computedInject: typeof import('@vueuse/core').computedInject
   const computedWithControl: typeof import('@vueuse/core').computedWithControl
+  const confirmAction: typeof import('../composables/useConfirm').confirmAction
+  const confirmDeleteVehicle: typeof import('../composables/useConfirm').confirmDeleteVehicle
   const controlledComputed: typeof import('@vueuse/core').controlledComputed
   const controlledRef: typeof import('@vueuse/core').controlledRef
   const createApp: typeof import('vue').createApp
@@ -34,9 +36,11 @@ declare global {
   const defineAsyncComponent: typeof import('vue').defineAsyncComponent
   const defineComponent: typeof import('vue').defineComponent
   const definePage: typeof import('vue-router/experimental').definePage
+  const describeUploadError: typeof import('../composables/useImageUpload').describeUploadError
   const eagerComputed: typeof import('@vueuse/core').eagerComputed
   const effectScope: typeof import('vue').effectScope
   const extendRef: typeof import('@vueuse/core').extendRef
+  const fetchImageAsFile: typeof import('../composables/useImageUpload').fetchImageAsFile
   const getCurrentInstance: typeof import('vue').getCurrentInstance
   const getCurrentScope: typeof import('vue').getCurrentScope
   const getCurrentWatcher: typeof import('vue').getCurrentWatcher
@@ -52,6 +56,7 @@ declare global {
   const isReactive: typeof import('vue').isReactive
   const isReadonly: typeof import('vue').isReadonly
   const isRef: typeof import('vue').isRef
+  const isRetryableUploadError: typeof import('../composables/useImageUpload').isRetryableUploadError
   const isShallow: typeof import('vue').isShallow
   const locale: typeof import('@/utils/i18n').locale
   const makeDestructurable: typeof import('@vueuse/core').makeDestructurable
@@ -130,6 +135,7 @@ declare global {
   const unref: typeof import('vue').unref
   const unrefElement: typeof import('@vueuse/core').unrefElement
   const until: typeof import('@vueuse/core').until
+  const uploadCompressed: typeof import('../composables/useImageUpload').uploadCompressed
   const useActiveElement: typeof import('@vueuse/core').useActiveElement
   const useAnimate: typeof import('@vueuse/core').useAnimate
   const useArrayDifference: typeof import('@vueuse/core').useArrayDifference
@@ -263,6 +269,7 @@ declare global {
   const useServerSeoMeta: typeof import('@unhead/vue').useServerSeoMeta
   const useSessionStorage: typeof import('@vueuse/core').useSessionStorage
   const useShare: typeof import('@vueuse/core').useShare
+  const useShopOptions: typeof import('../composables/useShopOptions').default
   const useSlots: typeof import('vue').useSlots
   const useSorted: typeof import('@vueuse/core').useSorted
   const useSpeechRecognition: typeof import('@vueuse/core').useSpeechRecognition
@@ -328,4 +335,13 @@ declare global {
   // @ts-ignore
   export type { Component, Slot, Slots, ComponentPublicInstance, ComputedRef, DirectiveBinding, ExtractDefaultPropTypes, ExtractPropTypes, ExtractPublicPropTypes, InjectionKey, PropType, Ref, ShallowRef, MaybeRef, MaybeRefOrGetter, VNode, WritableComputedRef } from 'vue'
   import('vue')
+  // @ts-ignore
+  export type { ConfirmOptions } from '../composables/useConfirm'
+  import('../composables/useConfirm')
+  // @ts-ignore
+  export type { UploadRetryOptions, UploadAttemptResult } from '../composables/useImageUpload'
+  import('../composables/useImageUpload')
+  // @ts-ignore
+  export type { ShopOption, UseShopOptionsOptions } from '../composables/useShopOptions'
+  import('../composables/useShopOptions')
 }

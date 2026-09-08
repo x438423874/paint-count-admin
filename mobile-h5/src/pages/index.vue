@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { getStatisticsOverview, getWorkOrderPage, getShopList, getLatestSettlementMonth } from '@/api/paint'
-import type { PaintShop, StatisticsOverview, PaintWorkOrder, PageResult } from '@/api/types/paint'
+import { getStatisticsOverview, getWorkOrderPage, getLatestSettlementMonth } from '@/api/paint'
+import type { StatisticsOverview, PaintWorkOrder, PageResult } from '@/api/types/paint'
 import { canEdit as canEditRole } from '@/utils/permission'
 import { monthInTenure, latestTenureMonth, getMyScopeCached } from '@/utils/tenure'
 import type { MyScope } from '@/api/paint'
+import { useShopOptions } from '@/composables/useShopOptions'
 
 const allowEdit = canEditRole()
 
@@ -13,7 +14,8 @@ const currentMonth = computed(() => {
 })
 
 const router = useRouter()
-const shops = ref<PaintShop[]>([])
+// 门店走 dict store 共享缓存，全应用只请求一次（原为每页各自 getShopList）
+const { shops, ensureShops } = useShopOptions()
 const selectedShopId = ref('')
 const shopName = ref('全部门店')
 const recentOrders = ref<PaintWorkOrder[]>([])
@@ -21,24 +23,7 @@ const overview = ref<StatisticsOverview | null>(null)
 const loading = ref(false)
 const refreshing = ref(false)
 
-const shopColumns = computed(() => {
-  const cols = [{ text: '全部门店', value: '' }]
-  shops.value.forEach(s => cols.push({ text: s.name, value: s.id }))
-  return cols
-})
-
 const scope = ref<MyScope | null>(null)
-
-const monthColumns = computed(() => {
-  const list = []
-  const now = new Date()
-  for (let i = 0; i < 13; i++) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
-    const value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
-    if (monthInTenure(value, scope.value)) list.push({ text: value, value })
-  }
-  return list
-})
 
 const selectedMonth = ref(currentMonth.value)
 const showShopPicker = ref(false)
@@ -55,16 +40,6 @@ async function initDefaultMonth() {
   }
   catch {
     selectedMonth.value = currentMonth.value
-  }
-}
-
-async function loadShops() {
-  try {
-    const res = await getShopList()
-    shops.value = res as any as PaintShop[]
-  }
-  catch {
-    shops.value = []
   }
 }
 
@@ -98,17 +73,15 @@ async function onRefresh() {
   refreshing.value = false
 }
 
-function onShopConfirm({ selectedValues }: any) {
-  selectedShopId.value = selectedValues[0]
-  const shop = shops.value.find(s => s.id === selectedValues[0])
+function onShopConfirm(value: string) {
+  selectedShopId.value = value
+  const shop = shops.value.find(s => s.id === value)
   shopName.value = shop?.name || '全部门店'
-  showShopPicker.value = false
   loadData()
 }
 
-function onMonthConfirm({ selectedValues }: any) {
-  selectedMonth.value = selectedValues[0]
-  showMonthPicker.value = false
+function onMonthConfirm(month: string) {
+  selectedMonth.value = month
   loadData()
 }
 
@@ -155,31 +128,9 @@ function formatCount(val?: number | string | null) {
   return num.toFixed(1).replace(/\.0$/, '')
 }
 
-function statusText(status?: string) {
-  const map: Record<string, string> = {
-    DRAFT: '草稿',
-    PENDING: '待审核',
-    AUDITED: '已审核',
-    SETTLED: '已结算',
-    ABNORMAL: '异常',
-  }
-  return map[status || ''] || status || '-'
-}
-
-function statusType(status?: string): any {
-  const map: Record<string, any> = {
-    DRAFT: 'default',
-    PENDING: 'warning',
-    AUDITED: 'primary',
-    SETTLED: 'success',
-    ABNORMAL: 'danger',
-  }
-  return map[status || ''] || 'default'
-}
-
 onMounted(async () => {
   scope.value = await getMyScopeCached()
-  await loadShops()
+  await ensureShops()
   await initDefaultMonth()
   loadData()
 })
@@ -396,7 +347,7 @@ onMounted(async () => {
           <van-skeleton title :row="3" />
         </div>
 
-        <van-empty v-else-if="recentOrders.length === 0" description="暂无工单数据" />
+        <AppEmpty v-else-if="recentOrders.length === 0" description="暂无工单数据" />
 
         <div v-else class="order-list">
           <div
@@ -419,9 +370,7 @@ onMounted(async () => {
               </div>
             </div>
             <div class="order-right">
-              <van-tag :type="statusType(order.status)" size="medium" round>
-                {{ statusText(order.status) }}
-              </van-tag>
+              <OrderStatusTag :status="order.status" size="medium" round />
               <div class="order-count">
                 <span class="count-value">{{ order.totalPaintCount }}</span>
                 <span class="count-unit">幅</span>
@@ -435,24 +384,16 @@ onMounted(async () => {
     </van-pull-refresh>
 
     <!-- 门店选择器 -->
-    <van-popup v-model:show="showShopPicker" position="bottom" round>
-      <van-picker
-        :columns="shopColumns"
-        :model-value="[selectedShopId]"
-        @confirm="onShopConfirm"
-        @cancel="showShopPicker = false"
-      />
-    </van-popup>
+    <ShopPicker v-model:show="showShopPicker" :model-value="selectedShopId" @confirm="onShopConfirm" />
 
     <!-- 月份选择器 -->
-    <van-popup v-model:show="showMonthPicker" position="bottom" round>
-      <van-picker
-        :columns="monthColumns"
-        :model-value="[selectedMonth]"
-        @confirm="onMonthConfirm"
-        @cancel="showMonthPicker = false"
-      />
-    </van-popup>
+    <TenureMonthPicker
+      v-model:show="showMonthPicker"
+      :model-value="selectedMonth"
+      :months="13"
+      title="选择结算月份"
+      @confirm="onMonthConfirm"
+    />
   </div>
 </template>
 

@@ -1,14 +1,16 @@
 <script setup lang="ts">
-import { getMonthlyStatistics, getCategoryBreakdown, getShopComparison, getShopList, getStatisticsOverview, getLatestSettlementMonth } from '@/api/paint'
-import type { MonthlyStatistics, CategoryBreakdown, ShopComparison, PaintShop, DailyStat, StatisticsOverview } from '@/api/types/paint'
+import { getMonthlyStatistics, getCategoryBreakdown, getShopComparison, getStatisticsOverview, getLatestSettlementMonth } from '@/api/paint'
+import type { MonthlyStatistics, CategoryBreakdown, ShopComparison, DailyStat, StatisticsOverview } from '@/api/types/paint'
 import type { MyScope } from '@/api/paint'
 import { monthInTenure, latestTenureMonth, getMyScopeCached } from '@/utils/tenure'
+import { useShopOptions } from '@/composables/useShopOptions'
 
 const currentMonth = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`
 
 const selectedMonth = ref(currentMonth)
 const selectedShopId = ref('')
-const shops = ref<PaintShop[]>([])
+// 门店走 dict store 共享缓存，全应用只请求一次（原为每页各自 getShopList）
+const { shops, ensureShops } = useShopOptions()
 const monthlyData = ref<MonthlyStatistics[]>([])
 const dailyData = ref<DailyStat[]>([])
 const categoryData = ref<CategoryBreakdown[]>([])
@@ -40,22 +42,6 @@ async function initDefaultMonth() {
   }
   catch {
     selectedMonth.value = fallback
-  }
-}
-
-const shopColumns = computed(() => {
-  const cols = [{ text: '全部门店', value: '' }]
-  shops.value.forEach(s => cols.push({ text: s.name, value: s.id }))
-  return cols
-})
-
-async function loadShops() {
-  try {
-    const res = await getShopList()
-    shops.value = res as any as PaintShop[]
-  }
-  catch {
-    shops.value = []
   }
 }
 
@@ -99,9 +85,8 @@ function onMonthConfirm({ selectedValues }: any) {
   loadStatistics()
 }
 
-function onShopConfirm({ selectedValues }: any) {
-  selectedShopId.value = selectedValues[0]
-  showShopPicker.value = false
+function onShopConfirm(value: string) {
+  selectedShopId.value = value
   loadStatistics()
 }
 
@@ -129,7 +114,7 @@ function getCategoryBarWidth(count: number) {
 }
 
 onMounted(async () => {
-  await Promise.all([loadShops(), loadScope()])
+  await Promise.all([ensureShops(), loadScope()])
   await initDefaultMonth()
   loadStatistics()
 })
@@ -368,14 +353,7 @@ onMounted(async () => {
     />
 
     <!-- 门店选择器 -->
-    <van-popup v-model:show="showShopPicker" position="bottom" round>
-      <van-picker
-        :columns="shopColumns"
-        :model-value="[selectedShopId]"
-        @confirm="onShopConfirm"
-        @cancel="showShopPicker = false"
-      />
-    </van-popup>
+    <ShopPicker v-model:show="showShopPicker" :model-value="selectedShopId" @confirm="onShopConfirm" />
   </div>
 </template>
 

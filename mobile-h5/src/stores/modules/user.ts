@@ -6,6 +6,7 @@ import {
   login as userLogin,
   logout as userLogout,
 } from '@/api/user'
+import useDictStore from './dict'
 
 const InitUserInfo: UserState = {
   uid: 0,
@@ -64,6 +65,8 @@ export const useUserStore = defineStore('user', () => {
     finally {
       clearToken()
       setInfo({ ...InitUserInfo })
+      // 切换账号后门店等字典缓存必须失效：不同账号可见门店（数据权限）不同
+      useDictStore().invalidateShops()
     }
   }
 

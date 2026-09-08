@@ -4,25 +4,26 @@ import type {
   CreateVehicleDto,
   CreateWorkOrderDto,
   MonthlyStatistics,
+  PagePendingImageDto,
   PageResult,
   PageVehicleDto,
   PageWorkOrderDto,
   PaintCategory,
+  PaintOrderImage,
+  PaintPendingImage,
   PaintShop,
   PaintSpecialPaint,
   PaintStandard,
   PaintVehicle,
   PaintWorkOrder,
+  PendingImageStatus,
+  PendingImageStatusCounts,
   ShopComparison,
+  StatisticsOverview,
   UpdateVehicleDto,
   UpdateWorkOrderDto,
   VehicleHistorySummary,
   YearOverview,
-  StatisticsOverview,
-  PaintPendingImage,
-  PendingImageStatus,
-  PendingImageStatusCounts,
-  PagePendingImageDto,
 } from './types/paint'
 
 // ===== 门店 API =====
@@ -64,7 +65,7 @@ export function getWorkOrderPage(params: PageWorkOrderDto) {
 }
 
 export function getWorkOrderStatusCounts(shopId?: string, settlementMonth?: string) {
-  return request.get<{ total: number; pending: number; audited: number; settled: number }>('/paint/work-order/status-counts', { params: { shopId, settlementMonth } })
+  return request.get<{ total: number, pending: number, audited: number, settled: number }>('/paint/work-order/status-counts', { params: { shopId, settlementMonth } })
 }
 
 export function getWorkOrderDetail(id: string) {
@@ -84,7 +85,7 @@ export function deleteWorkOrder(id: string) {
 }
 
 export function findDuplicateWorkOrders(orderNo: string, excludeId?: string, settlementMonth?: string) {
-  return request.get<PaintWorkOrder[]>('/paint/work-order/duplicates/' + orderNo, { params: { ...(excludeId ? { excludeId } : {}), ...(settlementMonth ? { settlementMonth } : {}) } })
+  return request.get<PaintWorkOrder[]>(`/paint/work-order/duplicates/${orderNo}`, { params: { ...(excludeId ? { excludeId } : {}), ...(settlementMonth ? { settlementMonth } : {}) } })
 }
 
 export function mergeWorkOrders(targetId: string, sourceIds: string[]) {
@@ -221,11 +222,11 @@ export function unsettleWorkOrder(orderId: string) {
 }
 
 export function batchSettleWorkOrders(ids: string[]) {
-  return request.post<{ success: number; failed: number; errors: { id: string; message: string }[] }>('/paint/work-order/batch-settle', { ids })
+  return request.post<{ success: number, failed: number, errors: { id: string, message: string }[] }>('/paint/work-order/batch-settle', { ids })
 }
 
 export function batchUnsettleWorkOrders(ids: string[]) {
-  return request.post<{ success: number; failed: number; errors: { id: string; message: string }[] }>('/paint/work-order/batch-unsettle', { ids })
+  return request.post<{ success: number, failed: number, errors: { id: string, message: string }[] }>('/paint/work-order/batch-unsettle', { ids })
 }
 
 export function setAbnormal(orderId: string, isAbnormal: boolean, abnormalRemark?: string) {
@@ -235,9 +236,9 @@ export function setAbnormal(orderId: string, isAbnormal: boolean, abnormalRemark
 // ===== 工单号规则 API =====
 
 export interface OrderNoRule {
-  pattern: string;
-  length: number;
-  description?: string;
+  pattern: string
+  length: number
+  description?: string
 }
 
 export function fetchOrderNoRules(shopId: string) {
@@ -254,9 +255,9 @@ export function fetchVehicleByPlate(plateNumber: string) {
 /** 查询车辆历史工单 + 统计摘要 */
 export function fetchVehicleHistory(
   vehicleId: string,
-  params?: { current?: number; size?: number; scope?: 'current_shop' | 'all_shops'; shopId?: string },
+  params?: { current?: number, size?: number, scope?: 'current_shop' | 'all_shops', shopId?: string },
 ) {
-  return request.get<{ records: PaintWorkOrder[]; total: number; summary: VehicleHistorySummary }>(
+  return request.get<{ records: PaintWorkOrder[], total: number, summary: VehicleHistorySummary }>(
     `/paint/vehicle/${vehicleId}/history-orders`,
     { params },
   )
@@ -305,14 +306,19 @@ export function getPendingImageCandidates(id: string) {
   return request.get<any[]>(`/paint/pending-image/${id}/candidates`)
 }
 
-/** 上传单张图片到图片池（同步 OCR + 自动匹配）
+/**
+ * 上传单张图片到图片池（同步 OCR + 自动匹配）
+ * @param file 图片文件
+ * @param shopId 门店 id
+ * @param settlementMonth 结算月份（可选）
  * @param source 图片来源：POOL=图片池直接上传（用于匹配已有工单）；CREATE=新建工单时带图上传
  */
 export function uploadPendingImage(file: File, shopId: string, settlementMonth?: string, source: 'POOL' | 'CREATE' = 'POOL') {
   const formData = new FormData()
   formData.append('file', file)
   formData.append('shopId', shopId)
-  if (settlementMonth) formData.append('settlementMonth', settlementMonth)
+  if (settlementMonth)
+    formData.append('settlementMonth', settlementMonth)
   formData.append('source', source)
   return request.post<PaintPendingImage>('/paint/pending-image/upload', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
@@ -321,7 +327,7 @@ export function uploadPendingImage(file: File, shopId: string, settlementMonth?:
 }
 
 export function autoMatchPendingImage(id: string) {
-  return request.post<{ status: PendingImageStatus; matchedOrderId?: string; remark?: string }>(`/paint/pending-image/${id}/auto-match`)
+  return request.post<{ status: PendingImageStatus, matchedOrderId?: string, remark?: string }>(`/paint/pending-image/${id}/auto-match`)
 }
 
 /** 上传图片直接关联到指定工单（作为 BEFORE 图，不进图片池）。用于创建工单页“直接创建工单”模式。 */
@@ -358,12 +364,12 @@ export function correctPendingImageOcr(
     date?: string
     settlementMonth?: string
   },
-  rematch = true
+  rematch = true,
 ) {
   return request.post<{
     id: string
     record: PaintPendingImage | null
-    match: { status: PendingImageStatus; matchedOrderId?: string; remark?: string } | null
+    match: { status: PendingImageStatus, matchedOrderId?: string, remark?: string } | null
   }>(`/paint/pending-image/${id}/correct-ocr`, { ...payload, rematch })
 }
 
@@ -374,5 +380,3 @@ export function retryOcrPendingImage(id: string) {
 export function deletePendingImage(id: string) {
   return request.delete(`/paint/pending-image/${id}`)
 }
-
-
