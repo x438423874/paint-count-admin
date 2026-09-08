@@ -1,11 +1,15 @@
 import { Controller, Get, Post, Param, HttpCode, HttpStatus, NotFoundException, Request, ForbiddenException } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
-import { ApiRes } from '@lib/infra/rest/res.response';
+
+import { Log } from '@lib/infra/decorators/log.decorator';
 import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
+import { ApiRes } from '@lib/infra/rest/res.response';
+
 import { UserShopService } from '../../service/user-shop.service';
 import { ScheduledTaskManager, ScheduledTaskInfo } from '../scheduled-task-manager.service';
 
 @ApiTags('定时任务管理')
+@Log('定时任务')
 @Controller('scheduled-tasks')
 export class ScheduledTaskController {
   constructor(

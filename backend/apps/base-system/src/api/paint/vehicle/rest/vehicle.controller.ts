@@ -1,12 +1,16 @@
 import { Controller, Get, Post, Put, Delete, Body, Query, Param, Request } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
+
+import { Log } from '@lib/infra/decorators/log.decorator';
+import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
+import { ApiRes } from '@lib/infra/rest/res.response';
+
 import { PaintVehicleService } from '../../service/paint-vehicle.service';
 import { UserShopService } from '../../service/user-shop.service';
 import { CreateVehicleDto, UpdateVehicleDto, PageVehicleDto } from '../dto/vehicle.dto';
-import { ApiRes } from '@lib/infra/rest/res.response';
-import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
 
 @ApiTags('Paint - Vehicle')
+@Log('车辆管理')
 @Controller('paint/vehicle')
 export class PaintVehicleController {
   constructor(

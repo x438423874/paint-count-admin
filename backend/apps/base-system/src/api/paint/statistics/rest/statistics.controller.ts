@@ -1,15 +1,22 @@
 import { Controller, Get, Query, Res, Request, UseGuards } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
-import { PaintStatisticsService, ExportOrderRow } from '../../service/paint-statistics.service';
-import { PaintPdfExportService } from '../../service/paint-pdf-export.service';
-import { UserShopService } from '../../service/user-shop.service';
-import { ApiRes } from '@lib/infra/rest/res.response';
-import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
-import { FastifyReply } from 'fastify';
-import { AuthZGuard, UsePermissions } from '@lib/infra/casbin';
 import ExcelJS from 'exceljs';
+import { FastifyReply } from 'fastify';
+
+import { AuthZGuard, UsePermissions } from '@lib/infra/casbin';
+import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
+import { ApiRes } from '@lib/infra/rest/res.response';
+
 import type { OrderAccessScope } from '../../service/paint-calculation';
+import { PaintPdfExportService } from '../../service/paint-pdf-export.service';
+import { PaintStatisticsService, ExportOrderRow } from '../../service/paint-statistics.service';
+import { UserShopService } from '../../service/user-shop.service';
+
+
+
+
+
 
 /** 工单汇总表头（与 ExportOrderRow 字段顺序一致） */
 const SUMMARY_HEADERS = [

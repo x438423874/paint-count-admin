@@ -1,10 +1,14 @@
 import { Controller, Get, Post, Body, Query, Request, BadRequestException } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
-import { SealService } from '../seal.service';
-import { ApiRes } from '@lib/infra/rest/res.response';
+
+import { Log } from '@lib/infra/decorators/log.decorator';
 import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
+import { ApiRes } from '@lib/infra/rest/res.response';
+
+import { SealService } from '../seal.service';
 
 @ApiTags('Paint - Seal')
+@Log('封单管理')
 @Controller('paint/seal')
 export class SealController {
   constructor(private readonly sealService: SealService) {}

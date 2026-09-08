@@ -1,14 +1,19 @@
 import { Controller, Get, Post, Put, Delete, Body, Param, Query, Request, ForbiddenException } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
-import { PaintStandardTemplateService } from '../../service/paint-standard-template.service';
+
+import { Log } from '@lib/infra/decorators/log.decorator';
+import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
+import { ApiRes } from '@lib/infra/rest/res.response';
+
 import { PaintCategoryService } from '../../service/paint-category.service';
 import { PaintSpecialPaintService } from '../../service/paint-special-paint.service';
+import { PaintStandardTemplateService } from '../../service/paint-standard-template.service';
 import { UserShopService } from '../../service/user-shop.service';
 import { CreateStandardTemplateDto, UpdateStandardTemplateDto } from '../dto/standard-template.dto';
-import { ApiRes } from '@lib/infra/rest/res.response';
-import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
+
 
 @ApiTags('Paint - StandardTemplate')
+@Log('标准模板')
 @Controller('paint/standard-template')
 export class PaintStandardTemplateController {
   constructor(

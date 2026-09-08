@@ -1,14 +1,19 @@
 import { Controller, Get, Post, Delete, Body, Query, Param, Req, BadRequestException, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
+import { FastifyRequest } from 'fastify';
+
+import { Log } from '@lib/infra/decorators/log.decorator';
+import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
+import { ApiRes } from '@lib/infra/rest/res.response';
+
 import { PendingImageService } from '../../service/pending-image.service';
 import { UserShopService } from '../../service/user-shop.service';
 import { PagePendingImageDto, ManualMatchDto, CreateOrderFromPendingDto, CorrectPendingImageOcrDto } from '../dto/pending-image.dto';
-import { ApiRes } from '@lib/infra/rest/res.response';
-import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
-import { FastifyRequest } from 'fastify';
+
 
 @ApiTags('Paint - PendingImage')
+@Log('图片池')
 @Controller('paint/pending-image')
 export class PendingImageController {
   constructor(

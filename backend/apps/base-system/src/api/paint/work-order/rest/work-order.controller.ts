@@ -1,25 +1,28 @@
-import { Controller, Get, Post, Put, Delete, Body, Query, Param, Req, Res, Request, BadRequestException, InternalServerErrorException, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Get, Post, Put, Delete, Body, Query, Param, Req, Res, Request, BadRequestException, InternalServerErrorException, HttpCode, HttpStatus , UseGuards } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
-import { WorkOrderService } from '../../service/work-order.service';
-import { WorkOrderAuditService } from '../../service/work-order-audit.service';
-import { WorkOrderMergeService } from '../../service/work-order-merge.service';
-import { WorkOrderSettlementService } from '../../service/work-order-settlement.service';
-import { WorkOrderExcelService } from '../../service/work-order-excel.service';
-import { OcrService } from '../../service/ocr.service';
-import { WorkOrderNoRuleService, OrderNoRule } from '../../service/work-order-no-rule.service';
-import { WorkOrderReconcileService } from '../../service/work-order-reconcile.service';
-import { UserShopService } from '../../service/user-shop.service';
-import { CreateWorkOrderDto, UpdateWorkOrderDto, PageWorkOrderDto, WorkOrderItemDto, AuditWorkOrderDto } from '../dto/work-order.dto';
-import { BatchOcrPreviewResponse, BatchCreateItem } from '../dto/batch-ocr.dto';
-import { ApiRes } from '@lib/infra/rest/res.response';
-import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
 import { PaintImageType } from '@prisma/client';
 import { FastifyRequest, FastifyReply } from 'fastify';
-import { UseGuards } from '@nestjs/common';
+
 import { AuthZGuard, UsePermissions } from '@lib/infra/casbin';
+import { Log } from '@lib/infra/decorators/log.decorator';
+import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
+import { ApiRes } from '@lib/infra/rest/res.response';
+
+import { OcrService } from '../../service/ocr.service';
+import { UserShopService } from '../../service/user-shop.service';
+import { WorkOrderAuditService } from '../../service/work-order-audit.service';
+import { WorkOrderExcelService } from '../../service/work-order-excel.service';
+import { WorkOrderMergeService } from '../../service/work-order-merge.service';
+import { WorkOrderNoRuleService, OrderNoRule } from '../../service/work-order-no-rule.service';
+import { WorkOrderReconcileService } from '../../service/work-order-reconcile.service';
+import { WorkOrderSettlementService } from '../../service/work-order-settlement.service';
+import { WorkOrderService } from '../../service/work-order.service';
+import { BatchOcrPreviewResponse, BatchCreateItem } from '../dto/batch-ocr.dto';
+import { CreateWorkOrderDto, UpdateWorkOrderDto, PageWorkOrderDto, WorkOrderItemDto, AuditWorkOrderDto } from '../dto/work-order.dto';
 
 @ApiTags('Paint - WorkOrder')
+@Log('工单管理')
 @Controller('paint/work-order')
 @UseGuards(AuthZGuard)
 export class WorkOrderController {

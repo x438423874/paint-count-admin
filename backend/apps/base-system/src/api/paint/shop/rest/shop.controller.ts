@@ -1,12 +1,16 @@
 import { Controller, Get, Post, Put, Delete, Body, Query, Param, Request, ForbiddenException } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
+
+import { Log } from '@lib/infra/decorators/log.decorator';
+import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
+import { ApiRes } from '@lib/infra/rest/res.response';
+
 import { PaintShopService } from '../../service/paint-shop.service';
 import { UserShopService } from '../../service/user-shop.service';
 import { CreateShopDto, UpdateShopDto, PageShopDto, UpdateCategoryAliasMapDto } from '../dto/shop.dto';
-import { ApiRes } from '@lib/infra/rest/res.response';
-import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
 
 @ApiTags('Paint - Shop')
+@Log('门店管理')
 @Controller('paint/shop')
 export class PaintShopController {
   constructor(

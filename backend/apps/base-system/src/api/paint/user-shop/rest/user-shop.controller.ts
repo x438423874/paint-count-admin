@@ -11,8 +11,9 @@ import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { IsArray, IsOptional, IsString } from 'class-validator';
 
-import { ApiRes } from '@lib/infra/rest/res.response';
+import { Log } from '@lib/infra/decorators/log.decorator';
 import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
+import { ApiRes } from '@lib/infra/rest/res.response';
 
 import { UserShopService } from '../../service/user-shop.service';
 
@@ -44,6 +45,7 @@ class UpdateTenureDto {
 }
 
 @ApiTags('Paint - UserShop')
+@Log('门店人员')
 @Controller('paint/user-shop')
 export class UserShopController {
   constructor(private readonly userShopService: UserShopService) {}

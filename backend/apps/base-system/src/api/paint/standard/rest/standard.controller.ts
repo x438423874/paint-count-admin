@@ -1,11 +1,15 @@
 import { Controller, Get, Post, Put, Delete, Body, Param, Request } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
+
+import { Log } from '@lib/infra/decorators/log.decorator';
+import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
+import { ApiRes } from '@lib/infra/rest/res.response';
+
 import { PaintStandardService } from '../../service/paint-standard.service';
 import { UserShopService } from '../../service/user-shop.service';
-import { ApiRes } from '@lib/infra/rest/res.response';
-import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
 
 @ApiTags('Paint - Standard')
+@Log('涂抹标准')
 @Controller('paint/standard')
 export class PaintStandardController {
   constructor(
