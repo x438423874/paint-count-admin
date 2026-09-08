@@ -20,7 +20,7 @@ import {
 import { PaintStatsCache } from './paint-stats-cache';
 import { CreateWorkOrderDto, UpdateWorkOrderDto, PageWorkOrderDto, WorkOrderItemDto } from '../work-order/dto/work-order.dto';
 import { SealService } from '../seal/seal.service';
-import { PaintVehicleService } from './paint-vehicle.service';
+import { PaintVehicleService, type VehicleFieldKey } from './paint-vehicle.service';
 import { Jimp } from 'jimp';
 
 interface OrderItemCreateData {
@@ -466,6 +466,23 @@ export class WorkOrderService {
       // 记录旧车辆ID，用于车牌变更后刷新旧车辆统计
       const oldVehicleId = existing.vehicleId;
       const plateForVehicle = dto.plateNumber !== undefined ? dto.plateNumber : existing.plateNumber;
+
+      /**
+       * 本次请求里用户显式提交的车辆字段，需要以工单为准回写车辆主数据。
+       *
+       * 典型场景：OCR 把车型识别成 "BYD7150ADHEV1 80KM尊贵型"，用户在工单上修正为
+       * "海豹06DM-i"。智能合并策略（新值更长才覆盖）会认为新值"更不完整"而丢弃用户的修正，
+       * 导致车辆管理里的主数据永远不跟随工单。
+       * 未提交的字段仍走智能合并，避免自动化写入把主数据改坏。
+       */
+      const overwriteFields: VehicleFieldKey[] = [];
+      if (dto.vin !== undefined) overwriteFields.push('vin');
+      if (dto.carModel !== undefined) overwriteFields.push('carModel');
+      if (dto.brand !== undefined) overwriteFields.push('brand');
+      if (dto.customerName !== undefined) overwriteFields.push('customerName');
+      if (dto.phone !== undefined) overwriteFields.push('phone');
+      if (dto.contactPerson !== undefined) overwriteFields.push('contactPerson');
+
       if (plateForVehicle && plateForVehicle.trim()) {
         const newVehicleId = await this.vehicleService.upsertByPlateWithTx(tx, {
           plateNumber: normalizePlateNumber(plateForVehicle).slice(0, 50),
@@ -475,7 +492,7 @@ export class WorkOrderService {
           customerName: dto.customerName !== undefined ? dto.customerName || undefined : (existing.customerName || undefined),
           phone: dto.phone !== undefined ? dto.phone || undefined : (existing.phone || undefined),
           contactPerson: dto.contactPerson !== undefined ? dto.contactPerson || undefined : (existing.contactPerson || undefined),
-        }, dto.shopId || existing.shopId, dto.orderDate ? new Date(dto.orderDate) : (existing.orderDate || undefined));
+        }, dto.shopId || existing.shopId, dto.orderDate ? new Date(dto.orderDate) : (existing.orderDate || undefined), { overwriteFields });
 
         if (newVehicleId !== vehicleId) {
           vehicleId = newVehicleId;

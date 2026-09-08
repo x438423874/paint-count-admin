@@ -1,9 +1,30 @@
 import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
 import { PrismaService } from '@lib/shared/prisma/prisma.service';
 import { Prisma, PaintVehicle } from '@prisma/client';
-import { PaginationResult } from '@lib/shared/prisma/pagination';
+import { PaginationResult, pageArgs } from '@lib/shared/prisma/pagination';
 import { CreateVehicleDto, UpdateVehicleDto, PageVehicleDto, UpsertVehicleByPlateDto } from '../vehicle/dto/vehicle.dto';
 import { toPaintCents } from './paint-calculation';
+
+/** 车辆主数据中可由工单回写的字段 */
+export type VehicleFieldKey = 'vin' | 'carModel' | 'brand' | 'customerName' | 'phone' | 'contactPerson';
+
+/**
+ * upsert 车辆主数据的写入策略
+ */
+export interface UpsertVehicleOptions {
+  /**
+   * 需要强制覆盖的字段。
+   *
+   * 列在这里的字段，其值来自**用户的显式编辑**（如工单编辑/OCR 修正时提交的车型），
+   * 即使车辆主数据里已有值，也以本次提交为准。
+   *
+   * 未列出的字段仍走智能合并（只补全空值 / 更完整的值），
+   * 避免批量导入、OCR 自动建单这类自动化写入把主数据改坏。
+   *
+   * 注意：空值永远不覆盖主数据，无论是否在列表中。
+   */
+  overwriteFields?: VehicleFieldKey[];
+}
 
 /** 由工单事实数据重算出的车辆统计 */
 interface VehicleStatRow {
@@ -198,8 +219,7 @@ export class PaintVehicleService {
   }
 
   async page(dto: PageVehicleDto, accessibleShopIds?: string[] | null): Promise<PaginationResult<any>> {
-    const current = dto.current ?? 1;
-    const size = dto.size ?? 10;
+    const { current, size, skip, take } = pageArgs(dto.current, dto.size);
 
     const where: Prisma.PaintVehicleWhereInput = {
       ...(dto.plateNumber && { plateNumber: { contains: PaintVehicleService.normalizePlate(dto.plateNumber) } }),
@@ -222,8 +242,8 @@ export class PaintVehicleService {
     const [records, total] = await Promise.all([
       this.prisma.paintVehicle.findMany({
         where,
-        skip: (current - 1) * size,
-        take: size,
+        skip,
+        take,
         orderBy: { lastOrderAt: 'desc' },
         include: {
           orders: {
@@ -256,12 +276,14 @@ export class PaintVehicleService {
    * - 车牌统一大写 + trim
    * - 空字符串不覆盖已有非空值
    * - 更新 lastOrderAt / lastShopId 统计字段
+   * - options.overwriteFields 中列出的字段以本次提交为准强制覆盖
    */
   async upsertByPlateWithTx(
     tx: Prisma.TransactionClient,
     dto: UpsertVehicleByPlateDto,
     shopId: string,
     orderDate?: Date,
+    options?: UpsertVehicleOptions,
   ): Promise<string> {
     const plate = PaintVehicleService.normalizePlate(dto.plateNumber);
     if (!plate) throw new BadRequestException('车牌号不能为空');
@@ -269,7 +291,7 @@ export class PaintVehicleService {
     // 先查找已有车辆，以便做智能合并（优先更完整的值）
     const existing = await tx.paintVehicle.findUnique({ where: { plateNumber: plate } });
 
-    // 智能合并：仅当新值更完整时才覆盖已有数据
+    // 默认（非强制覆盖）走的智能合并策略：仅当新值更完整时才覆盖已有数据
     // carModel/brand: 优先更长的值（更具体，如"海豹06DM-i" > "海豹"）
     // vin/customerName/phone/contactPerson: 仅填充空字段，不覆盖已有值
     const smartUpdate = (currentVal: string | null, newVal: string | undefined): string | undefined => {
@@ -289,17 +311,37 @@ export class PaintVehicleService {
       return undefined; // 已有值，不覆盖
     };
 
+    const overwrite = new Set<VehicleFieldKey>(options?.overwriteFields ?? []);
+
+    /**
+     * 决定某个字段的最终取值：
+     * - 新值为空：一律不写，避免把主数据清空
+     * - 在 overwriteFields 中：用户显式编辑，强制以新值为准
+     * - 否则：走智能合并（smartUpdate / fillIfEmpty）
+     */
+    const resolveField = (
+      key: VehicleFieldKey,
+      currentVal: string | null,
+      newVal: string | undefined,
+      merge: (cur: string | null, nv: string | undefined) => string | undefined,
+    ): string | undefined => {
+      const nv = (newVal || '').trim();
+      if (!nv) return undefined;
+      if (overwrite.has(key)) return nv;
+      return merge(currentVal, newVal);
+    };
+
     const updateData: Prisma.PaintVehicleUpdateInput = {
       lastOrderAt: orderDate || new Date(),
       lastShopId: shopId,
     };
     if (existing) {
-      const v = smartUpdate(existing.carModel, dto.carModel); if (v) updateData.carModel = v;
-      const b = smartUpdate(existing.brand, dto.brand); if (b) updateData.brand = b;
-      const vi = fillIfEmpty(existing.vin, dto.vin); if (vi) updateData.vin = vi;
-      const cn = fillIfEmpty(existing.customerName, dto.customerName); if (cn) updateData.customerName = cn;
-      const ph = fillIfEmpty(existing.phone, dto.phone); if (ph) updateData.phone = ph;
-      const cp = fillIfEmpty(existing.contactPerson, dto.contactPerson); if (cp) updateData.contactPerson = cp;
+      const v = resolveField('carModel', existing.carModel, dto.carModel, smartUpdate); if (v) updateData.carModel = v;
+      const b = resolveField('brand', existing.brand, dto.brand, smartUpdate); if (b) updateData.brand = b;
+      const vi = resolveField('vin', existing.vin, dto.vin, fillIfEmpty); if (vi) updateData.vin = vi;
+      const cn = resolveField('customerName', existing.customerName, dto.customerName, fillIfEmpty); if (cn) updateData.customerName = cn;
+      const ph = resolveField('phone', existing.phone, dto.phone, fillIfEmpty); if (ph) updateData.phone = ph;
+      const cp = resolveField('contactPerson', existing.contactPerson, dto.contactPerson, fillIfEmpty); if (cp) updateData.contactPerson = cp;
     } else {
       // 新建车辆：所有非空字段都写入
       if (dto.carModel?.trim()) updateData.carModel = dto.carModel.trim();
@@ -504,8 +546,7 @@ export class PaintVehicleService {
     accessibleShopIds: string[] | null,
     options: { current?: number; size?: number; scope?: 'current_shop' | 'all_shops'; shopId?: string },
   ): Promise<{ records: any[]; total: number; summary: any }> {
-    const current = options.current ?? 1;
-    const size = options.size ?? 20;
+    const { current, size, skip, take } = pageArgs(options.current, options.size, 20);
     const scope = options.scope || 'all_shops';
 
     const where: Prisma.PaintWorkOrderWhereInput = { vehicleId, status: { not: 'VOID' as any } };
@@ -521,8 +562,8 @@ export class PaintVehicleService {
     const [records, total, allOrders] = await Promise.all([
       this.prisma.paintWorkOrder.findMany({
         where,
-        skip: (current - 1) * size,
-        take: size,
+        skip,
+        take,
         orderBy: [{ orderDate: 'desc' }, { createdAt: 'desc' }],
         include: {
           shop: { select: { id: true, name: true } },
