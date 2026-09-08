@@ -1,9 +1,9 @@
-import * as casbin from 'casbin';
 import { ExecutionContext, Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import { APP_FILTER, APP_GUARD } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { TerminusModule } from '@nestjs/terminus';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import * as casbin from 'casbin';
 
 import { BootstrapModule } from '@lib/bootstrap/bootstrap.module';
 import config, {
@@ -18,6 +18,7 @@ import { AuthZModule, AUTHZ_ENFORCER, PrismaAdapter } from '@lib/infra/casbin';
 import { AllExceptionsFilter } from '@lib/infra/filters/all-exceptions.filter';
 import { ApiKeyModule } from '@lib/infra/guard/api-key/api-key.module';
 import { JwtAuthGuard } from '@lib/infra/guard/jwt.auth.guard';
+import { LogInterceptor } from '@lib/infra/interceptors/log.interceptor';
 import { JwtStrategy } from '@lib/infra/strategies/jwt.passport-strategy';
 import { LoggerModule } from '@lib/logger';
 import { IAuthentication } from '@lib/typings/global';
@@ -112,6 +113,9 @@ const strategies = [JwtStrategy];
     // 限流守卫先于JWT执行，可在认证前拦截恶意请求
     { provide: APP_GUARD, useClass: ThrottlerGuard },
     { provide: APP_GUARD, useClass: JwtAuthGuard },
+
+    // 全局操作日志：写操作自动记录，@Log 自定义模块名，@SkipLog 排除
+    { provide: APP_INTERCEPTOR, useClass: LogInterceptor },
   ],
 })
 export class AppModule {}

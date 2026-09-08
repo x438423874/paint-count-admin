@@ -8,9 +8,10 @@ import { AuthenticationService } from '@app/base-system/lib/bounded-contexts/iam
 
 import { CacheConstant } from '@lib/constants/cache.constant';
 import { USER_AGENT } from '@lib/constants/rest.constant';
+import { Log } from '@lib/infra/decorators/log.decorator';
 import { Public } from '@lib/infra/decorators/public.decorator';
-import { ApiRes } from '@lib/infra/rest/res.response';
 import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
+import { ApiRes } from '@lib/infra/rest/res.response';
 import { Ip2regionService } from '@lib/shared/ip2region/ip2region.service';
 import { RedisUtility } from '@lib/shared/redis/redis.util';
 import { IAuthentication } from '@lib/typings/global';
@@ -84,6 +85,7 @@ export class AuthenticationController {
   }
 
   @Post('logout')
+  @Log('认证', '退出登录', { logBody: false })
   @ApiOperation({
     summary: 'User logout - revoke refresh tokens',
     description:

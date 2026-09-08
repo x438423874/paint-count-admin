@@ -11,7 +11,7 @@ import {
 } from '@nestjs/common';
 import { CommandBus, QueryBus } from '@nestjs/cqrs';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
-import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
+
 
 import { DomainCreateCommand } from '@app/base-system/lib/bounded-contexts/iam/domain/commands/domain-create.command';
 import { DomainDeleteCommand } from '@app/base-system/lib/bounded-contexts/iam/domain/commands/domain-delete.command';
@@ -23,6 +23,8 @@ import {
 import { PageDomainsQuery } from '@app/base-system/lib/bounded-contexts/iam/domain/queries/page-domains.query';
 
 import { ApiResponseDoc } from '@lib/infra/decorators/api-result.decorator';
+import { Log } from '@lib/infra/decorators/log.decorator';
+import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
 import { ApiRes } from '@lib/infra/rest/res.response';
 import { PaginationResult } from '@lib/shared/prisma/pagination';
 
@@ -30,6 +32,7 @@ import { DomainCreateDto, DomainUpdateDto } from '../dto/domain.dto';
 import { PageDomainsDto } from '../dto/page-domains.dto';
 
 @ApiTags('Casbin Domain - Module')
+@Log('域管理')
 @Controller('domain')
 export class DomainController {
   constructor(

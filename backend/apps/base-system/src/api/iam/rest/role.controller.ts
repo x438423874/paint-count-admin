@@ -11,7 +11,7 @@ import {
 } from '@nestjs/common';
 import { CommandBus, QueryBus } from '@nestjs/cqrs';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
-import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
+
 
 import { RoleCreateCommand } from '@app/base-system/lib/bounded-contexts/iam/role/commands/role-create.command';
 import { RoleDeleteCommand } from '@app/base-system/lib/bounded-contexts/iam/role/commands/role-delete.command';
@@ -23,6 +23,8 @@ import {
 import { PageRolesQuery } from '@app/base-system/lib/bounded-contexts/iam/role/queries/page-roles.query';
 
 import { ApiResponseDoc } from '@lib/infra/decorators/api-result.decorator';
+import { Log } from '@lib/infra/decorators/log.decorator';
+import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
 import { ApiRes } from '@lib/infra/rest/res.response';
 import { PaginationResult } from '@lib/shared/prisma/pagination';
 
@@ -30,6 +32,7 @@ import { PageRolesDto } from '../dto/page-roles.dto';
 import { RoleCreateDto, RoleUpdateDto } from '../dto/role.dto';
 
 @ApiTags('Role - Module')
+@Log('角色管理')
 @Controller('role')
 export class RoleController {
   constructor(

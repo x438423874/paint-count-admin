@@ -10,7 +10,7 @@ import {
 } from '@nestjs/common';
 import { CommandBus, QueryBus } from '@nestjs/cqrs';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
-import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
+
 
 import { MenuRoute } from '@app/base-system/lib/bounded-contexts/iam/menu/application/dto/route.dto';
 import { MenuService } from '@app/base-system/lib/bounded-contexts/iam/menu/application/service/menu.service';
@@ -22,12 +22,15 @@ import { MenuIdsByRoleIdAndDomainQuery } from '@app/base-system/lib/bounded-cont
 import { MenusQuery } from '@app/base-system/lib/bounded-contexts/iam/menu/queries/menus.query';
 import { MenusTreeQuery } from '@app/base-system/lib/bounded-contexts/iam/menu/queries/menus.tree.query';
 
+import { Log } from '@lib/infra/decorators/log.decorator';
 import { Public } from '@lib/infra/decorators/public.decorator';
+import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
 import { ApiRes } from '@lib/infra/rest/res.response';
 
 import { RouteCreateDto, RouteUpdateDto } from '../dto/route.dto';
 
 @ApiTags('Menu - Module')
+@Log('菜单管理')
 @Controller('route')
 export class MenuController {
   constructor(

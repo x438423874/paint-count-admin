@@ -10,7 +10,7 @@ import {
 } from '@nestjs/common';
 import { CommandBus, QueryBus } from '@nestjs/cqrs';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
-import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
+
 
 import { AccessKeyCreateCommand } from '@app/base-system/lib/bounded-contexts/access-key/commands/access_key-create.command';
 import { AccessKeyDeleteCommand } from '@app/base-system/lib/bounded-contexts/access-key/commands/access_key-delete.command';
@@ -21,6 +21,8 @@ import {
 import { PageAccessKeysQuery } from '@app/base-system/lib/bounded-contexts/access-key/queries/page-access_key.query';
 
 import { ApiResponseDoc } from '@lib/infra/decorators/api-result.decorator';
+import { Log } from '@lib/infra/decorators/log.decorator';
+import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
 import { ApiRes } from '@lib/infra/rest/res.response';
 import { BUILT_IN } from '@lib/shared/prisma/db.constant';
 import { PaginationResult } from '@lib/shared/prisma/pagination';
@@ -29,6 +31,7 @@ import { AccessKeyCreateDto } from '../dto/access_key.dto';
 import { PageAccessKeysQueryDto } from '../dto/page-access_key.dto';
 
 @ApiTags('AccessKey - Module')
+@Log('访问密钥')
 @Controller('access-key')
 export class AccessKeyController {
   constructor(

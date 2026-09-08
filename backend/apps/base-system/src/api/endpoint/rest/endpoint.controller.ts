@@ -8,7 +8,7 @@ import {
 } from '@nestjs/common';
 import { QueryBus } from '@nestjs/cqrs';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
-import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
+
 
 import { CasbinRuleApiEndpointService } from '@app/base-system/lib/bounded-contexts/api-endpoint/api-endpoint/application/service/casbin-rule-api-endpoint.service';
 import {
@@ -21,6 +21,7 @@ import { PageEndpointsQuery } from '@app/base-system/lib/bounded-contexts/api-en
 
 import { AuthActionVerb, AuthZGuard, UsePermissions } from '@lib/infra/casbin';
 import { ApiResponseDoc } from '@lib/infra/decorators/api-result.decorator';
+import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
 import { ApiRes } from '@lib/infra/rest/res.response';
 import { PaginationResult } from '@lib/shared/prisma/pagination';
 

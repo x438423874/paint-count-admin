@@ -3,7 +3,6 @@ import {
   Get,
   Query,
   UseGuards,
-  UseInterceptors,
 } from '@nestjs/common';
 import { QueryBus } from '@nestjs/cqrs';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
@@ -24,8 +23,8 @@ import { PaginationResult } from '@lib/shared/prisma/pagination';
 import { PageOperationLogsQueryDto } from '../dto/page-operation-log.dto';
 
 @UseGuards(AuthZGuard)
-@UseInterceptors(LogInterceptor)
 @ApiTags('Operation Log - Module')
+@Log('操作日志')
 @Controller('operation-log')
 export class OperationLogController {
   constructor(private readonly queryBus: QueryBus) {}

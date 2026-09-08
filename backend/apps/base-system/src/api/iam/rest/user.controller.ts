@@ -11,7 +11,7 @@ import {
 } from '@nestjs/common';
 import { CommandBus, QueryBus } from '@nestjs/cqrs';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
-import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
+
 
 import { UserCreateCommand } from '@app/base-system/lib/bounded-contexts/iam/authentication/commands/user-create.command';
 import { UserDeleteCommand } from '@app/base-system/lib/bounded-contexts/iam/authentication/commands/user-delete.command';
@@ -23,6 +23,8 @@ import {
 import { PageUsersQuery } from '@app/base-system/lib/bounded-contexts/iam/authentication/queries/page-users.query';
 
 import { ApiResponseDoc } from '@lib/infra/decorators/api-result.decorator';
+import { Log } from '@lib/infra/decorators/log.decorator';
+import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
 import { ApiRes } from '@lib/infra/rest/res.response';
 import { PaginationResult } from '@lib/shared/prisma/pagination';
 
@@ -30,6 +32,7 @@ import { PageUsersDto } from '../dto/page-users.dto';
 import { UserCreateDto, UserUpdateDto } from '../dto/user.dto';
 
 @ApiTags('User - Module')
+@Log('用户管理')
 @Controller('user')
 export class UserController {
   constructor(

@@ -10,7 +10,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
-import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
+
 
 import { AuthorizationService } from '@app/base-system/lib/bounded-contexts/iam/authentication/application/service/authorization.service';
 import { RoleAssignPermissionCommand } from '@app/base-system/lib/bounded-contexts/iam/authentication/commands/role-assign-permission.command';
@@ -21,6 +21,8 @@ import { MenuService } from '@app/base-system/lib/bounded-contexts/iam/menu/appl
 
 import { CacheConstant } from '@lib/constants/cache.constant';
 import { AuthZGuard, UsePermissions } from '@lib/infra/casbin';
+import { Log } from '@lib/infra/decorators/log.decorator';
+import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
 import { ApiRes } from '@lib/infra/rest/res.response';
 import { RedisUtility } from '@lib/shared/redis/redis.util';
 import { IAuthentication } from '@lib/typings/global';
@@ -32,6 +34,7 @@ import { AssignUserDto } from '../dto/assign-user.dto';
 
 @UseGuards(AuthZGuard)
 @ApiTags('Authorization - Module')
+@Log('权限管理')
 @Controller('authorization')
 export class AuthorizationController {
   constructor(
