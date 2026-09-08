@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, reactive, watch, ref } from 'vue';
-import { createPaintVehicle, updatePaintVehicle, fetchVehicleByPlate } from '@/service/api';
-import { useFormRules, useNaiveForm } from '@/hooks/common/form';
+import { computed, reactive, ref, watch } from 'vue';
+import { createPaintVehicle, fetchVehicleByPlate, updatePaintVehicle } from '@/service/api';
+import { useNaiveForm } from '@/hooks/common/form';
+import { plateNumberRegex } from '@/utils/validators';
 import { $t } from '@/locales';
 
 defineOptions({
@@ -26,7 +27,6 @@ const visible = defineModel<boolean>('visible', {
 });
 
 const { formRef, validate, restoreValidation } = useNaiveForm();
-const { defaultRequiredRule } = useFormRules();
 
 const title = computed(() => {
   const titles: Record<NaiveUI.TableOperateType, string> = {
@@ -50,11 +50,7 @@ interface FormModel {
 
 const model: FormModel = reactive(createDefaultModel());
 
-// 复用工单表单的车牌正则：支持7位/8位/6位旧车牌
-const PLATE_PROVINCE = '京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼使领军警海空北沈兰济南广成武翼';
-const plateNumberRegex = new RegExp(`^([${PLATE_PROVINCE}][A-Z][A-HJ-NP-Z0-9]{4,5}[A-HJ-NP-Z0-9挂学警港澳]|[A-Z][A-HJ-NP-Z0-9]{5})$`);
-const phoneRegex = /^1[3-9]\d{9}$/;
-const vinRegex = /^[A-HJ-NPR-Z0-9]{17}$/;
+// 校验正则统一维护在 utils/validators（车牌/手机号/车架号）
 
 type RuleKey = Extract<keyof FormModel, 'plateNumber'>;
 
@@ -145,7 +141,9 @@ async function handleSubmit() {
     const { data, error } = await updatePaintVehicle({ id: props.rowData.id, ...payload });
     if (error) return;
     const synced = data?.syncedOrderCount;
-    window.$message?.success(synced && synced > 0 ? `更新成功，已同步 ${synced} 张历史工单` : $t('common.updateSuccess'));
+    window.$message?.success(
+      synced && synced > 0 ? `更新成功，已同步 ${synced} 张历史工单` : $t('common.updateSuccess')
+    );
   }
   closeDrawer();
   emit('submitted');
@@ -196,9 +194,7 @@ watch(visible, () => {
           <NInput v-model:value="model.remark" type="textarea" placeholder="备注" :rows="2" />
         </NFormItem>
         <NFormItem v-if="props.operateType === 'edit'" label=" " :show-feedback="false">
-          <NCheckbox v-model:checked="model.syncToOrders">
-            同步到该车所有历史工单（仅更新本次修改的车辆信息）
-          </NCheckbox>
+          <NCheckbox v-model:checked="model.syncToOrders">同步到该车所有历史工单（仅更新本次修改的车辆信息）</NCheckbox>
         </NFormItem>
       </NForm>
       <template #footer>

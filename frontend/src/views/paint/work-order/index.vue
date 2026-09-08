@@ -1,41 +1,67 @@
 <script setup lang="tsx">
-import { NButton, NPopconfirm, NTag, NSpace, NImage, NCard, NStatistic, NProgress, NAlert, NDivider, NModal, NEmpty, NText, NRadioGroup, NRadio, NRadioButton, NDescriptions, NDescriptionsItem, NSelect, NForm, NFormItem, NSpin, NDropdown, NInput } from 'naive-ui';
-import EmptyState from '@/components/common/EmptyState.vue';
-
-import { ref, computed, onMounted, h } from 'vue';
+import { computed, h, onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
-  fetchWorkOrderPage,
-  deleteWorkOrder,
-  fetchPaintShopList,
-  fetchPaintCategoryList,
-  fetchWorkOrderById,
-  quickCreateWorkOrder,
+  NAlert,
+  NButton,
+  NCard,
+  NDescriptions,
+  NDescriptionsItem,
+  NDivider,
+  NDropdown,
+  NEmpty,
+  NForm,
+  NFormItem,
+  NImage,
+  NInput,
+  NModal,
+  NPopconfirm,
+  NProgress,
+  NRadio,
+  NRadioButton,
+  NRadioGroup,
+  NSelect,
+  NSpace,
+  NSpin,
+  NStatistic,
+  NTag,
+  NText
+} from 'naive-ui';
+import { PAINT_ORDER_STATUS_LABEL, getPaintOrderStatusTagType } from '@/constants/paint';
+import {
   auditWorkOrder,
-  unauditWorkOrder,
-  findDuplicateOrders,
-  mergeWorkOrders,
-  settleWorkOrder,
-  unsettleWorkOrder,
   batchSettleWorkOrders,
   batchUnsettleWorkOrders,
-  setAbnormal,
-  voidWorkOrder,
-  unvoidWorkOrder,
-  importWorkOrderExcel,
-  exportWorkOrderExcel,
+  deleteWorkOrder,
   downloadWorkOrderTemplate,
+  exportWorkOrderExcel,
+  fetchPaintCategoryList,
+  fetchWorkOrderById,
+  fetchWorkOrderPage,
+  findDuplicateOrders,
+  importWorkOrderExcel,
+  mergeWorkOrders,
   ocrRecognizeImage,
-  updateWorkOrder
+  quickCreateWorkOrder,
+  setAbnormal,
+  settleWorkOrder,
+  unauditWorkOrder,
+  unsettleWorkOrder,
+  unvoidWorkOrder,
+  updateWorkOrder,
+  voidWorkOrder
 } from '@/service/api';
 import { useTable, useTableOperate } from '@/hooks/common/table';
-import { $t } from '@/locales';
+import { useShopOptions } from '@/hooks/business/use-shop-options';
 import { compressDualImage } from '@/utils/image-compress';
+import { formatPaintCount } from '@/utils/paint-count';
+import { canAudit, canBatchOcr, canDelete, canEdit, canMerge, canSettle } from '@/utils/permission';
+import EmptyState from '@/components/common/EmptyState.vue';
+import { $t } from '@/locales';
 import WorkOrderOperateDrawer from './modules/work-order-operate-drawer.vue';
 import OcrCorrectModal from './modules/ocr-correct-modal.vue';
 import BatchOcrModal from './modules/batch-ocr-modal.vue';
 import WorkOrderDetailModal from './modules/work-order-detail-modal.vue';
-import { canAudit, canDelete, canBatchOcr, canMerge, canSettle, canEdit } from '@/utils/permission';
 
 // 权限控制（一次性求值，角色在登录态确定后不变）
 const allowAudit = computed(() => canAudit());
@@ -45,7 +71,8 @@ const allowMerge = computed(() => canMerge());
 const allowSettle = computed(() => canSettle());
 const allowEdit = computed(() => canEdit());
 
-const shops = ref<{ id: string; name: string; code: string; brand?: string; standardTemplateId?: string; standardTemplate?: { id: string; name: string } }[]>([]);
+// 门店走 paint store 共享缓存，全应用只请求一次（原为每页各自 fetchPaintShopList）
+const { shops, ensureShops } = useShopOptions();
 const showDetail = ref(false);
 const currentOrder = ref<any>(null);
 const selectedShopId = ref<string | null>(null);
@@ -72,30 +99,14 @@ function getCurrentMonth() {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 }
 
-const statusTypeMap: Record<string, NaiveUI.ThemeColor> = {
-  DRAFT: 'default',
-  PENDING: 'warning',
-  AUDITED: 'success',
-  SETTLED: 'info',
-  ABNORMAL: 'error',
-  VOID: 'error'
-};
-
-const statusLabelMap: Record<string, string> = {
-  DRAFT: '草稿',
-  PENDING: '待审核',
-  AUDITED: '已审核',
-  SETTLED: '已结算',
-  ABNORMAL: '异常',
-  VOID: '作废'
-};
-
+// 状态文案/颜色统一走 constants/paint（原映射 AUDITED/SETTLED 颜色与结算页相反）
 function getStatusType(status?: string): NaiveUI.ThemeColor {
-  return statusTypeMap[status || ''] || 'default';
+  return getPaintOrderStatusTagType(status);
 }
 
 function getStatusLabel(status?: string): string {
-  return statusLabelMap[status || ''] || status || '-';
+  if (!status) return '-';
+  return PAINT_ORDER_STATUS_LABEL[status] || status;
 }
 
 // 合并工单相关
@@ -144,7 +155,12 @@ async function handleMerge(sourceIds: string[]) {
 const fileInputRef = ref<HTMLInputElement | null>(null);
 const importLoading = ref(false);
 const showImportResult = ref(false);
-const importResult = ref<{ success: number; failed: number; errors: string[]; mode?: 'quantity' | 'paintCount' } | null>(null);
+const importResult = ref<{
+  success: number;
+  failed: number;
+  errors: string[];
+  mode?: 'quantity' | 'paintCount';
+} | null>(null);
 
 function triggerImport() {
   fileInputRef.value?.click();
@@ -243,9 +259,8 @@ function isUnauditedStatus(status?: string): boolean {
 }
 
 function getOcrPendingOrders(): any[] {
-  const source = batchOcrMode.value === 'selected'
-    ? data.value.filter((o: any) => checkedRowKeys.value.includes(o.id))
-    : data.value;
+  const source =
+    batchOcrMode.value === 'selected' ? data.value.filter((o: any) => checkedRowKeys.value.includes(o.id)) : data.value;
   return source.filter((o: any) => isUnauditedStatus(o.status) && o.images?.length > 0);
 }
 
@@ -284,7 +299,16 @@ async function handleBatchOcrFill() {
       formData.append('file', blob, 'image.jpg');
       formData.append('shopId', order.shopId);
       // 智能选择OCR模式：根据当前工单已填字段决定识别范围
-      const basicFields = [order.plateNumber, order.orderNo, order.customerName, order.phone, order.carModel, order.vin, order.brand, order.orderDate];
+      const basicFields = [
+        order.plateNumber,
+        order.orderNo,
+        order.customerName,
+        order.phone,
+        order.carModel,
+        order.vin,
+        order.brand,
+        order.orderDate
+      ];
       const basicFilled = basicFields.some((v: any) => v && String(v).trim());
       const itemsFilled = (order.items || []).some((it: any) => it.quantity && it.quantity > 0);
       let smartMode: 'basic' | 'items' | 'all' = 'all';
@@ -302,7 +326,7 @@ async function handleBatchOcrFill() {
 
       // 空白字段直接填充，已填字段不覆盖
       const updateData: any = { id: order.id };
-      let filledFields: string[] = [];
+      const filledFields: string[] = [];
       // 车牌号：仅填充空白
       if (!order.plateNumber && ocrResult.plateNumber) {
         updateData.plateNumber = ocrResult.plateNumber;
@@ -346,12 +370,15 @@ async function handleBatchOcrFill() {
       if (ocrItems && ocrItems.length > 0) {
         const matchedItems = ocrItems.filter(it => it.matched && it.categoryId);
         if (matchedItems.length > 0) {
-          const hasNoItems = !order.items || order.items.length === 0 || order.items.every((it: any) => !it.quantity || it.quantity === 0);
+          const hasNoItems =
+            !order.items ||
+            order.items.length === 0 ||
+            order.items.every((it: any) => !it.quantity || it.quantity === 0);
           if (hasNoItems) {
             updateData.items = matchedItems.map(it => ({
               categoryId: it.categoryId as string,
               quantity: it.quantity,
-              newPartQuantity: it.newPartQuantity,
+              newPartQuantity: it.newPartQuantity
             }));
             filledFields.push(`部位(${matchedItems.length})`);
           }
@@ -387,9 +414,13 @@ async function handleBatchOcrFill() {
   };
 
   if (batchOcrProgress.value.failed === 0) {
-    window.$message?.success(`OCR填充完成：成功 ${batchOcrProgress.value.success} 条，跳过 ${batchOcrProgress.value.skipped} 条`);
+    window.$message?.success(
+      `OCR填充完成：成功 ${batchOcrProgress.value.success} 条，跳过 ${batchOcrProgress.value.skipped} 条`
+    );
   } else {
-    window.$message?.warning(`OCR填充完成：成功 ${batchOcrProgress.value.success} 条，失败 ${batchOcrProgress.value.failed} 条，跳过 ${batchOcrProgress.value.skipped} 条`);
+    window.$message?.warning(
+      `OCR填充完成：成功 ${batchOcrProgress.value.success} 条，失败 ${batchOcrProgress.value.failed} 条，跳过 ${batchOcrProgress.value.skipped} 条`
+    );
   }
 
   // 刷新列表
@@ -411,15 +442,13 @@ function openBatchOcrFill() {
 
 // 计算选中工单中可 OCR 处理的数量
 const ocrPendingSelectedCount = computed(() => {
-  return data.value.filter((o: any) =>
-    checkedRowKeys.value.includes(o.id) && isUnauditedStatus(o.status) && o.images?.length > 0
+  return data.value.filter(
+    (o: any) => checkedRowKeys.value.includes(o.id) && isUnauditedStatus(o.status) && o.images?.length > 0
   ).length;
 });
 
 const ocrPendingAllCount = computed(() => {
-  return data.value.filter((o: any) =>
-    isUnauditedStatus(o.status) && o.images?.length > 0
-  ).length;
+  return data.value.filter((o: any) => isUnauditedStatus(o.status) && o.images?.length > 0).length;
 });
 
 // 快速录入门店模板状态
@@ -442,14 +471,11 @@ function getImageUrl(url: string) {
 }
 
 async function loadShops() {
-  const { data, error } = await fetchPaintShopList();
-  if (!error && data) {
-    shops.value = data;
-    // 数据权限：若用户仅绑定 1 个门店，自动选中并锁定
-    if (data.length === 1) {
-      selectedShopId.value = data[0].id;
-      searchParams.shopId = data[0].id;
-    }
+  const list = await ensureShops();
+  // 数据权限：若用户仅绑定 1 个门店，自动选中并锁定
+  if (list.length === 1) {
+    selectedShopId.value = list[0].id;
+    searchParams.shopId = list[0].id;
   }
 }
 
@@ -517,10 +543,14 @@ const {
             </NTag>
           )}
           {row._isDuplicate && (
-            <NTag type="warning" size="small" round>{row._duplicateCount}条重复</NTag>
+            <NTag type="warning" size="small" round>
+              {row._duplicateCount}条重复
+            </NTag>
           )}
           {row._hasOtherMonthSettlement && (
-            <NTag type="success" size="small" round>跨月结算</NTag>
+            <NTag type="success" size="small" round>
+              跨月结算
+            </NTag>
           )}
         </NSpace>
       )
@@ -540,12 +570,16 @@ const {
       width: 110,
       render: (row: any) => {
         if (!row.plateNumber) return '-';
-        return h(NButton, {
-          text: true,
-          type: 'primary',
-          size: 'small',
-          onClick: () => router.push({ path: '/paint/vehicle', query: { plateNumber: row.plateNumber } }),
-        }, { default: () => row.plateNumber });
+        return h(
+          NButton,
+          {
+            text: true,
+            type: 'primary',
+            size: 'small',
+            onClick: () => router.push({ path: '/paint/vehicle', query: { plateNumber: row.plateNumber } })
+          },
+          { default: () => row.plateNumber }
+        );
       }
     },
     {
@@ -573,16 +607,21 @@ const {
       title: '日期',
       align: 'center',
       width: 90,
-      render: (row: any) => row.orderDate ? new Date(row.orderDate).toLocaleDateString() : '-'
+      render: (row: any) => (row.orderDate ? new Date(row.orderDate).toLocaleDateString() : '-')
     },
     {
       key: 'settlementMonth',
       title: '结算月份',
       align: 'center',
       width: 110,
-      render: (row: any) => (
-        row.settlementMonth ? <span>{row.settlementMonth}</span> : <NTag size="small" type="warning">未结算</NTag>
-      )
+      render: (row: any) =>
+        row.settlementMonth ? (
+          <span>{row.settlementMonth}</span>
+        ) : (
+          <NTag size="small" type="warning">
+            未结算
+          </NTag>
+        )
     },
     {
       key: 'totalPaintCount',
@@ -591,7 +630,11 @@ const {
       width: 60,
       render: (row: any) => {
         const v = Number(row.totalPaintCount);
-        return <NTag type={v < 0 ? 'error' : 'info'} size="small" round>{formatPaintCount(v)}</NTag>;
+        return (
+          <NTag type={v < 0 ? 'error' : 'info'} size="small" round>
+            {formatPaintCount(v)}
+          </NTag>
+        );
       }
     },
     {
@@ -601,10 +644,24 @@ const {
       width: 80,
       render: (row: any) => (
         <NSpace justify="center" size={4}>
-          <NTag type={getStatusType(row.status)} size="small">{getStatusLabel(row.status)}</NTag>
-          {row.isRework && <NTag type="error" size="small">返工</NTag>}
-          {row.isAdjustment && <NTag type="warning" size="small">调整</NTag>}
-          {row._isSealed && <NTag type="warning" size="small">已封单</NTag>}
+          <NTag type={getStatusType(row.status)} size="small">
+            {getStatusLabel(row.status)}
+          </NTag>
+          {row.isRework && (
+            <NTag type="error" size="small">
+              返工
+            </NTag>
+          )}
+          {row.isAdjustment && (
+            <NTag type="warning" size="small">
+              调整
+            </NTag>
+          )}
+          {row._isSealed && (
+            <NTag type="warning" size="small">
+              已封单
+            </NTag>
+          )}
         </NSpace>
       )
     },
@@ -621,7 +678,7 @@ const {
         const isAbnormal = row.status === 'ABNORMAL';
         const sealed = row._isSealed;
         return (
-          <div class="flex-center gap-4px flex-wrap">
+          <div class="flex-center flex-wrap gap-4px">
             {isUnaudited && allowEdit && !sealed && (
               <NButton type="primary" text size="small" onClick={() => edit(row.id)}>
                 编辑
@@ -636,11 +693,16 @@ const {
               </NButton>
             )}
             {row._isDuplicate && allowMerge && !sealed && (
-              <NButton type="warning" text size="small" onClick={() => openMergeModal(row.orderNo, row.id, row.settlementMonth)}>
+              <NButton
+                type="warning"
+                text
+                size="small"
+                onClick={() => openMergeModal(row.orderNo, row.id, row.settlementMonth)}
+              >
                 合并
               </NButton>
             )}
-            {allowAudit && isUnaudited && !sealed && (
+            {allowAudit.value && isUnaudited && !sealed && (
               <NPopconfirm onPositiveClick={() => handleAudit(row.id)}>
                 {{
                   default: () => '确认审核？',
@@ -652,7 +714,7 @@ const {
                 }}
               </NPopconfirm>
             )}
-            {allowAudit && row.status === 'AUDITED' && !sealed && (
+            {allowAudit.value && row.status === 'AUDITED' && !sealed && (
               <NPopconfirm onPositiveClick={() => handleUnaudit(row.id)}>
                 {{
                   default: () => '确认取消审核？',
@@ -664,35 +726,44 @@ const {
                 }}
               </NPopconfirm>
             )}
-            {allowSettle && isAudited && !sealed && (
+            {allowSettle.value && isAudited && !sealed && (
               <NPopconfirm onPositiveClick={() => handleSettle(row.id)}>
                 {{
                   default: () => '确认结算？',
-                  trigger: () => <NButton type="info" text size="small">结算</NButton>
+                  trigger: () => (
+                    <NButton type="info" text size="small">
+                      结算
+                    </NButton>
+                  )
                 }}
               </NPopconfirm>
             )}
-            {allowSettle && isAudited && !sealed && (
+            {allowSettle.value && isAudited && !sealed && (
               <NButton type="warning" text size="small" onClick={() => handleAbnormal(row.id, false)}>
                 标记异常
               </NButton>
             )}
-            {allowSettle && isAbnormal && !sealed && (
-              <NButton type="success" text size="small" onClick={() => handleAbnormal(row.id, true, row.abnormalRemark)}>
+            {allowSettle.value && isAbnormal && !sealed && (
+              <NButton
+                type="success"
+                text
+                size="small"
+                onClick={() => handleAbnormal(row.id, true, row.abnormalRemark)}
+              >
                 取消异常
               </NButton>
             )}
-            {allowEdit && !row.isRework && !sealed && (
+            {allowEdit.value && !row.isRework && !sealed && (
               <NButton type="error" text size="small" onClick={() => handleRework(row, true)}>
                 标记返工
               </NButton>
             )}
-            {allowEdit && row.isRework && !sealed && (
+            {allowEdit.value && row.isRework && !sealed && (
               <NButton type="success" text size="small" onClick={() => handleRework(row, false)}>
                 取消返工
               </NButton>
             )}
-            {allowSettle && isSettled && !sealed && (
+            {allowSettle.value && isSettled && !sealed && (
               <NPopconfirm onPositiveClick={() => handleUnsettle(row.id)}>
                 {{
                   default: () => '确认取消结算？',
@@ -704,7 +775,7 @@ const {
                 }}
               </NPopconfirm>
             )}
-            {allowEdit && row.status !== 'VOID' && !sealed && (
+            {allowEdit.value && row.status !== 'VOID' && !sealed && (
               <NPopconfirm onPositiveClick={() => handleVoid(row.id)}>
                 {{
                   default: () => '确认作废该工单？作废后不计入幅数统计与对账',
@@ -716,7 +787,7 @@ const {
                 }}
               </NPopconfirm>
             )}
-            {allowEdit && row.status === 'VOID' && !sealed && (
+            {allowEdit.value && row.status === 'VOID' && !sealed && (
               <NPopconfirm onPositiveClick={() => handleUnvoid(row.id)}>
                 {{
                   default: () => '确认恢复该作废工单？',
@@ -728,7 +799,7 @@ const {
                 }}
               </NPopconfirm>
             )}
-            {allowDelete && isUnaudited && !sealed && (
+            {allowDelete.value && isUnaudited && !sealed && (
               <NPopconfirm onPositiveClick={() => handleDelete(row.id)}>
                 {{
                   default: () => '确认删除此工单？',
@@ -747,16 +818,8 @@ const {
   ]
 });
 
-const {
-  drawerVisible,
-  operateType,
-  editingData,
-  handleAdd,
-  handleEdit,
-  checkedRowKeys,
-  onBatchDeleted,
-  onDeleted
-} = useTableOperate(data as any, getData);
+const { drawerVisible, operateType, editingData, handleAdd, handleEdit, checkedRowKeys, onBatchDeleted, onDeleted } =
+  useTableOperate(data as any, getData);
 
 function edit(id: string) {
   handleEdit(id);
@@ -928,11 +991,6 @@ async function viewDetail(id: string) {
 }
 
 // 幅数显示格式：默认1位小数，实际值有2位小数时显示2位（与编辑页幅数规则一致）
-function formatPaintCount(val?: number | string | null): string {
-  const n = Number(val ?? 0);
-  const decimals = String(n).split('.')[1]?.length ?? 0;
-  return n.toFixed(Math.min(Math.max(decimals, 1), 2));
-}
 
 const totalPaintCount = computed(() => {
   return formatPaintCount(extra.value?.totalPaintCount);
@@ -1012,7 +1070,7 @@ async function handleBatchQuickUpload({ file }: { file: File }) {
     <NCard :bordered="false" size="small">
       <NSpace align="center" :wrap="true" :size="[16, 12]">
         <NSpace align="center" :size="6">
-          <NText depth="3" style="white-space: nowrap;">门店</NText>
+          <NText depth="3" style="white-space: nowrap">门店</NText>
           <NSelect
             v-model:value="selectedShopId"
             placeholder="全部门店"
@@ -1023,19 +1081,19 @@ async function handleBatchQuickUpload({ file }: { file: File }) {
           />
         </NSpace>
         <NSpace align="center" :size="6">
-          <NText depth="3" style="white-space: nowrap;">结算月份</NText>
+          <NText depth="3" style="white-space: nowrap">结算月份</NText>
           <NDatePicker
             :formatted-value="searchParams.settlementMonth || undefined"
-            @update:formatted-value="(val: string | undefined) => { searchParams.settlementMonth = val || undefined; getDataByPage(); }"
             type="month"
             value-format="yyyy-MM"
             clearable
             style="width: 150px"
             placeholder="选择月份"
+            @update:formatted-value="(val: string | undefined) => { searchParams.settlementMonth = val || undefined; getDataByPage(); }"
           />
         </NSpace>
         <NSpace align="center" :size="6">
-          <NText depth="3" style="white-space: nowrap;">状态</NText>
+          <NText depth="3" style="white-space: nowrap">状态</NText>
           <NSelect
             :value="searchParams.status || ''"
             :options="[
@@ -1054,7 +1112,7 @@ async function handleBatchQuickUpload({ file }: { file: File }) {
           />
         </NSpace>
         <NSpace align="center" :size="6">
-          <NText depth="3" style="white-space: nowrap;">返工</NText>
+          <NText depth="3" style="white-space: nowrap">返工</NText>
           <NSelect
             :value="searchParams.isRework === undefined ? '' : String(searchParams.isRework)"
             :options="[
@@ -1069,7 +1127,7 @@ async function handleBatchQuickUpload({ file }: { file: File }) {
           />
         </NSpace>
         <NSpace align="center" :size="6">
-          <NText depth="3" style="white-space: nowrap;">调整单</NText>
+          <NText depth="3" style="white-space: nowrap">调整单</NText>
           <NSelect
             :value="searchParams.isAdjustment === undefined ? '' : String(searchParams.isAdjustment)"
             :options="[
@@ -1084,7 +1142,7 @@ async function handleBatchQuickUpload({ file }: { file: File }) {
           />
         </NSpace>
         <NSpace align="center" :size="6">
-          <NText depth="3" style="white-space: nowrap;">部位</NText>
+          <NText depth="3" style="white-space: nowrap">部位</NText>
           <NSelect
             v-model:value="searchParams.categoryId"
             :options="categories.map(c => ({ label: c.name, value: c.id }))"
@@ -1095,33 +1153,41 @@ async function handleBatchQuickUpload({ file }: { file: File }) {
           />
         </NSpace>
         <NSpace align="center" :size="6">
-          <NText depth="3" style="white-space: nowrap;">车牌号</NText>
+          <NText depth="3" style="white-space: nowrap">车牌号</NText>
           <NInput
             :value="searchParams.plateNumber || ''"
-            @update:value="(val: string) => { searchParams.plateNumber = val || undefined; }"
             placeholder="搜索车牌号"
             clearable
             style="width: 130px"
+            @update:value="(val: string) => { searchParams.plateNumber = val || undefined; }"
             @keyup.enter="getDataByPage()"
           />
         </NSpace>
         <NSpace align="center" :size="6">
-          <NText depth="3" style="white-space: nowrap;">客户</NText>
+          <NText depth="3" style="white-space: nowrap">客户</NText>
           <NInput
             :value="searchParams.customerName || ''"
-            @update:value="(val: string) => { searchParams.customerName = val || undefined; }"
             placeholder="搜索客户名"
             clearable
             style="width: 120px"
+            @update:value="(val: string) => { searchParams.customerName = val || undefined; }"
             @keyup.enter="getDataByPage()"
           />
         </NSpace>
         <NButton type="primary" @click="getDataByPage()">搜索</NButton>
-        <NButton @click="resetSearchParams(); selectedShopId = null; getDataByPage();">重置</NButton>
+        <NButton
+          @click="
+            resetSearchParams();
+            selectedShopId = null;
+            getDataByPage();
+          "
+        >
+          重置
+        </NButton>
         <NDivider vertical />
         <NButton v-if="allowEdit" type="warning" @click="showQuickCreate = true">快速录入</NButton>
-        <NButton type="info" @click="handleDownloadTemplate" :disabled="!selectedShopId">下载模板</NButton>
-        <NButton v-if="allowEdit" type="success" @click="triggerImport" :disabled="!selectedShopId">导入</NButton>
+        <NButton type="info" :disabled="!selectedShopId" @click="handleDownloadTemplate">下载模板</NButton>
+        <NButton v-if="allowEdit" type="success" :disabled="!selectedShopId" @click="triggerImport">导入</NButton>
         <NDropdown
           trigger="click"
           :options="[
@@ -1134,17 +1200,11 @@ async function handleBatchQuickUpload({ file }: { file: File }) {
           <NButton :disabled="!selectedShopId">导出</NButton>
         </NDropdown>
 
-        <NButton v-if="allowBatchOcr" type="info" @click="openBatchOcrFill">
-          一键OCR填充
-        </NButton>
-        <NButton type="success" :disabled="!selectedShopId" @click="batchOcrVisible = true">
-          批量OCR录入
-        </NButton>
+        <NButton v-if="allowBatchOcr" type="info" @click="openBatchOcrFill">一键OCR填充</NButton>
+        <NButton type="success" :disabled="!selectedShopId" @click="batchOcrVisible = true">批量OCR录入</NButton>
         <NPopconfirm v-if="allowSettle && settleableIds.length > 0" @positive-click="handleBatchSettle">
           <template #trigger>
-            <NButton type="info" :loading="batchSettleLoading">
-              批量结算（{{ settleableIds.length }} 条）
-            </NButton>
+            <NButton type="info" :loading="batchSettleLoading">批量结算（{{ settleableIds.length }} 条）</NButton>
           </template>
           确认结算选中的 {{ settleableIds.length }} 条工单？
         </NPopconfirm>
@@ -1156,7 +1216,7 @@ async function handleBatchQuickUpload({ file }: { file: File }) {
           </template>
           确认取消结算选中的 {{ unsettleableIds.length }} 条工单？
         </NPopconfirm>
-        <input ref="fileInputRef" type="file" accept=".xlsx,.xls" style="display:none" @change="handleImportFile" />
+        <input ref="fileInputRef" type="file" accept=".xlsx,.xls" style="display: none" @change="handleImportFile" />
       </NSpace>
     </NCard>
 
@@ -1191,19 +1251,18 @@ async function handleBatchQuickUpload({ file }: { file: File }) {
         size="small"
         striped
         :flex-height="true"
+        virtual-scroll
         :scroll-x="1200"
         :loading="loading"
         remote
         :row-key="(row: any) => row.id"
         :pagination="mobilePagination"
-        class="sm:h-full paint-table"
+        class="paint-table sm:h-full"
       >
         <template #empty>
           <EmptyState description="暂无工单数据">
             <template #action>
-              <NButton v-if="allowEdit" text type="primary" size="small" @click="handleAdd">
-                点击新建工单
-              </NButton>
+              <NButton v-if="allowEdit" text type="primary" size="small" @click="handleAdd">点击新建工单</NButton>
             </template>
           </EmptyState>
         </template>
@@ -1216,11 +1275,7 @@ async function handleBatchQuickUpload({ file }: { file: File }) {
         @submitted="getDataByPage"
       />
 
-      <OcrCorrectModal
-        v-model:visible="ocrCorrectVisible"
-        :order="ocrCorrectOrder"
-        @saved="onOcrCorrectSaved"
-      />
+      <OcrCorrectModal v-model:visible="ocrCorrectVisible" :order="ocrCorrectOrder" @saved="onOcrCorrectSaved" />
 
       <BatchOcrModal
         v-model:show="batchOcrVisible"
@@ -1233,7 +1288,13 @@ async function handleBatchQuickUpload({ file }: { file: File }) {
     <WorkOrderDetailModal v-model:show="showDetail" :order="currentOrder" />
 
     <!-- 快速录入弹窗 -->
-    <NModal v-model:show="showQuickCreate" preset="card" title="快速录入工单" style="width: 480px" :mask-closable="false">
+    <NModal
+      v-model:show="showQuickCreate"
+      preset="card"
+      title="快速录入工单"
+      style="width: 480px"
+      :mask-closable="false"
+    >
       <NSpace vertical :size="16">
         <NFormItem label="选择门店" :show-feedback="false">
           <NSelect
@@ -1253,12 +1314,12 @@ async function handleBatchQuickUpload({ file }: { file: File }) {
         <NFormItem label="结算月份" :show-feedback="false">
           <NDatePicker
             :formatted-value="quickSettlementMonth || undefined"
-            @update:formatted-value="(val: string | undefined) => quickSettlementMonth = val || ''"
             type="month"
             value-format="yyyy-MM"
             style="width: 100%"
             clearable
             placeholder="选择结算月份"
+            @update:formatted-value="(val: string | undefined) => quickSettlementMonth = val || ''"
           />
         </NFormItem>
 
@@ -1294,27 +1355,44 @@ async function handleBatchQuickUpload({ file }: { file: File }) {
           v-if="batchUploading && batchTotal > 0"
           type="line"
           :percentage="Math.round((batchDone / batchTotal) * 100)"
-          :indicator-placement="'inside'"
+          indicator-placement="inside"
           processing
         />
       </NSpace>
     </NModal>
 
     <!-- 合并工单弹窗 -->
-    <NModal v-model:show="showMergeModal" preset="card" :title="`合并重复工单 - ${mergeOrderNo}`" style="width: 600px" :mask-closable="false">
+    <NModal
+      v-model:show="showMergeModal"
+      preset="card"
+      :title="`合并重复工单 - ${mergeOrderNo}`"
+      style="width: 600px"
+      :mask-closable="false"
+    >
       <NAlert type="warning" :bordered="false" class="mb-12px">
-        检测到工单号 {{ mergeOrderNo }} 存在多条记录，请勾选要合并到当前工单的记录。合并后，仅转移被合并工单的图片；若当前工单缺少车牌号、车型等基础信息，会用被合并工单的内容自动补齐；当前工单的幅数明细保持不变；源工单将被删除。
+        检测到工单号
+        {{ mergeOrderNo }}
+        存在多条记录，请勾选要合并到当前工单的记录。合并后，仅转移被合并工单的图片；若当前工单缺少车牌号、车型等基础信息，会用被合并工单的内容自动补齐；当前工单的幅数明细保持不变；源工单将被删除。
       </NAlert>
       <NEmpty v-if="duplicateOrders.length === 0" description="没有其他重复工单" />
       <template v-else>
         <NSpace vertical :size="8">
           <NCard v-for="order in duplicateOrders" :key="order.id" size="small" :bordered="true">
             <NSpace justify="space-between" align="center">
-              <NCheckbox :checked="mergeSelectedIds.includes(order.id)" @update:checked="(val: boolean) => toggleMergeSelect(order.id, val)">
+              <NCheckbox
+                :checked="mergeSelectedIds.includes(order.id)"
+                @update:checked="(val: boolean) => toggleMergeSelect(order.id, val)"
+              >
                 <NSpace vertical :size="4">
                   <NText strong>{{ order.orderNo }}</NText>
-                  <NText depth="3">{{ order.shop?.name }} | {{ order.plateNumber || '无车牌' }} | 幅数: {{ formatPaintCount(order.totalPaintCount) }}</NText>
-                  <NText depth="3">项目数: {{ order.items?.length || 0 }} | 图片数: {{ (order._count?.images ?? order.images?.length) || 0 }}</NText>
+                  <NText depth="3">
+                    {{ order.shop?.name }} | {{ order.plateNumber || '无车牌' }} | 幅数:
+                    {{ formatPaintCount(order.totalPaintCount) }}
+                  </NText>
+                  <NText depth="3">
+                    项目数: {{ order.items?.length || 0 }} | 图片数:
+                    {{ (order._count?.images ?? order.images?.length) || 0 }}
+                  </NText>
                 </NSpace>
               </NCheckbox>
             </NSpace>
@@ -1338,29 +1416,53 @@ async function handleBatchQuickUpload({ file }: { file: File }) {
 
     <!-- 结算弹窗 -->
     <!-- 异常标注弹窗 -->
-    <NModal v-model:show="showAbnormalModal" preset="card" :title="abnormalFlag ? '标记异常' : '取消异常'" style="width: 400px">
+    <NModal
+      v-model:show="showAbnormalModal"
+      preset="card"
+      :title="abnormalFlag ? '标记异常' : '取消异常'"
+      style="width: 400px"
+    >
       <NSpace vertical :size="16">
         <NAlert v-if="abnormalFlag" type="warning" title="标记异常后该工单将无法结算" />
-        <NInput v-model:value="abnormalRemark" type="textarea" :placeholder="abnormalFlag ? '请输入异常原因' : '备注（选填）'" :rows="3" />
+        <NInput
+          v-model:value="abnormalRemark"
+          type="textarea"
+          :placeholder="abnormalFlag ? '请输入异常原因' : '备注（选填）'"
+          :rows="3"
+        />
       </NSpace>
       <template #footer>
         <NSpace justify="end">
           <NButton @click="showAbnormalModal = false">取消</NButton>
-          <NButton :type="abnormalFlag ? 'warning' : 'success'" @click="confirmAbnormal">{{ abnormalFlag ? '确认标记' : '确认取消异常' }}</NButton>
+          <NButton :type="abnormalFlag ? 'warning' : 'success'" @click="confirmAbnormal">
+            {{ abnormalFlag ? '确认标记' : '确认取消异常' }}
+          </NButton>
         </NSpace>
       </template>
     </NModal>
 
     <!-- 返工标记弹窗 -->
-    <NModal v-model:show="showReworkModal" preset="card" :title="reworkFlag ? '标记返工' : '取消返工'" style="width: 400px">
+    <NModal
+      v-model:show="showReworkModal"
+      preset="card"
+      :title="reworkFlag ? '标记返工' : '取消返工'"
+      style="width: 400px"
+    >
       <NSpace vertical :size="16">
         <NAlert v-if="reworkFlag" type="error" title="返工工单的幅数将不计入总幅数统计" />
-        <NInput v-model:value="reworkRemarkInput" type="textarea" :placeholder="reworkFlag ? '请输入返工原因（选填）' : '备注（选填）'" :rows="3" />
+        <NInput
+          v-model:value="reworkRemarkInput"
+          type="textarea"
+          :placeholder="reworkFlag ? '请输入返工原因（选填）' : '备注（选填）'"
+          :rows="3"
+        />
       </NSpace>
       <template #footer>
         <NSpace justify="end">
           <NButton @click="showReworkModal = false">取消</NButton>
-          <NButton :type="reworkFlag ? 'error' : 'success'" @click="confirmRework">{{ reworkFlag ? '确认标记' : '确认取消' }}</NButton>
+          <NButton :type="reworkFlag ? 'error' : 'success'" @click="confirmRework">
+            {{ reworkFlag ? '确认标记' : '确认取消' }}
+          </NButton>
         </NSpace>
       </template>
     </NModal>
@@ -1371,13 +1473,24 @@ async function handleBatchQuickUpload({ file }: { file: File }) {
         <NAlert :type="importResult.failed > 0 ? 'warning' : 'success'" :bordered="false" class="mb-12px">
           成功导入 {{ importResult.success }} 条，失败 {{ importResult.failed }} 条
           <template v-if="importResult.mode">
-            （部位数值按<strong>{{ importResult.mode === 'paintCount' ? '幅数' : '数量' }}</strong>导入）
+            （部位数值按
+            <strong>{{ importResult.mode === 'paintCount' ? '幅数' : '数量' }}</strong>
+            导入）
           </template>
         </NAlert>
         <template v-if="importResult.errors?.length > 0">
-          <NText strong class="mb-8px" style="display:block">错误详情：</NText>
-          <div style="max-height: 300px; overflow-y: auto; background: var(--neutral-100); padding: 12px; border-radius: 4px; font-size: 13px;">
-            <div v-for="(err, idx) in importResult.errors" :key="idx" style="padding: 2px 0;">
+          <NText strong class="mb-8px" style="display: block">错误详情：</NText>
+          <div
+            style="
+              max-height: 300px;
+              overflow-y: auto;
+              background: var(--neutral-100);
+              padding: 12px;
+              border-radius: 4px;
+              font-size: 13px;
+            "
+          >
+            <div v-for="(err, idx) in importResult.errors" :key="idx" style="padding: 2px 0">
               <NTag type="error" size="small" style="margin-right: 6px">{{ idx + 1 }}</NTag>
               {{ err }}
             </div>
@@ -1390,11 +1503,20 @@ async function handleBatchQuickUpload({ file }: { file: File }) {
     </NModal>
 
     <!-- 一键OCR填充弹窗 -->
-    <NModal v-model:show="showBatchOcrFill" preset="card" title="一键 OCR 填充空白字段" style="width: 600px" :mask-closable="false">
+    <NModal
+      v-model:show="showBatchOcrFill"
+      preset="card"
+      title="一键 OCR 填充空白字段"
+      style="width: 600px"
+      :mask-closable="false"
+    >
       <NSpace vertical :size="16">
         <NAlert type="info" :bordered="false">
           <template #header>批量OCR识别填充空白字段</template>
-          对未审核、有图片、有空白字段的工单进行OCR识别，<strong>只填充空白字段</strong>（已有值的不覆盖）。<br />
+          对未审核、有图片、有空白字段的工单进行OCR识别，
+          <strong>只填充空白字段</strong>
+          （已有值的不覆盖）。
+          <br />
           支持填充字段：车牌号、工单号、客户名称、电话、车型、车架号、品牌、日期、部位项目。
         </NAlert>
 
@@ -1403,9 +1525,7 @@ async function handleBatchQuickUpload({ file }: { file: File }) {
             <NRadio value="selected" :disabled="checkedRowKeys.length === 0">
               选中的工单（可处理 {{ ocrPendingSelectedCount }} 条）
             </NRadio>
-            <NRadio value="all">
-              当前页全部待审核工单（可处理 {{ ocrPendingAllCount }} 条）
-            </NRadio>
+            <NRadio value="all">当前页全部待审核工单（可处理 {{ ocrPendingAllCount }} 条）</NRadio>
           </NSpace>
         </NRadioGroup>
 
@@ -1414,33 +1534,37 @@ async function handleBatchQuickUpload({ file }: { file: File }) {
             <NRadioGroup v-model:value="batchOcrFillMode" :disabled="batchOcrLoading">
               <NSpace>
                 <NRadioButton value="basic">仅基础资料</NRadioButton>
-              <NRadioButton value="items">仅部位</NRadioButton>
-              <NRadioButton value="all">全部识别</NRadioButton>
-            </NSpace>
-          </NRadioGroup>
-          <NButton
-            v-if="batchOcrFillMode !== 'all'"
-            type="primary"
-            size="small"
-            ghost
-            :disabled="batchOcrLoading"
-            @click="batchOcrFillMode = 'all'"
-          >
-            智能推荐
-          </NButton>
+                <NRadioButton value="items">仅部位</NRadioButton>
+                <NRadioButton value="all">全部识别</NRadioButton>
+              </NSpace>
+            </NRadioGroup>
+            <NButton
+              v-if="batchOcrFillMode !== 'all'"
+              type="primary"
+              size="small"
+              ghost
+              :disabled="batchOcrLoading"
+              @click="batchOcrFillMode = 'all'"
+            >
+              智能推荐
+            </NButton>
           </NSpace>
         </NFormItem>
-        <NAlert v-if="batchOcrFillMode === 'basic'" type="success" :bordered="false" style="padding: 6px 12px;">
+        <NAlert v-if="batchOcrFillMode === 'basic'" type="success" :bordered="false" style="padding: 6px 12px">
           快速填充车牌号、工单号、客户名称等核心基础信息，推荐首次使用
         </NAlert>
 
         <NDescriptions label-placement="left" bordered size="small" :column="1">
           <NDescriptionsItem label="处理范围">
-            {{ batchOcrMode === 'selected' ? `选中的 ${checkedRowKeys.length} 条工单` : `当前页 ${data.length} 条工单` }}
+            {{
+              batchOcrMode === 'selected' ? `选中的 ${checkedRowKeys.length} 条工单` : `当前页 ${data.length} 条工单`
+            }}
           </NDescriptionsItem>
           <NDescriptionsItem label="符合条件">
-            <NTag type="success">{{ batchOcrMode === 'selected' ? ocrPendingSelectedCount : ocrPendingAllCount }} 条</NTag>
-            <NText depth="3" style="font-size:12px; margin-left:8px">（未审核 + 有图片 + 有空白字段）</NText>
+            <NTag type="success">
+              {{ batchOcrMode === 'selected' ? ocrPendingSelectedCount : ocrPendingAllCount }} 条
+            </NTag>
+            <NText depth="3" style="font-size: 12px; margin-left: 8px">（未审核 + 有图片 + 有空白字段）</NText>
           </NDescriptionsItem>
         </NDescriptions>
 
@@ -1450,14 +1574,16 @@ async function handleBatchQuickUpload({ file }: { file: File }) {
             <NSpace vertical :size="8">
               <NSpace justify="space-between">
                 <NSpace align="center" :size="6">
-                  <icon-ic-round-sync style="animation: spin 1s linear infinite;" />
+                  <icon-ic-round-sync style="animation: spin 1s linear infinite" />
                   <span>正在处理...</span>
                 </NSpace>
                 <span>{{ batchOcrProgress.current }} / {{ batchOcrProgress.total }}</span>
               </NSpace>
               <NProgress
                 type="line"
-                :percentage="batchOcrProgress.total > 0 ? Math.round(batchOcrProgress.current / batchOcrProgress.total * 100) : 0"
+                :percentage="
+                  batchOcrProgress.total > 0 ? Math.round((batchOcrProgress.current / batchOcrProgress.total) * 100) : 0
+                "
                 :show-indicator="false"
               />
               <NSpace :size="16">
@@ -1475,7 +1601,9 @@ async function handleBatchQuickUpload({ file }: { file: File }) {
             <NSpace :size="12">
               <NTag type="success" size="small">✓ 成功 {{ batchOcrResult.success }}</NTag>
               <NTag v-if="batchOcrResult.failed > 0" type="error" size="small">✗ 失败 {{ batchOcrResult.failed }}</NTag>
-              <NTag v-if="batchOcrResult.skipped > 0" type="warning" size="small">− 跳过 {{ batchOcrResult.skipped }}</NTag>
+              <NTag v-if="batchOcrResult.skipped > 0" type="warning" size="small">
+                − 跳过 {{ batchOcrResult.skipped }}
+              </NTag>
             </NSpace>
           </NAlert>
           <NCard size="small" :bordered="true" title="处理详情" style="max-height: 200px; overflow-y: auto">
@@ -1504,8 +1632,6 @@ async function handleBatchQuickUpload({ file }: { file: File }) {
         </NSpace>
       </template>
     </NModal>
-
-
   </div>
 </template>
 

@@ -2,8 +2,8 @@
 import { watch } from 'vue';
 import { useAppStore } from '@/store/modules/app';
 import { useEcharts } from '@/hooks/common/echarts';
-import { $t } from '@/locales';
 import { getChartPalette } from '@/utils/chart';
+import { $t } from '@/locales';
 
 defineOptions({
   name: 'PieChart'
@@ -37,23 +37,23 @@ const { domRef, updateOptions } = useEcharts(() => {
           borderColor: palette.border,
           borderWidth: 1
         },
-      label: {
-        show: false,
-        position: 'center'
-      },
-      emphasis: {
         label: {
-          show: true,
-          fontSize: '12'
-        }
-      },
-      labelLine: {
-        show: false
-      },
-      data: [] as { name: string; value: number }[]
-    }
-  ]
-});
+          show: false,
+          position: 'center'
+        },
+        emphasis: {
+          label: {
+            show: true,
+            fontSize: '12'
+          }
+        },
+        labelLine: {
+          show: false
+        },
+        data: [] as { name: string; value: number }[]
+      }
+    ]
+  };
 });
 
 async function mockData() {

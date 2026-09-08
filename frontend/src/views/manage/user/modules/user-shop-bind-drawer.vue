@@ -1,27 +1,23 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue';
 import {
-  NDrawer,
-  NDrawerContent,
+  NButton,
   NCheckbox,
   NCheckboxGroup,
-  NSpace,
-  NButton,
-  NEmpty,
-  NTag,
   NDatePicker,
-  NModal,
+  NDrawer,
+  NDrawerContent,
+  NEmpty,
   NForm,
   NFormItem,
+  NModal,
+  NSpace,
+  NTag,
   useMessage
 } from 'naive-ui';
-import {
-  fetchPaintShopList,
-  fetchUserBoundShops,
-  bindUserShops,
-  updateUserShopTenure
-} from '@/service/api/paint';
+import { bindUserShops, fetchUserBoundShops, updateUserShopTenure } from '@/service/api/paint';
 import type { UserBoundShop } from '@/service/api/paint';
+import { useShopOptions } from '@/hooks/business/use-shop-options';
 
 interface Props {
   visible: boolean;
@@ -36,7 +32,8 @@ const props = defineProps<Props>();
 const emits = defineEmits<Emits>();
 const message = useMessage();
 
-const allShops = ref<any[]>([]);
+// 门店走 paint store 共享缓存，全应用只请求一次（原为每次打开抽屉各自请求）
+const { shops: allShops, ensureShops } = useShopOptions();
 /** 已有绑定记录（含离岗留痕） */
 const boundShops = ref<UserBoundShop[]>([]);
 /** 勾选 = 当前在岗门店集合 */
@@ -48,9 +45,7 @@ const submitting = ref(false);
 
 const boundMap = computed(() => new Map(boundShops.value.map(s => [s.id, s])));
 /** 勾选了但当前不在岗（重新上岗或首次绑定）的门店，需要可选上岗时间 */
-const needStartAtIds = computed(() =>
-  checkedShopIds.value.filter(id => boundMap.value.get(id)?.endAt)
-);
+const needStartAtIds = computed(() => checkedShopIds.value.filter(id => boundMap.value.get(id)?.endAt));
 
 watch(
   () => props.visible,
@@ -63,11 +58,10 @@ watch(
 async function loadData() {
   loading.value = true;
   try {
-    const [shopsRes, boundRes] = await Promise.all([
-      fetchPaintShopList(),
+    const [, boundRes] = await Promise.all([
+      ensureShops(), // 顺带填充共享门店缓存（allShops 由 store 响应式驱动）
       fetchUserBoundShops(props.userId as string)
     ]);
-    allShops.value = shopsRes.data || [];
     boundShops.value = boundRes.data || [];
     checkedShopIds.value = boundShops.value.filter(s => !s.endAt).map(s => s.id);
     startAtMap.value = {};
@@ -185,15 +179,13 @@ async function handleAdjustSubmit() {
 </script>
 
 <template>
-  <NDrawer
-    :show="visible"
-    :width="520"
-    placement="right"
-    @update:show="(v: boolean) => emits('update:visible', v)"
-  >
+  <NDrawer :show="visible" :width="520" placement="right" @update:show="(v: boolean) => emits('update:visible', v)">
     <NDrawerContent title="绑定门店（按在岗期授权数据）" closable>
       <div class="mb-12px flex items-center justify-between">
-        <span class="text-13px text-gray-500">在岗 {{ checkedShopIds.length }} / {{ allShops.length }} 个门店；取消勾选保存后自动离岗留痕（仍可只读查看任期内数据）</span>
+        <span class="text-13px text-gray-500">
+          在岗 {{ checkedShopIds.length }} /
+          {{ allShops.length }} 个门店；取消勾选保存后自动离岗留痕（仍可只读查看任期内数据）
+        </span>
         <NSpace>
           <NButton size="small" @click="handleSelectAll">全选</NButton>
           <NButton size="small" @click="handleClearAll">清空</NButton>
@@ -203,11 +195,7 @@ async function handleAdjustSubmit() {
       <NEmpty v-if="!loading && allShops.length === 0" description="暂无门店" />
 
       <NCheckboxGroup v-else v-model:value="checkedShopIds" class="flex-col gap-8px">
-        <div
-          v-for="shop in allShops"
-          :key="shop.id"
-          class="rounded-4px bg-[var(--neutral-100)] px-12px py-8px"
-        >
+        <div v-for="shop in allShops" :key="shop.id" class="rounded-4px bg-[var(--neutral-100)] px-12px py-8px">
           <div class="flex items-center justify-between">
             <NCheckbox :value="shop.id">
               <span class="ml-4px font-500">{{ shop.name }}</span>
@@ -234,7 +222,12 @@ async function handleAdjustSubmit() {
             </NSpace>
           </div>
           <div v-if="boundMap.get(shop.id) || startAtMap[shop.id]" class="mt-4px pl-24px">
-            <NTag v-if="boundMap.get(shop.id)" size="small" :type="boundMap.get(shop.id)!.endAt ? 'default' : 'success'" :bordered="false">
+            <NTag
+              v-if="boundMap.get(shop.id)"
+              size="small"
+              :type="boundMap.get(shop.id)!.endAt ? 'default' : 'success'"
+              :bordered="false"
+            >
               {{ tenureText(shop.id) }}
             </NTag>
             <span v-if="needStartAtIds.includes(shop.id)" class="ml-8px text-12px text-gray-500">
@@ -260,20 +253,23 @@ async function handleAdjustSubmit() {
       </template>
     </NDrawerContent>
 
-    <NModal
-      v-model:show="adjustVisible"
-      preset="card"
-      :title="`调整在岗期 - ${adjustForm.shopName}`"
-      class="w-420px"
-    >
+    <NModal v-model:show="adjustVisible" preset="card" :title="`调整在岗期 - ${adjustForm.shopName}`" class="w-420px">
       <NForm label-placement="left" :label-width="90">
         <NFormItem label="在岗开始">
           <NDatePicker v-model:value="adjustForm.startAt" type="date" class="w-full" clearable />
         </NFormItem>
         <NFormItem label="离岗时间">
-          <NDatePicker v-model:value="adjustForm.endAt" type="date" class="w-full" clearable placeholder="留空表示在岗中" />
+          <NDatePicker
+            v-model:value="adjustForm.endAt"
+            type="date"
+            class="w-full"
+            clearable
+            placeholder="留空表示在岗中"
+          />
         </NFormItem>
-        <p class="text-12px text-gray-400">调整后该用户的数据可见范围按新在岗期生效（按结算月份归属，工单录入月份与结算月份需都在任期内）。</p>
+        <p class="text-12px text-gray-400">
+          调整后该用户的数据可见范围按新在岗期生效（按结算月份归属，工单录入月份与结算月份需都在任期内）。
+        </p>
       </NForm>
       <template #footer>
         <NSpace justify="end">

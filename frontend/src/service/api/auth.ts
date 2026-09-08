@@ -28,14 +28,14 @@ export function fetchGetUserInfo() {
  *
  * @param refreshToken Refresh token
  */
-export function fetchRefreshToken(refreshToken: string, config?: AxiosRequestConfig) {
+export function fetchRefreshToken(refreshToken: string, config?: Omit<AxiosRequestConfig, 'responseType'>) {
   return request<Api.Auth.LoginToken>({
+    ...config,
     url: '/auth/refreshToken',
     method: 'post',
     data: {
       refreshToken
-    },
-    ...config
+    }
   });
 }
 

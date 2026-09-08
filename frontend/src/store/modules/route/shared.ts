@@ -131,7 +131,7 @@ function getGlobalMenuByBaseRoute(route: RouteLocationNormalizedLoaded | Elegant
   const { title, i18nKey, icon = import.meta.env.VITE_MENU_ICON, localIcon, iconFontSize } = route.meta ?? {};
 
   // 兜底：动态路由后端未返回 i18nKey 时，按路由名推导（route.${name}），复用前端国际化配置
-  const finalI18nKey = i18nKey || (name ? (`route.${name}` as App.I18n.Key) : undefined);
+  const finalI18nKey = i18nKey || (name ? (`route.${String(name)}` as App.I18n.I18nKey) : undefined);
 
   const label = finalI18nKey ? $t(finalI18nKey) : title!;
 

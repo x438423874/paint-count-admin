@@ -1,43 +1,43 @@
 <script setup lang="tsx">
-import { ref, computed, reactive, watch } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import {
+  NAlert,
+  NButton,
   NCard,
+  NDataTable,
+  NDatePicker,
+  NEmpty,
   NForm,
   NFormItem,
-  NSelect,
-  NButton,
-  NUpload,
-  NDataTable,
-  NTag,
-  NStatistic,
-  NSpace,
-  NTabs,
-  NTabPane,
-  NEmpty,
-  NSpin,
-  NModal,
   NInput,
-  NDatePicker,
+  NModal,
   NPopconfirm,
-  NAlert,
-  useMessage,
-  useDialog
+  NSelect,
+  NSpace,
+  NSpin,
+  NStatistic,
+  NTabPane,
+  NTabs,
+  NTag,
+  NUpload,
+  useDialog,
+  useMessage
 } from 'naive-ui';
-import EmptyState from '@/components/common/EmptyState.vue';
 import {
-  fetchPaintShopList,
-  reconcileWorkOrderExcel,
-  fetchWorkOrderById,
-  settleWorkOrder,
-  sealSettlementMonth,
-  unsealSettlementMonth,
-  getSealStatus,
-  type ReconcileResult,
   type ReconcileItem,
-  type PaintShopListItem
+  type ReconcileResult,
+  fetchWorkOrderById,
+  getSealStatus,
+  reconcileWorkOrderExcel,
+  sealSettlementMonth,
+  settleWorkOrder,
+  unsealSettlementMonth
 } from '@/service/api/paint';
+import { useShopOptions } from '@/hooks/business/use-shop-options';
 import { canSettle } from '@/utils/permission';
+import { recentMonthOptions } from '@/utils/month-options';
+import EmptyState from '@/components/common/EmptyState.vue';
 import WorkOrderDetailModal from '../work-order/modules/work-order-detail-modal.vue';
 
 const router = useRouter();
@@ -92,7 +92,7 @@ function confirmSeal() {
     content: `确定封单 ${form.settlementMonth} 月份？封单后该月工单将不允许修改、删除和审核操作。${statsText}`,
     positiveText: '确认封单',
     negativeText: '取消',
-    onPositiveClick: handleSeal,
+    onPositiveClick: handleSeal
   });
 }
 
@@ -110,7 +110,6 @@ async function handleUnseal() {
   }
 }
 
-const shops = ref<PaintShopListItem[]>([]);
 const loading = ref(false);
 const result = ref<ReconcileResult | null>(null);
 const form = reactive({
@@ -121,27 +120,19 @@ const fileList = ref<any[]>([]);
 const searchKeyword = ref('');
 const statusFilter = ref('');
 
+// 门店走 paint store 共享缓存，全应用只请求一次（原为每页各自 fetchPaintShopList）
+const { shops, shopOptions, ensureShops } = useShopOptions();
+
 async function loadShops() {
   try {
-    const res = await fetchPaintShopList();
-    shops.value = res.data || [];
+    await ensureShops();
   } catch {
-    shops.value = [];
+    // 门店加载失败不阻断页面
   }
 }
 
-const shopOptions = computed(() => shops.value.map(s => ({ label: s.name, value: s.id })));
-
-const monthOptions = computed(() => {
-  const list = [];
-  const now = new Date();
-  for (let i = 0; i < 12; i++) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    const value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-    list.push({ label: value, value });
-  }
-  return list;
-});
+// 月份选项统一走 utils/month-options（原先本页与 pending-image 各一份重复实现）
+const monthOptions = computed(() => recentMonthOptions());
 
 const statusOptions = [
   { label: '全部状态', value: '' },
@@ -283,7 +274,11 @@ const columns = [
     width: 100,
     render: (row: ReconcileItem) => {
       if (row.diff === undefined) return '-';
-      return <span style={{ color: Math.abs(row.diff) < 0.001 ? 'var(--color-success)' : 'var(--color-error)' }}>{row.diff > 0 ? `+${row.diff.toFixed(2)}` : row.diff.toFixed(2)}</span>;
+      return (
+        <span style={{ color: Math.abs(row.diff) < 0.001 ? 'var(--color-success)' : 'var(--color-error)' }}>
+          {row.diff > 0 ? `+${row.diff.toFixed(2)}` : row.diff.toFixed(2)}
+        </span>
+      );
     }
   },
   {
@@ -292,7 +287,11 @@ const columns = [
     width: 120,
     render: (row: ReconcileItem) => {
       if (row.type === 'voided') {
-        return <NTag size="small" type="error">已作废</NTag>;
+        return (
+          <NTag size="small" type="error">
+            已作废
+          </NTag>
+        );
       }
       if (!row.status) return '-';
       const typeMap: Record<string, 'default' | 'warning' | 'success' | 'info' | 'error'> = {
@@ -304,10 +303,18 @@ const columns = [
         COMPLETED: 'success',
         VOID: 'error'
       };
-      return <NSpace size={4} align="center">
-        <NTag size="small" type={typeMap[row.status] || 'default'}>{getStatusLabel(row.status)}</NTag>
-        {row.isRework && <NTag size="small" type="error">返工</NTag>}
-      </NSpace>;
+      return (
+        <NSpace size={4} align="center">
+          <NTag size="small" type={typeMap[row.status] || 'default'}>
+            {getStatusLabel(row.status)}
+          </NTag>
+          {row.isRework && (
+            <NTag size="small" type="error">
+              返工
+            </NTag>
+          )}
+        </NSpace>
+      );
     }
   },
   {
@@ -328,7 +335,11 @@ const columns = [
     fixed: 'right' as const,
     render: (row: ReconcileItem) => {
       if (row.type === 'voided') {
-        return <NTag size="small" type="warning">已作废，不计入对账</NTag>;
+        return (
+          <NTag size="small" type="warning">
+            已作废，不计入对账
+          </NTag>
+        );
       }
       if (row.type === 'missing_in_system') {
         return (
@@ -356,7 +367,9 @@ const columns = [
   }
 ];
 
-const filterType = ref<'all' | 'diff' | 'missing_in_system' | 'extra_in_system' | 'duplicate' | 'matched' | 'voided'>('all');
+const filterType = ref<'all' | 'diff' | 'missing_in_system' | 'extra_in_system' | 'duplicate' | 'matched' | 'voided'>(
+  'all'
+);
 
 const filteredItems = computed(() => {
   if (!result.value) return [];
@@ -369,9 +382,8 @@ const filteredItems = computed(() => {
 
   if (searchKeyword.value) {
     const keyword = searchKeyword.value.toLowerCase();
-    items = items.filter(i =>
-      i.orderNo.toLowerCase().includes(keyword) ||
-      i.plateNumber.toLowerCase().includes(keyword)
+    items = items.filter(
+      i => i.orderNo.toLowerCase().includes(keyword) || i.plateNumber.toLowerCase().includes(keyword)
     );
   }
 
@@ -397,7 +409,16 @@ function getTypeLabel(type: string) {
 function exportResult() {
   if (!result.value) return;
   const headers = ['类型', '工单号', '车牌号', 'Excel幅数', '系统幅数', '差额', '系统状态', '备注'];
-  const summaryRow = ['汇总', '', '', result.value.summary.excelTotal, result.value.summary.systemTotal, result.value.summary.diff, '', ''];
+  const summaryRow = [
+    '汇总',
+    '',
+    '',
+    result.value.summary.excelTotal,
+    result.value.summary.systemTotal,
+    result.value.summary.diff,
+    '',
+    ''
+  ];
   const rows = result.value.items.map(item => [
     getTypeLabel(item.type),
     item.orderNo,
@@ -413,7 +434,7 @@ function exportResult() {
     .map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))
     .join('\n');
 
-  const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
+  const blob = new Blob([`\uFEFF${csvContent}`], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -435,10 +456,22 @@ loadShops();
     <NCard title="工单对账" :bordered="false" size="small">
       <NForm inline :model="form" label-width="auto">
         <NFormItem label="门店" path="shopId">
-          <NSelect v-model:value="form.shopId" :options="shopOptions" placeholder="请选择门店" clearable style="width: 220px" />
+          <NSelect
+            v-model:value="form.shopId"
+            :options="shopOptions"
+            placeholder="请选择门店"
+            clearable
+            style="width: 220px"
+          />
         </NFormItem>
         <NFormItem label="结算月份" path="settlementMonth">
-          <NSelect v-model:value="form.settlementMonth" :options="monthOptions" placeholder="请选择月份" clearable style="width: 160px" />
+          <NSelect
+            v-model:value="form.settlementMonth"
+            :options="monthOptions"
+            placeholder="请选择月份"
+            clearable
+            style="width: 160px"
+          />
         </NFormItem>
         <NFormItem label="对账表">
           <NUpload v-model:file-list="fileList" :max="1" accept=".xlsx,.xls" :show-file-list="true">
@@ -446,12 +479,8 @@ loadShops();
           </NUpload>
         </NFormItem>
         <NFormItem>
-          <NButton type="primary" :loading="loading" @click="handleReconcile">
-            开始对账
-          </NButton>
-          <NButton v-if="result" @click="handleReset" class="ml-8px">
-            重新对账
-          </NButton>
+          <NButton type="primary" :loading="loading" @click="handleReconcile">开始对账</NButton>
+          <NButton v-if="result" class="ml-8px" @click="handleReset">重新对账</NButton>
         </NFormItem>
       </NForm>
 
@@ -503,23 +532,20 @@ loadShops();
             <NCard v-if="result.summary.reworkExcludedCount > 0" size="small" style="min-width: 200px">
               <NStatistic label="已排除返工">
                 <template #default>
-                  {{ result.summary.reworkExcludedCount }} 条（{{ result.summary.reworkExcludedPaintCount.toFixed(1) }} 幅）
+                  {{ result.summary.reworkExcludedCount }} 条（{{ result.summary.reworkExcludedPaintCount.toFixed(1) }}
+                  幅）
                 </template>
               </NStatistic>
             </NCard>
             <NCard v-if="result.summary.voidedCount > 0" size="small" style="min-width: 200px">
               <NStatistic label="已作废（不计入对账）">
-                <template #default>
-                  {{ result.summary.voidedCount }} 条
-                </template>
+                <template #default>{{ result.summary.voidedCount }} 条</template>
               </NStatistic>
             </NCard>
           </NSpace>
 
           <NSpace class="mb-16px" :size="16" align="center">
-            <NButton type="primary" @click="exportResult">
-              导出对账结果
-            </NButton>
+            <NButton type="primary" @click="exportResult">导出对账结果</NButton>
             <NInput
               v-model:value="searchKeyword"
               placeholder="搜索工单号或车牌号"

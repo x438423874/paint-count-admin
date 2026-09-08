@@ -91,7 +91,7 @@ declare namespace Api {
    * backend api module: "systemManage"
    */
   namespace SystemManage {
-    type CommonSearchParams = Pick<Common.PaginatingCommonParams, 'current' | 'size'>;
+    type CommonSearchParams = Common.CommonSearchParams;
 
     /** role */
     type Role = Common.CommonRecord<{

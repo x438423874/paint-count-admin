@@ -13,9 +13,10 @@ import { clearAuthStorage, getToken } from './shared';
 /** Module-level flag to prevent concurrent logout calls */
 let isLoggingOut = false;
 
-/** 标记当前是否处于路由守卫初始化流程（首屏 initUserInfo 失败）中。
- *  该场景下由守卫的 !isLogin 分支统一重定向登录页，避免 resetStore 在守卫内
- *  再发起一次 router.push 造成嵌套导航 / "No match" 未捕获异常。 */
+/**
+ * 标记当前是否处于路由守卫初始化流程（首屏 initUserInfo 失败）中。 该场景下由守卫的 !isLogin 分支统一重定向登录页，避免 resetStore 在守卫内 再发起一次 router.push 造成嵌套导航 /
+ * "No match" 未捕获异常。
+ */
 let inGuardInit = false;
 
 export function setInGuardInit(value: boolean) {
@@ -66,6 +67,9 @@ export const useAuthStore = defineStore(SetupStoreId.Auth, () => {
     clearAuthStorage();
 
     authStore.$reset();
+
+    // 切换账号后 paint 字典缓存（门店等按数据权限过滤）必须失效：动态 import 避免循环依赖
+    import('../paint').then(m => m.usePaintStore().invalidateShops());
 
     // 仅在非路由守卫初始化流程中自行跳转登录页；首屏 initUserInfo 失败由守卫的
     // !isLogin 分支统一重定向（避免守卫内嵌套 router.push 造成 "No match" 异常）。

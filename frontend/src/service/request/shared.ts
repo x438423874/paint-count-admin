@@ -32,7 +32,7 @@ function claimLeader(): boolean {
   const now = Date.now();
   const lock = Number(localStg.get(REFRESH_LOCK_KEY)) || 0;
   if (now - lock < 15000) return false;
-  localStg.set(REFRESH_LOCK_KEY, now);
+  localStg.set(REFRESH_LOCK_KEY, String(now));
   return true;
 }
 
@@ -169,8 +169,7 @@ function getTokenRemainingTime(): number {
     const payload = JSON.parse(atob(token.split('.')[1]));
     if (!payload.exp) return -1;
     return payload.exp - Math.floor(Date.now() / 1000);
-  }
-  catch {
+  } catch {
     return -1;
   }
 }

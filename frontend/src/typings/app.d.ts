@@ -522,6 +522,10 @@ declare namespace App {
             userEmail: string;
             userStatus: string;
             userRole: string;
+            /** 表头「密码」列文案 */
+            password: string;
+            /** 表头「域」列文案 */
+            domain: string;
             form: {
               userName: string;
               password: string;

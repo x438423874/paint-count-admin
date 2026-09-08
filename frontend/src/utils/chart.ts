@@ -1,5 +1,5 @@
-import { useThemeStore } from '@/store/modules/theme';
 import { addColorAlpha, getPaletteColorByNumber } from '@sa/color';
+import { useThemeStore } from '@/store/modules/theme';
 
 export interface ChartPalette {
   /** 品牌主色 */
@@ -23,9 +23,7 @@ export interface ChartPalette {
 /**
  * 读取品牌设计令牌，生成 ECharts 统一色板。
  *
- * 所有颜色均来源于主题令牌（settings.ts 的 themeColor / otherColor），
- * 因此「改色只改一处」：调整主色后，所有图表会自动同步。
- * 该函数在图表工厂函数内调用，随暗色模式切换重新求值。
+ * 所有颜色均来源于主题令牌（settings.ts 的 themeColor / otherColor）， 因此「改色只改一处」：调整主色后，所有图表会自动同步。 该函数在图表工厂函数内调用，随暗色模式切换重新求值。
  */
 export function getChartPalette(): ChartPalette {
   const themeStore = useThemeStore();
@@ -64,7 +62,16 @@ export function getChartPalette(): ChartPalette {
  * @param topAlpha 顶部透明度
  * @param bottomAlpha 底部透明度
  */
-export function primaryGradient(topAlpha = 0.4, bottomAlpha = 0.05) {
+export interface LinearGradientOption {
+  type: 'linear';
+  x: number;
+  y: number;
+  x2: number;
+  y2: number;
+  colorStops: { offset: number; color: string }[];
+}
+
+export function primaryGradient(topAlpha = 0.4, bottomAlpha = 0.05): LinearGradientOption {
   const { primary } = getChartPalette();
 
   return {

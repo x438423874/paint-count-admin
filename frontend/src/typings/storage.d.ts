@@ -18,6 +18,8 @@ declare namespace StorageType {
     mixSiderFixed: CommonType.YesOrNo;
     /** The refresh token */
     refreshToken: string;
+    /** 多标签页 token 主动刷新的 leader 锁（值为 leader 标签页 id + 过期时间戳） */
+    paint_refresh_lock: string;
     /** The theme color */
     themeColor: string;
     /** The dark mode */

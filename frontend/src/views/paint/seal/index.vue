@@ -1,67 +1,49 @@
 <script setup lang="tsx">
-import { ref, reactive, onMounted, h } from 'vue';
+import { h, onMounted, reactive, ref } from 'vue';
 import {
-  NCard,
-  NForm,
-  NFormItem,
-  NSelect,
   NButton,
+  NCard,
   NDataTable,
-  NTag,
-  NSpace,
   NDatePicker,
-  NPopconfirm,
   NDrawer,
   NDrawerContent,
-  useMessage,
+  NForm,
+  NFormItem,
+  NPopconfirm,
+  NSelect,
+  NSpace,
+  NTag,
+  NText,
   useDialog,
-  NText
+  useMessage
 } from 'naive-ui';
 import type { DataTableColumns } from 'naive-ui';
+import { getPaintOrderStatusTagType, paintOrderStatusLabel } from '@/constants/paint';
 import {
-  fetchPaintShopList,
-  fetchSealOverview,
-  sealSettlementMonth,
-  unsealSettlementMonth,
-  fetchWorkOrderPage,
-  type SealOverviewItem,
-  type PaintWorkOrder,
   type PaintOrderStatus,
-  type PaintShopListItem
+  type PaintWorkOrder,
+  type SealOverviewItem,
+  fetchSealOverview,
+  fetchWorkOrderPage,
+  sealSettlementMonth,
+  unsealSettlementMonth
 } from '@/service/api/paint';
+import { useShopOptions } from '@/hooks/business/use-shop-options';
 
 const message = useMessage();
 const dialog = useDialog();
 
-const STATUS_LABEL: Record<PaintOrderStatus, string> = {
-  DRAFT: '草稿',
-  PENDING: '待审核',
-  AUDITED: '已审核',
-  SETTLED: '已结算',
-  ABNORMAL: '异常'
-};
+// 状态文案/颜色统一走 constants/paint（原先本页自维护一份，与工单列表口径漂移）
+const STATUS_LABEL: Record<PaintOrderStatus, string> = paintOrderStatusLabel;
 
 function tagType(status: PaintOrderStatus) {
-  switch (status) {
-    case 'SETTLED':
-      return 'success';
-    case 'AUDITED':
-      return 'info';
-    case 'ABNORMAL':
-      return 'error';
-    case 'PENDING':
-      return 'warning';
-    default:
-      return 'default';
-  }
+  return getPaintOrderStatusTagType(status);
 }
 
-const shopOptions = ref<{ label: string; value: string }[]>([]);
+// 门店走 paint store 共享缓存，全应用只请求一次（原为每页各自 fetchPaintShopList）
+const { shopOptions, ensureShops } = useShopOptions();
 async function loadShops() {
-  const { data, error } = await fetchPaintShopList();
-  if (!error && data) {
-    shopOptions.value = data.map(s => ({ label: s.name, value: s.id }));
-  }
+  await ensureShops();
 }
 
 const filters = reactive<{ shopId: string | null; month: number | null }>({ shopId: null, month: null });
@@ -203,16 +185,20 @@ const columns: DataTableColumns<SealOverviewItem> = [
     width: 170,
     render: row =>
       row.isSealed
-        ? h(NSpace, { vertical: true, size: 2 }, {
-            default: () => [
-              h(NTag, { type: 'success' }, { default: () => '已封单' }),
-              h(
-                NText,
-                { depth: 3, style: 'font-size:12px' },
-                { default: () => (row.sealedAt ? `封单于 ${row.sealedAt.slice(0, 10)}` : '') }
-              )
-            ]
-          })
+        ? h(
+            NSpace,
+            { vertical: true, size: 2 },
+            {
+              default: () => [
+                h(NTag, { type: 'success' }, { default: () => '已封单' }),
+                h(
+                  NText,
+                  { depth: 3, style: 'font-size:12px' },
+                  { default: () => (row.sealedAt ? `封单于 ${row.sealedAt.slice(0, 10)}` : '') }
+                )
+              ]
+            }
+          )
         : h(NTag, { type: 'default' }, { default: () => '未封单' })
   },
   {
@@ -221,21 +207,29 @@ const columns: DataTableColumns<SealOverviewItem> = [
     width: 210,
     fixed: 'right',
     render: row =>
-      h(NSpace, { size: 4 }, {
-        default: () => [
-          h(NButton, { size: 'small', onClick: () => openDetail(row) }, { default: () => '查看明细' }),
-          row.isSealed
-            ? h(
-                NPopconfirm,
-                { onPositiveClick: () => doUnseal(row) },
-                {
-                  default: () => '确定解封该月？解封后可继续操作工单',
-                  trigger: () => h(NButton, { size: 'small', type: 'warning' }, { default: () => '解封' })
-                }
-              )
-            : h(NButton, { size: 'small', type: 'primary', onClick: () => confirmSeal(row) }, { default: () => '封单' })
-        ]
-      })
+      h(
+        NSpace,
+        { size: 4 },
+        {
+          default: () => [
+            h(NButton, { size: 'small', onClick: () => openDetail(row) }, { default: () => '查看明细' }),
+            row.isSealed
+              ? h(
+                  NPopconfirm,
+                  { onPositiveClick: () => doUnseal(row) },
+                  {
+                    default: () => '确定解封该月？解封后可继续操作工单',
+                    trigger: () => h(NButton, { size: 'small', type: 'warning' }, { default: () => '解封' })
+                  }
+                )
+              : h(
+                  NButton,
+                  { size: 'small', type: 'primary', onClick: () => confirmSeal(row) },
+                  { default: () => '封单' }
+                )
+          ]
+        }
+      )
   }
 ];
 
@@ -274,7 +268,13 @@ onMounted(() => {
             />
           </NFormItem>
           <NFormItem label="月份">
-            <NDatePicker v-model:value="filters.month" type="month" placeholder="全部月份" clearable style="width: 180px" />
+            <NDatePicker
+              v-model:value="filters.month"
+              type="month"
+              placeholder="全部月份"
+              clearable
+              style="width: 180px"
+            />
           </NFormItem>
           <NFormItem>
             <NSpace>

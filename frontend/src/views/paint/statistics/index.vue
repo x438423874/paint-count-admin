@@ -1,13 +1,36 @@
 <script setup lang="tsx">
-import { ref, computed, onMounted, watch, nextTick } from 'vue';
-import { NCard, NGrid, NGi, NStatistic, NSelect, NSpace, NTag, NDataTable, NH3, NNumberAnimation, NDatePicker, NButton, NEmpty } from 'naive-ui';
-import { fetchStatisticsDashboard, fetchPaintShopList, fetchLatestSettlementMonth, exportStatisticsCsv, exportStatisticsExcel, exportStatisticsPdf } from '@/service/api';
+import { computed, nextTick, onMounted, ref } from 'vue';
+import {
+  NButton,
+  NCard,
+  NDataTable,
+  NDatePicker,
+  NEmpty,
+  NGi,
+  NGrid,
+  NH3,
+  NNumberAnimation,
+  NSelect,
+  NSpace,
+  NStatistic,
+  NTag
+} from 'naive-ui';
+import {
+  exportStatisticsCsv,
+  exportStatisticsExcel,
+  exportStatisticsPdf,
+  fetchLatestSettlementMonth,
+  fetchStatisticsDashboard
+} from '@/service/api';
 import { useEcharts } from '@/hooks/common/echarts';
+import type { ECOption } from '@/hooks/common/echarts';
+import { useShopOptions } from '@/hooks/business/use-shop-options';
 import { getChartPalette, primaryGradient } from '@/utils/chart';
 
 const palette = getChartPalette();
 
-const shops = ref<{ id: string; name: string; code: string }[]>([]);
+// 门店走 paint store 共享缓存，全应用只请求一次（原为每页各自 fetchPaintShopList）
+const { shops, ensureShops } = useShopOptions();
 const selectedShopId = ref<string | null>(null);
 const selectedSettlementMonth = ref<string | null>(null);
 
@@ -19,18 +42,12 @@ const overview = ref<any>(null);
 const loading = ref(false);
 
 onMounted(async () => {
-  await loadShops();
+  await ensureShops();
   const { data: latestMonth } = await fetchLatestSettlementMonth();
-  selectedSettlementMonth.value = latestMonth || `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
+  selectedSettlementMonth.value =
+    latestMonth || `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
   await loadAllData();
 });
-
-async function loadShops() {
-  const { data, error } = await fetchPaintShopList();
-  if (!error && data) {
-    shops.value = data;
-  }
-}
 
 async function loadAllData() {
   loading.value = true;
@@ -38,7 +55,7 @@ async function loadAllData() {
     const params: any = {};
     if (selectedSettlementMonth.value) {
       params.settlementMonth = selectedSettlementMonth.value;
-      params.year = parseInt(selectedSettlementMonth.value.split('-')[0], 10);
+      params.year = Number.parseInt(selectedSettlementMonth.value.split('-')[0], 10);
     }
     if (selectedShopId.value) params.shopId = selectedShopId.value;
 
@@ -97,42 +114,86 @@ const totalStats = computed(() => {
   return overview.value ? { ...local, ...overview.value } : local;
 });
 
-// 调试：方便在浏览器控制台核对原始数据
-watch(
-  () => monthlyData.value,
-  val => {
-    console.log('[statistics] monthlyData', JSON.parse(JSON.stringify(val)));
-    console.log('[statistics] totalStats', JSON.parse(JSON.stringify(totalStats.value)));
-  },
-  { deep: true }
-);
-
 const dailyColumns = [
   { key: 'date', title: '日期', width: 110, align: 'center' as const },
   { key: 'orderCount', title: '工单数', width: 80, align: 'center' as const },
-  { key: 'paintCount', title: '幅数', width: 100, align: 'center' as const, render: (row: any) => <NTag type="info">{row.paintCount?.toFixed(1)}</NTag> }
+  {
+    key: 'paintCount',
+    title: '幅数',
+    width: 100,
+    align: 'center' as const,
+    render: (row: any) => <NTag type="info">{row.paintCount?.toFixed(1)}</NTag>
+  }
 ];
 
 const categoryColumns = [
   { key: 'categoryName', title: '项目名称', minWidth: 120, ellipsis: { tooltip: true } as any },
   { key: 'totalCount', title: '次数', width: 80, align: 'center' as const },
-  { key: 'totalPaintCount', title: '总幅数', width: 100, align: 'center' as const, render: (row: any) => <NTag type="success">{row.totalPaintCount?.toFixed(1)}</NTag> }
+  {
+    key: 'totalPaintCount',
+    title: '总幅数',
+    width: 100,
+    align: 'center' as const,
+    render: (row: any) => <NTag type="success">{row.totalPaintCount?.toFixed(1)}</NTag>
+  }
 ];
 
 const comparisonColumns = [
   { key: 'shopName', title: '门店', minWidth: 150 },
   { key: 'totalOrders', title: '工单数', width: 90, align: 'center' as const },
   { key: 'totalVehicles', title: '车辆数', width: 90, align: 'center' as const },
-  { key: 'totalPaintCount', title: '总幅数', width: 100, align: 'center' as const, render: (row: any) => <NTag type="success">{row.totalPaintCount?.toFixed(1)}</NTag> },
-  { key: 'pendingOrders', title: '待审核工单', width: 100, align: 'center' as const, render: (row: any) => <NTag type="warning">{row.pendingOrders || 0}</NTag> },
+  {
+    key: 'totalPaintCount',
+    title: '总幅数',
+    width: 100,
+    align: 'center' as const,
+    render: (row: any) => <NTag type="success">{row.totalPaintCount?.toFixed(1)}</NTag>
+  },
+  {
+    key: 'pendingOrders',
+    title: '待审核工单',
+    width: 100,
+    align: 'center' as const,
+    render: (row: any) => <NTag type="warning">{row.pendingOrders || 0}</NTag>
+  },
   { key: 'pendingVehicles', title: '待审核车牌', width: 100, align: 'center' as const },
-  { key: 'pendingPaintCount', title: '待审核幅数', width: 100, align: 'center' as const, render: (row: any) => <NTag type="warning">{(row.pendingPaintCount || 0).toFixed(1)}</NTag> },
-  { key: 'auditedOrders', title: '已审核工单', width: 100, align: 'center' as const, render: (row: any) => <NTag type="success">{row.auditedOrders || 0}</NTag> },
+  {
+    key: 'pendingPaintCount',
+    title: '待审核幅数',
+    width: 100,
+    align: 'center' as const,
+    render: (row: any) => <NTag type="warning">{(row.pendingPaintCount || 0).toFixed(1)}</NTag>
+  },
+  {
+    key: 'auditedOrders',
+    title: '已审核工单',
+    width: 100,
+    align: 'center' as const,
+    render: (row: any) => <NTag type="success">{row.auditedOrders || 0}</NTag>
+  },
   { key: 'auditedVehicles', title: '已审核车牌', width: 100, align: 'center' as const },
-  { key: 'auditedPaintCount', title: '已审核幅数', width: 100, align: 'center' as const, render: (row: any) => <NTag type="success">{(row.auditedPaintCount || 0).toFixed(1)}</NTag> },
-  { key: 'reworkOrders', title: '返工工单', width: 100, align: 'center' as const, render: (row: any) => <NTag type="error">{row.reworkOrders || 0}</NTag> },
+  {
+    key: 'auditedPaintCount',
+    title: '已审核幅数',
+    width: 100,
+    align: 'center' as const,
+    render: (row: any) => <NTag type="success">{(row.auditedPaintCount || 0).toFixed(1)}</NTag>
+  },
+  {
+    key: 'reworkOrders',
+    title: '返工工单',
+    width: 100,
+    align: 'center' as const,
+    render: (row: any) => <NTag type="error">{row.reworkOrders || 0}</NTag>
+  },
   { key: 'reworkVehicles', title: '返工车牌', width: 100, align: 'center' as const },
-  { key: 'reworkPaintCount', title: '返工幅数', width: 100, align: 'center' as const, render: (row: any) => <NTag type="error">{(row.reworkPaintCount || 0).toFixed(1)}</NTag> },
+  {
+    key: 'reworkPaintCount',
+    title: '返工幅数',
+    width: 100,
+    align: 'center' as const,
+    render: (row: any) => <NTag type="error">{(row.reworkPaintCount || 0).toFixed(1)}</NTag>
+  },
   { key: 'avgPaintPerVehicle', title: '台均幅数', width: 100, align: 'center' as const },
   { key: 'avgPaintPerOrder', title: '单均幅数', width: 100, align: 'center' as const }
 ];
@@ -140,16 +201,58 @@ const comparisonColumns = [
 const yearColumns = [
   { key: 'month', title: '月份', width: 70, align: 'center' as const, render: (row: any) => `${row.month}月` },
   { key: 'totalOrders', title: '工单数', width: 90, align: 'center' as const },
-  { key: 'totalPaintCount', title: '总幅数', width: 100, align: 'center' as const, render: (row: any) => <NTag type="info">{row.totalPaintCount?.toFixed(1)}</NTag> },
-  { key: 'pendingOrders', title: '待审核工单', width: 100, align: 'center' as const, render: (row: any) => <NTag type="warning">{row.pendingOrders || 0}</NTag> },
+  {
+    key: 'totalPaintCount',
+    title: '总幅数',
+    width: 100,
+    align: 'center' as const,
+    render: (row: any) => <NTag type="info">{row.totalPaintCount?.toFixed(1)}</NTag>
+  },
+  {
+    key: 'pendingOrders',
+    title: '待审核工单',
+    width: 100,
+    align: 'center' as const,
+    render: (row: any) => <NTag type="warning">{row.pendingOrders || 0}</NTag>
+  },
   { key: 'pendingVehicles', title: '待审核车牌', width: 100, align: 'center' as const },
-  { key: 'pendingPaintCount', title: '待审核幅数', width: 100, align: 'center' as const, render: (row: any) => <NTag type="warning">{(row.pendingPaintCount || 0).toFixed(1)}</NTag> },
-  { key: 'auditedOrders', title: '已审核工单', width: 100, align: 'center' as const, render: (row: any) => <NTag type="success">{row.auditedOrders || 0}</NTag> },
+  {
+    key: 'pendingPaintCount',
+    title: '待审核幅数',
+    width: 100,
+    align: 'center' as const,
+    render: (row: any) => <NTag type="warning">{(row.pendingPaintCount || 0).toFixed(1)}</NTag>
+  },
+  {
+    key: 'auditedOrders',
+    title: '已审核工单',
+    width: 100,
+    align: 'center' as const,
+    render: (row: any) => <NTag type="success">{row.auditedOrders || 0}</NTag>
+  },
   { key: 'auditedVehicles', title: '已审核车牌', width: 100, align: 'center' as const },
-  { key: 'auditedPaintCount', title: '已审核幅数', width: 100, align: 'center' as const, render: (row: any) => <NTag type="success">{(row.auditedPaintCount || 0).toFixed(1)}</NTag> },
-  { key: 'reworkOrders', title: '返工工单', width: 100, align: 'center' as const, render: (row: any) => <NTag type="error">{row.reworkOrders || 0}</NTag> },
+  {
+    key: 'auditedPaintCount',
+    title: '已审核幅数',
+    width: 100,
+    align: 'center' as const,
+    render: (row: any) => <NTag type="success">{(row.auditedPaintCount || 0).toFixed(1)}</NTag>
+  },
+  {
+    key: 'reworkOrders',
+    title: '返工工单',
+    width: 100,
+    align: 'center' as const,
+    render: (row: any) => <NTag type="error">{row.reworkOrders || 0}</NTag>
+  },
   { key: 'reworkVehicles', title: '返工车牌', width: 100, align: 'center' as const },
-  { key: 'reworkPaintCount', title: '返工幅数', width: 100, align: 'center' as const, render: (row: any) => <NTag type="error">{(row.reworkPaintCount || 0).toFixed(1)}</NTag> }
+  {
+    key: 'reworkPaintCount',
+    title: '返工幅数',
+    width: 100,
+    align: 'center' as const,
+    render: (row: any) => <NTag type="error">{(row.reworkPaintCount || 0).toFixed(1)}</NTag>
+  }
 ];
 
 function getDailyStats(shopData: any) {
@@ -234,7 +337,13 @@ const { domRef: shopComparisonChartRef, updateOptions: updateShopComparisonChart
       { type: 'value', name: '数量' }
     ],
     series: [
-      { name: '总幅数', type: 'bar', data: [] as number[], itemStyle: { color: palette.series[0] }, label: { show: true, position: 'top', formatter: '{c}' } },
+      {
+        name: '总幅数',
+        type: 'bar',
+        data: [] as number[],
+        itemStyle: { color: palette.series[0] },
+        label: { show: true, position: 'top', formatter: '{c}' }
+      },
       { name: '工单数', type: 'bar', yAxisIndex: 1, data: [] as number[], itemStyle: { color: palette.series[2] } },
       { name: '车辆数', type: 'bar', yAxisIndex: 1, data: [] as number[], itemStyle: { color: palette.series[3] } }
     ]
@@ -259,7 +368,7 @@ function updateShopComparisonChart() {
 }
 
 // 3. 年度趋势折线图
-const { domRef: yearTrendChartRef, updateOptions: updateYearTrendChartOptions } = useEcharts(() => {
+const { domRef: yearTrendChartRef, updateOptions: updateYearTrendChartOptions } = useEcharts((): ECOption => {
   const palette = getChartPalette();
 
   return {
@@ -277,10 +386,38 @@ const { domRef: yearTrendChartRef, updateOptions: updateYearTrendChartOptions } 
       { type: 'value', name: '工单数' }
     ],
     series: [
-      { name: '总幅数', type: 'line', smooth: true, data: [] as number[], itemStyle: { color: palette.primary }, areaStyle: primaryGradient(0.3, 0.05) },
-      { name: '工单数', type: 'line', smooth: true, yAxisIndex: 1, data: [] as number[], itemStyle: { color: palette.series[1] } },
-      { name: '待审核幅数', type: 'bar', stack: 'audit', data: [] as number[], itemStyle: { color: palette.series[3] }, barWidth: 16 },
-      { name: '已审核幅数', type: 'bar', stack: 'audit', data: [] as number[], itemStyle: { color: palette.series[2] }, barWidth: 16 }
+      {
+        name: '总幅数',
+        type: 'line',
+        smooth: true,
+        data: [] as number[],
+        itemStyle: { color: palette.primary },
+        areaStyle: primaryGradient(0.3, 0.05) as never
+      },
+      {
+        name: '工单数',
+        type: 'line',
+        smooth: true,
+        yAxisIndex: 1,
+        data: [] as number[],
+        itemStyle: { color: palette.series[1] }
+      },
+      {
+        name: '待审核幅数',
+        type: 'bar',
+        stack: 'audit',
+        data: [] as number[],
+        itemStyle: { color: palette.series[3] },
+        barWidth: 16
+      },
+      {
+        name: '已审核幅数',
+        type: 'bar',
+        stack: 'audit',
+        data: [] as number[],
+        itemStyle: { color: palette.series[2] },
+        barWidth: 16
+      }
     ]
   };
 });
@@ -295,11 +432,13 @@ function updateYearTrendChart() {
   const auditedPaintCounts = yearOverview.value.map(d => Number(d.auditedPaintCount || 0));
 
   updateYearTrendChartOptions(opts => {
-    opts.xAxis.data = months;
-    opts.series[0].data = paintCounts;
-    opts.series[1].data = orderCounts;
-    opts.series[2].data = pendingPaintCounts;
-    opts.series[3].data = auditedPaintCounts;
+    const xAxis = (Array.isArray(opts.xAxis) ? opts.xAxis[0] : opts.xAxis)!;
+    (xAxis as { data: string[] }).data = months;
+    const series = opts.series as unknown as { data: number[] }[];
+    series[0].data = paintCounts;
+    series[1].data = orderCounts;
+    series[2].data = pendingPaintCounts;
+    series[3].data = auditedPaintCounts;
     return opts;
   });
 }
@@ -316,30 +455,34 @@ const { domRef: categoryChartRef, updateOptions: updateCategoryChartOptions } = 
       right: 10,
       feature: { saveAsImage: { name: '项目类别分布' } }
     },
-    series: [{
-      type: 'pie',
-      color: palette.series,
-      radius: ['40%', '70%'],
-      center: ['60%', '55%'],
-      avoidLabelOverlap: true,
-      itemStyle: { borderRadius: 8, borderColor: palette.border, borderWidth: 2 },
-      label: { show: true, formatter: '{b}\n{d}%' },
-      emphasis: {
-        label: { show: true, fontSize: 14, fontWeight: 'bold' },
-        itemStyle: { shadowBlur: 10, shadowOffsetX: 0, shadowColor: 'rgba(0, 0, 0, 0.5)' }
-      },
-      data: [] as { name: string; value: number }[]
-    }]
+    series: [
+      {
+        type: 'pie',
+        color: palette.series,
+        radius: ['40%', '70%'],
+        center: ['60%', '55%'],
+        avoidLabelOverlap: true,
+        itemStyle: { borderRadius: 8, borderColor: palette.border, borderWidth: 2 },
+        label: { show: true, formatter: '{b}\n{d}%' },
+        emphasis: {
+          label: { show: true, fontSize: 14, fontWeight: 'bold' },
+          itemStyle: { shadowBlur: 10, shadowOffsetX: 0, shadowColor: 'rgba(0, 0, 0, 0.5)' }
+        },
+        data: [] as { name: string; value: number }[]
+      }
+    ]
   };
 });
 
 function updateCategoryChart() {
   if (!categoryBreakdown.value.length) return;
 
-  const pieData = categoryBreakdown.value.map(d => ({
-    name: d.categoryName,
-    value: Number(d.totalPaintCount || 0)
-  })).filter(d => d.value > 0);
+  const pieData = categoryBreakdown.value
+    .map(d => ({
+      name: d.categoryName,
+      value: Number(d.totalPaintCount || 0)
+    }))
+    .filter(d => d.value > 0);
 
   updateCategoryChartOptions(opts => {
     opts.series[0].data = pieData;
@@ -382,10 +525,16 @@ async function handleExportExcel() {
   }
   exporting.value = true;
   try {
-    const { data, error } = await exportStatisticsExcel(selectedSettlementMonth.value, selectedShopId.value || undefined);
+    const { data, error } = await exportStatisticsExcel(
+      selectedSettlementMonth.value,
+      selectedShopId.value || undefined
+    );
     if (error) return;
     if (data) {
-      const blob = data instanceof Blob ? data : new Blob([data as any], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const blob =
+        data instanceof Blob
+          ? data
+          : new Blob([data as any], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -438,12 +587,12 @@ async function handleExportPdf() {
         />
         <NDatePicker
           :formatted-value="selectedSettlementMonth || undefined"
-          @update:formatted-value="(val: string | undefined) => { selectedSettlementMonth = val || null; loadAllData(); }"
           type="month"
           value-format="yyyy-MM"
           placeholder="选择结算月"
           clearable
           style="width: 160px"
+          @update:formatted-value="(val: string | undefined) => { selectedSettlementMonth = val || null; loadAllData(); }"
         />
         <NButton type="primary" :loading="loading" @click="loadAllData">查询</NButton>
         <NButton type="info" :loading="exporting" @click="handleExportCsv">

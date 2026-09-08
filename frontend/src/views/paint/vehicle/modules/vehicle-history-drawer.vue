@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue';
-import { NTag, NSpace, NStatistic, NCard, NRadioGroup, NRadioButton, NEmpty, NButton } from 'naive-ui';
+import { NButton, NCard, NEmpty, NRadioButton, NRadioGroup, NSpace, NStatistic, NTag } from 'naive-ui';
+import { getPaintOrderStatusLabel, getPaintOrderStatusTagType } from '@/constants/paint';
 import { fetchVehicleHistory } from '@/service/api';
 
 defineOptions({
@@ -44,7 +45,7 @@ async function loadHistory() {
 
 watch(
   () => visible.value,
-  (v) => {
+  v => {
     if (v && props.vehicle?.id) {
       scope.value = 'all_shops';
       current.value = 1;
@@ -63,36 +64,19 @@ function formatDate(d: string | null) {
   return d.slice(0, 10);
 }
 
+// 状态文案/颜色统一走 constants/paint（原映射 PENDING=info、SETTLED=warning 与工单列表口径漂移）
 function getStatusType(status: string) {
-  const map: Record<string, 'default' | 'info' | 'success' | 'warning' | 'error'> = {
-    DRAFT: 'default',
-    PENDING: 'info',
-    AUDITED: 'success',
-    SETTLED: 'warning',
-    ABNORMAL: 'error'
-  };
-  return map[status] || 'default';
+  return getPaintOrderStatusTagType(status);
 }
 
 function getStatusLabel(status: string) {
-  const map: Record<string, string> = {
-    DRAFT: '草稿',
-    PENDING: '待审核',
-    AUDITED: '已审核',
-    SETTLED: '已结算',
-    ABNORMAL: '异常'
-  };
-  return map[status] || status;
+  return getPaintOrderStatusLabel(status);
 }
 </script>
 
 <template>
   <NDrawer v-model:show="visible" display-directive="show" :width="720">
-    <NDrawerContent
-      :title="`车辆历史 - ${vehicle?.plateNumber || ''}`"
-      :native-scrollbar="false"
-      closable
-    >
+    <NDrawerContent :title="`车辆历史 - ${vehicle?.plateNumber || ''}`" :native-scrollbar="false" closable>
       <!-- 车辆基本信息 -->
       <NCard size="small" :bordered="true" class="mb-12px">
         <NSpace align="center" :size="24" :wrap="true">
@@ -123,9 +107,7 @@ function getStatusLabel(status: string) {
           <NRadioButton value="all_shops">全部门店</NRadioButton>
           <NRadioButton value="current_shop">当前门店</NRadioButton>
         </NRadioGroup>
-        <NButton size="small" ghost type="primary" @click="loadHistory" :loading="loading">
-          刷新
-        </NButton>
+        <NButton size="small" ghost type="primary" :loading="loading" @click="loadHistory">刷新</NButton>
       </div>
 
       <!-- 工单列表 -->
@@ -135,7 +117,7 @@ function getStatusLabel(status: string) {
           <div
             v-for="order in records"
             :key="order.id"
-            class="rounded-6px border border-gray-200 p-12px dark:border-gray-700"
+            class="border border-gray-200 rounded-6px p-12px dark:border-gray-700"
           >
             <div class="mb-6px flex items-center justify-between">
               <NSpace align="center" :size="8">
@@ -145,10 +127,11 @@ function getStatusLabel(status: string) {
                 </NTag>
                 <NTag v-if="order.isRework" type="warning" size="small">返工</NTag>
               </NSpace>
-              <span class="text-14px font-bold text-primary">{{ Number(order.totalPaintCount).toFixed(1) }} 幅</span>
+              <span class="text-14px text-primary font-bold">{{ Number(order.totalPaintCount).toFixed(1) }} 幅</span>
             </div>
             <div class="text-12px text-gray-500">
-              {{ formatDate(order.orderDate?.toString()) }} · {{ order.shop?.name || '-' }} · 部位数 {{ order.items?.length || 0 }}
+              {{ formatDate(order.orderDate?.toString()) }} · {{ order.shop?.name || '-' }} · 部位数
+              {{ order.items?.length || 0 }}
             </div>
           </div>
         </div>

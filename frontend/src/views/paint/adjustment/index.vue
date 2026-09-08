@@ -1,43 +1,41 @@
 <script setup lang="tsx">
-import { ref, reactive, onMounted, h } from 'vue';
+import { h, onMounted, reactive, ref } from 'vue';
 import {
+  NButton,
   NCard,
+  NDataTable,
+  NDatePicker,
   NForm,
   NFormItem,
-  NSelect,
   NInput,
   NInputNumber,
-  NButton,
-  NDataTable,
-  NTag,
-  NSpace,
-  NDatePicker,
   NModal,
   NPopconfirm,
+  NSelect,
+  NSpace,
+  NTag,
   useMessage
 } from 'naive-ui';
 import type { DataTableColumns } from 'naive-ui';
+import { PAINT_ORDER_STATUS_LABEL } from '@/constants/paint';
 import {
-  fetchPaintShopList,
-  fetchPaintCategoryList,
-  fetchWorkOrderPage,
+  type PaintItemCategory,
+  type PaintWorkOrder,
   createWorkOrder,
   deleteWorkOrder,
-  type PaintWorkOrder,
-  type PaintShopListItem,
-  type PaintItemCategory
+  fetchPaintCategoryList,
+  fetchWorkOrderPage
 } from '@/service/api/paint';
+import { useShopOptions } from '@/hooks/business/use-shop-options';
 
 const message = useMessage();
 
-const shopOptions = ref<{ label: string; value: string }[]>([]);
+// 门店走 paint store 共享缓存，全应用只请求一次（原为每页各自 fetchPaintShopList）
+const { shopOptions, ensureShops } = useShopOptions();
 const categoryOptions = ref<{ label: string; value: string }[]>([]);
 
 async function loadShops() {
-  const { data, error } = await fetchPaintShopList();
-  if (!error && data) {
-    shopOptions.value = (data as PaintShopListItem[]).map(s => ({ label: s.name, value: s.id }));
-  }
+  await ensureShops();
 }
 
 async function loadCategories() {
@@ -176,14 +174,8 @@ async function doDelete(row: PaintWorkOrder) {
   }
 }
 
-const statusText: Record<string, string> = {
-  DRAFT: '待审核',
-  PENDING: '待审',
-  AUDITED: '已审核',
-  SETTLED: '已结算',
-  ABNORMAL: '异常',
-  VOID: '已作废'
-};
+// 状态文案统一走 constants/paint（原映射把 DRAFT 写成了「待审核」、PENDING 写成「待审」）
+const statusText: Record<string, string> = PAINT_ORDER_STATUS_LABEL;
 
 const columns: DataTableColumns<PaintWorkOrder> = [
   {
@@ -208,11 +200,7 @@ const columns: DataTableColumns<PaintWorkOrder> = [
     width: 130,
     render: row => {
       const v = Number(row.totalPaintCount);
-      return h(
-        NTag,
-        { type: v < 0 ? 'error' : 'success' },
-        { default: () => `${v > 0 ? '+' : ''}${v.toFixed(1)}` }
-      );
+      return h(NTag, { type: v < 0 ? 'error' : 'success' }, { default: () => `${v > 0 ? '+' : ''}${v.toFixed(1)}` });
     }
   },
   {
@@ -313,12 +301,7 @@ onMounted(() => {
     >
       <NForm :model="form" label-placement="left" :label-width="100">
         <NFormItem label="门店" required>
-          <NSelect
-            v-model:value="form.shopId"
-            :options="shopOptions"
-            placeholder="请选择门店"
-            style="width: 100%"
-          />
+          <NSelect v-model:value="form.shopId" :options="shopOptions" placeholder="请选择门店" style="width: 100%" />
         </NFormItem>
         <NFormItem label="调整月份" required>
           <NDatePicker
@@ -338,11 +321,7 @@ onMounted(() => {
           />
         </NFormItem>
         <NFormItem label="幅数调整" required>
-          <NInputNumber
-            v-model:value="form.paintCount"
-            placeholder="正数追加、负数扣减（如 -5）"
-            style="width: 100%"
-          />
+          <NInputNumber v-model:value="form.paintCount" placeholder="正数追加、负数扣减（如 -5）" style="width: 100%" />
         </NFormItem>
         <NFormItem label="新件调整">
           <NInputNumber v-model:value="form.newPartQuantity" placeholder="可负（仅选部位时生效）" style="width: 100%" />

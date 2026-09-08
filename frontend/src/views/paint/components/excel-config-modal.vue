@@ -1,14 +1,28 @@
 <script setup lang="ts">
-import { ref, computed, nextTick, watch } from 'vue';
+import { computed, nextTick, ref, watch } from 'vue';
 import {
-  NModal, NSpace, NSteps, NStep, NSpin, NAlert, NButton, NInput, NInputGroup,
-  NGrid, NGridItem, NText, NForm, NFormItem, NSelect, NEmpty
+  NAlert,
+  NButton,
+  NEmpty,
+  NForm,
+  NFormItem,
+  NGrid,
+  NGridItem,
+  NInput,
+  NInputGroup,
+  NModal,
+  NSelect,
+  NSpace,
+  NSpin,
+  NStep,
+  NSteps,
+  NText
 } from 'naive-ui';
 import {
-  getExcelTemplateConfig,
+  detectExcelTemplate,
   fetchCategoryAliasMap,
   fetchShopCategoriesWithStandard,
-  detectExcelTemplate,
+  getExcelTemplateConfig,
   saveExcelTemplateAndAliasMap
 } from '@/service/api';
 
@@ -27,21 +41,21 @@ const saving = ref(false);
 const step = ref<1 | 2>(1);
 const templateConfig = ref<any>(null);
 const aliasMapData = ref<Record<string, string[]>>({});
-const shopCategoryStandards = ref<{ id: string; name: string; alias: string; paintCount: number; newPartAddition: number }[]>([]);
+const shopCategoryStandards = ref<
+  { id: string; name: string; alias: string; paintCount: number; newPartAddition: number }[]
+>([]);
 const templateFileInputRef = ref<HTMLInputElement | null>(null);
 
 const templateCategories = computed(() => templateConfig.value?.items || []);
 
 function getCategoryOptions(templateName: string) {
-  const templateStd = shopCategoryStandards.value.find(
-    s => s.name === templateName || s.alias === templateName
-  );
+  const templateStd = shopCategoryStandards.value.find(s => s.name === templateName || s.alias === templateName);
   const templateCoefficient = templateStd?.paintCount;
   const currentValues = aliasMapData.value[templateName] || [];
 
   // 记录每个系统部位被哪些模板列选中了（仅统计当前模板中仍存在的列，
   // 避免已删除/重命名列的残留映射占用系统部位，导致无法重新绑定）
-  const validNames = new Set((templateConfig.value?.items || []).map(i => i.categoryName));
+  const validNames = new Set((templateConfig.value?.items || []).map((i: { categoryName: string }) => i.categoryName));
   const selectedByOther = new Map<string, string[]>();
   Object.entries(aliasMapData.value)
     .filter(([name, ids]) => name !== templateName && validNames.has(name) && Array.isArray(ids))
@@ -52,9 +66,10 @@ function getCategoryOptions(templateName: string) {
       }
     });
 
-  const sameCoefficientCategories = templateCoefficient !== undefined
-    ? shopCategoryStandards.value.filter(s => Math.abs(s.paintCount - templateCoefficient) < 0.001)
-    : [];
+  const sameCoefficientCategories =
+    templateCoefficient !== undefined
+      ? shopCategoryStandards.value.filter(s => Math.abs(s.paintCount - templateCoefficient) < 0.001)
+      : [];
 
   const availableOptions: { label: string; value: string }[] = [];
   const occupiedOptions: { label: string; value: string; disabled: boolean }[] = [];
@@ -89,7 +104,6 @@ function getCategoryOptions(templateName: string) {
   }
 
   const result = [...availableOptions, ...occupiedOptions];
-  console.log(`[excel-config-modal] getCategoryOptions("${templateName}") => ${result.length} options`);
   return result;
 }
 
@@ -107,9 +121,7 @@ function autoFillAliasMap() {
     if (Array.isArray(existing) && existing.length > 0) continue;
 
     // 按名称或别名精确匹配系统部位
-    const matched = shopCategoryStandards.value.find(
-      s => s.name === templateName || s.alias === templateName
-    );
+    const matched = shopCategoryStandards.value.find(s => s.name === templateName || s.alias === templateName);
 
     if (matched?.id) {
       aliasMapData.value[templateName] = [matched.id];
@@ -118,7 +130,6 @@ function autoFillAliasMap() {
   }
 
   if (filledCount > 0) {
-    console.log(`[excel-config-modal] 自动填充部位映射 ${filledCount} 项`);
     window.$message?.success(`已自动匹配 ${filledCount} 个部位映射`);
   }
 }
@@ -134,24 +145,26 @@ async function loadConfig() {
 
     // 检查各接口是否有错误（createFlatRequest 不会 throw，错误在 error 字段中）
     if (configRes.error) {
-      window.$message?.error('加载模板配置失败: ' + (configRes.error.message || '未知错误'));
+      window.$message?.error(`加载模板配置失败: ${configRes.error.message || '未知错误'}`);
     }
     if (aliasRes.error) {
-      window.$message?.error('加载部位别名映射失败: ' + (aliasRes.error.message || '未知错误'));
+      window.$message?.error(`加载部位别名映射失败: ${aliasRes.error.message || '未知错误'}`);
     }
     if (standardsWithCatRes.error) {
-      window.$message?.error('加载门店部位标准失败: ' + (standardsWithCatRes.error.message || '未知错误'));
+      window.$message?.error(`加载门店部位标准失败: ${standardsWithCatRes.error.message || '未知错误'}`);
     }
 
     templateConfig.value = configRes.data || null;
     const rawAliasMap = (aliasRes.data || {}) as Record<string, any>;
-    aliasMapData.value = Object.entries(rawAliasMap).reduce((acc, [key, value]) => {
-      if (Array.isArray(value)) acc[key] = value.filter((v): v is string => typeof v === 'string');
-      else if (typeof value === 'string' && value) acc[key] = [value];
-      return acc;
-    }, {} as Record<string, string[]>);
+    aliasMapData.value = Object.entries(rawAliasMap).reduce(
+      (acc, [key, value]) => {
+        if (Array.isArray(value)) acc[key] = value.filter((v): v is string => typeof v === 'string');
+        else if (typeof value === 'string' && value) acc[key] = [value];
+        return acc;
+      },
+      {} as Record<string, string[]>
+    );
     const rawStandards = (standardsWithCatRes.data || []) as any[];
-    console.log('[excel-config-modal] fetchShopCategoriesWithStandard raw data count:', rawStandards.length, 'sample:', rawStandards[0]);
     if (!standardsWithCatRes.error && rawStandards.length === 0) {
       window.$message?.warning('该门店未配置标准模板或模板下没有部位，请先配置门店标准模板');
     }
@@ -162,7 +175,6 @@ async function loadConfig() {
       paintCount: Number(s.coefficient) || 0,
       newPartAddition: Number(s.newPartAddition) || 0
     }));
-    console.log('[excel-config-modal] shopCategoryStandards count:', shopCategoryStandards.value.length);
 
     // 自动按名称匹配填充部位映射（仅在用户没有手动配置过时）
     autoFillAliasMap();
@@ -272,12 +284,15 @@ function handleUpdateShow(value: boolean) {
 }
 
 // 父组件在不关闭弹窗的情况下切换门店时，主动重新加载配置
-watch(() => props.shopId, (newId, oldId) => {
-  if (props.show && newId && newId !== oldId) {
-    step.value = 1;
-    loadConfig();
+watch(
+  () => props.shopId,
+  (newId, oldId) => {
+    if (props.show && newId && newId !== oldId) {
+      step.value = 1;
+      loadConfig();
+    }
   }
-});
+);
 </script>
 
 <template>
@@ -303,18 +318,34 @@ watch(() => props.shopId, (newId, oldId) => {
               每家门店的台账格式可能不同。上传该门店的Excel文件，系统会自动识别列映射关系。也可以手动调整后进入下一步。
             </NAlert>
             <NSpace class="mb-12px">
-              <NButton type="primary" :loading="loading" @click="triggerTemplateDetect">
-                上传Excel自动识别
-              </NButton>
-              <input ref="templateFileInputRef" type="file" accept=".xlsx,.xls" style="display:none" @change="handleTemplateDetectFile" />
+              <NButton type="primary" :loading="loading" @click="triggerTemplateDetect">上传Excel自动识别</NButton>
+              <input
+                ref="templateFileInputRef"
+                type="file"
+                accept=".xlsx,.xls"
+                style="display: none"
+                @change="handleTemplateDetectFile"
+              />
             </NSpace>
 
             <template v-if="templateConfig">
-              <NText strong class="mb-8px" style="display:block">基本字段列映射</NText>
+              <NText strong class="mb-8px" style="display: block">基本字段列映射</NText>
               <NGrid :cols="3" :x-gap="8" :y-gap="8" class="mb-12px">
-                <NGridItem v-for="(label, key) in { date: '日期', carModel: '车型', plateNumber: '车牌', orderNo: '工单号', paintCount: '副数', remark: '备注' }" :key="key">
+                <NGridItem
+                  v-for="(label, key) in {
+                    date: '日期',
+                    carModel: '车型',
+                    plateNumber: '车牌',
+                    orderNo: '工单号',
+                    paintCount: '副数',
+                    remark: '备注'
+                  }"
+                  :key="key"
+                >
                   <NInput v-model:value="templateConfig.fields[key]" size="small">
-                    <template #prefix><NText depth="3" style="font-size:12px">{{ label }}</NText></template>
+                    <template #prefix>
+                      <NText depth="3" style="font-size: 12px">{{ label }}</NText>
+                    </template>
                   </NInput>
                 </NGridItem>
               </NGrid>
@@ -323,28 +354,37 @@ watch(() => props.shopId, (newId, oldId) => {
                 <NText strong>喷漆项目列映射 ({{ templateConfig.items?.length || 0 }}项)</NText>
                 <NButton size="tiny" type="primary" secondary @click="addItem">+ 添加项目列</NButton>
               </div>
-              <NSpace vertical :size="6" class="mb-12px excel-item-list">
+              <NSpace vertical :size="6" class="excel-item-list mb-12px">
                 <div v-for="(item, idx) in templateConfig.items" :key="idx" class="excel-item-row">
                   <NInputGroup>
-                    <NInput v-model:value="item.col" size="small" style="width:54px" placeholder="列" />
+                    <NInput v-model:value="item.col" size="small" style="width: 54px" placeholder="列" />
                     <NInput v-model:value="item.categoryName" size="small" placeholder="项目名（系统部位名或别名）" />
                   </NInputGroup>
                   <NSpace :size="4" class="excel-item-actions">
-                    <NButton size="tiny" tertiary :disabled="idx === 0" title="上移" @click="moveItem(idx, -1)">↑</NButton>
+                    <NButton size="tiny" tertiary :disabled="idx === 0" title="上移" @click="moveItem(idx, -1)">
+                      ↑
+                    </NButton>
                     <NButton
                       size="tiny"
                       tertiary
                       :disabled="idx === templateConfig.items.length - 1"
                       title="下移"
                       @click="moveItem(idx, 1)"
-                    >↓</NButton>
+                    >
+                      ↓
+                    </NButton>
                     <NButton size="tiny" tertiary type="error" title="删除" @click="removeItem(idx)">删</NButton>
                   </NSpace>
                 </div>
-                <NEmpty v-if="!templateConfig.items || templateConfig.items.length === 0" description="暂无项目列，点击上方按钮添加" />
+                <NEmpty
+                  v-if="!templateConfig.items || templateConfig.items.length === 0"
+                  description="暂无项目列，点击上方按钮添加"
+                />
               </NSpace>
 
-              <NText depth="3" style="font-size:12px">数据起始行: {{ templateConfig.dataStartRow }} | 表头行: {{ templateConfig.headerRow }}</NText>
+              <NText depth="3" style="font-size: 12px">
+                数据起始行: {{ templateConfig.dataStartRow }} | 表头行: {{ templateConfig.headerRow }}
+              </NText>
             </template>
             <NEmpty v-else description="暂无配置，请上传Excel文件自动识别" />
           </template>
@@ -373,9 +413,11 @@ watch(() => props.shopId, (newId, oldId) => {
                     style="width: 100%"
                   />
                   <NText
-                    v-if="!loading && shopCategoryStandards.length > 0 && getCategoryOptions(item.categoryName).length === 0"
+                    v-if="
+                      !loading && shopCategoryStandards.length > 0 && getCategoryOptions(item.categoryName).length === 0
+                    "
                     depth="3"
-                    style="font-size: 12px; color: #f0a020;"
+                    style="font-size: 12px; color: #f0a020"
                   >
                     所有系统部位已被其他列映射
                   </NText>

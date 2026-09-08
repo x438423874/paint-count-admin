@@ -11,9 +11,7 @@ const isHttpProxy = import.meta.env.DEV && import.meta.env.VITE_HTTP_PROXY === '
 const { baseURL, otherBaseURL } = getServiceBaseURL(import.meta.env, isHttpProxy);
 
 /** 将 class-validator 返回的嵌套 errors 结构拍平为一维的中文提示数组 */
-function flattenValidationErrors(
-  errors: Record<string, unknown> | null | undefined,
-): string[] {
+function flattenValidationErrors(errors: Record<string, unknown> | null | undefined): string[] {
   if (!errors || typeof errors !== 'object') return [];
 
   const result: string[] = [];
@@ -46,7 +44,7 @@ export const request = createFlatRequest<App.Service.Response, RequestInstanceSt
         if (!refreshed) {
           // 主动刷新失败（token 已失效），终止本次请求，避免发送无 token 的脏请求
           const authAbort = new Error('token 刷新失败，请求已中止');
-          (authAbort as Record<string, unknown>).__authAbort = true;
+          (authAbort as unknown as Record<string, unknown>).__authAbort = true;
           throw authAbort;
         }
       }
@@ -112,7 +110,10 @@ export const request = createFlatRequest<App.Service.Response, RequestInstanceSt
       // the api `refreshToken` can not return error code in `expiredTokenCodes`, otherwise it will be a dead loop, should return `logoutCodes` or `modalLogoutCodes`
       // 注意：refreshToken 自身的 401 不能再次触发刷新，否则会死循环；其失败由 handleRefreshToken 内部登出处理
       const expiredTokenCodes = import.meta.env.VITE_SERVICE_EXPIRED_TOKEN_CODES?.split(',') || [];
-      if ((expiredTokenCodes.includes(responseCode) || httpStatus === 401) && response.config.url !== '/auth/refreshToken') {
+      if (
+        (expiredTokenCodes.includes(responseCode) || httpStatus === 401) &&
+        response.config.url !== '/auth/refreshToken'
+      ) {
         const success = await handleExpiredRequest();
         if (success) {
           const Authorization = getAuthorization();
@@ -131,7 +132,7 @@ export const request = createFlatRequest<App.Service.Response, RequestInstanceSt
       // when the request is fail, you can show error message
 
       // 主动刷新失败已登出，中止请求时不再提示
-      if ((error as Record<string, unknown>).__authAbort) {
+      if ((error as unknown as Record<string, unknown>).__authAbort) {
         return;
       }
 
@@ -146,8 +147,7 @@ export const request = createFlatRequest<App.Service.Response, RequestInstanceSt
 
       // 参数校验失败（422）：把字段级错误拼成可读提示，而不是只显示“参数校验失败”
       if (error.response?.status === 422) {
-        const validationErrors =
-          (error.response?.data as any)?.error?.errors ?? (error.response?.data as any)?.errors;
+        const validationErrors = (error.response?.data as any)?.error?.errors ?? (error.response?.data as any)?.errors;
         const msgs = flattenValidationErrors(validationErrors);
         if (msgs.length > 0) {
           message = msgs.join('；');
