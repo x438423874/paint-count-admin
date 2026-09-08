@@ -16,6 +16,8 @@ export interface TokensWriteRepoPort {
   /** 吊销某用户的所有未使用 refresh token，用于登出全部会话。 */
   revokeTokensByUserId(userId: string): Promise<{ count: number }>;
 
-  /** 清理早于指定时间、且状态为 USED 的 token 记录。 */
+  /**
+   * 清理滞留的 token 记录：USED/REVOKED 早于指定时间，或 UNUSED 早于刷新令牌有效期。
+   */
   deleteUsedTokens(before: Date): Promise<number>;
 }
