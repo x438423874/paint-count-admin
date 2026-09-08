@@ -41,8 +41,19 @@ export class TokensWriteRepository implements TokensWriteRepoPort {
   }
 
   async deleteUsedTokens(before: Date): Promise<number> {
+    // 清理三类滞留记录，避免 sys_tokens 无限膨胀：
+    //  - USED / REVOKED：已消费或已吊销，超过保留期（30 天）
+    //  - UNUSED：从未被刷新消费，且已早于刷新令牌有效期（7 天）——记录本身已失效，
+    //    此时该 refresh token 无法再通过校验，删除不影响任何在线会话
+    const unusedExpireAt = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
     const result = await this.prisma.sysTokens.deleteMany({
-      where: { status: TokenStatus.USED, createdAt: { lt: before } },
+      where: {
+        OR: [
+          { status: TokenStatus.USED, createdAt: { lt: before } },
+          { status: TokenStatus.REVOKED, createdAt: { lt: before } },
+          { status: TokenStatus.UNUSED, createdAt: { lt: unusedExpireAt } },
+        ],
+      },
     });
     return result.count;
   }
