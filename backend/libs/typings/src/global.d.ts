@@ -2,6 +2,8 @@ export interface IAuthentication {
   uid: string;
   username: string;
   domain: string;
+  /** 访问令牌会话标识：用于登出即吊销（Redis 会话键 soybean:cache:access:{jti}） */
+  jti?: string;
 }
 
 export interface ApiResponse<T = any> {

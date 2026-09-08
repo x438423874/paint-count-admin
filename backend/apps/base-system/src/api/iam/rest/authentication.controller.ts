@@ -7,14 +7,12 @@ import { PasswordIdentifierDTO } from '@app/base-system/lib/bounded-contexts/iam
 import { RefreshTokenDTO } from '@app/base-system/lib/bounded-contexts/iam/authentication/application/dto/refresh-token.dto';
 import { AuthenticationService } from '@app/base-system/lib/bounded-contexts/iam/authentication/application/service/authentication.service';
 
-import { CacheConstant } from '@lib/constants/cache.constant';
 import { USER_AGENT } from '@lib/constants/rest.constant';
 import { Log } from '@lib/infra/decorators/log.decorator';
 import { Public } from '@lib/infra/decorators/public.decorator';
 import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
 import { ApiRes } from '@lib/infra/rest/res.response';
 import { Ip2regionService } from '@lib/shared/ip2region/ip2region.service';
-import { RedisUtility } from '@lib/shared/redis/redis.util';
 import { IAuthentication } from '@lib/typings/global';
 import { getClientIpAndPort } from '@lib/utils/ip.util';
 
@@ -51,7 +49,7 @@ export class AuthenticationController {
         ip,
         region,
         request.headers[USER_AGENT] ?? '',
-        'TODO',
+        String(request.id),
         'PC',
         port,
       ),
@@ -79,7 +77,7 @@ export class AuthenticationController {
         ip,
         region,
         request.headers[USER_AGENT] ?? '',
-        'TODO',
+        String(request.id),
         'PC',
         port,
       ),
@@ -99,16 +97,14 @@ export class AuthenticationController {
     @Body('refreshToken') refreshToken?: string,
   ): Promise<ApiRes<any>> {
     const user: IAuthentication = req.user;
-    await this.authenticationService.logout(user.uid, refreshToken);
+    await this.authenticationService.logout(user.uid, refreshToken, user.jti);
     return ApiRes.success(null);
   }
 
   @Get('getUserInfo')
   async getProfile(@Request() req: AuthenticatedRequest): Promise<ApiRes<any>> {
     const user: IAuthentication = req.user;
-    const userRoles = await RedisUtility.instance.smembers(
-      `${CacheConstant.AUTH_TOKEN_PREFIX}${user.uid}`,
-    );
+    const userRoles = await this.authenticationService.getUserRoles(user.uid);
     return ApiRes.success({
       userId: user.uid,
       userName: user.username,

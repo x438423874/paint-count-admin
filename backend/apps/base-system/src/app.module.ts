@@ -56,6 +56,8 @@ const strategies = [JwtStrategy];
     }),
     AuthZModule.register({
       imports: [ConfigModule],
+      // Redis 角色缓存故障/缺失时的兜底：直接查数据库角色，保证鉴权不因 Redis 单点失效
+      resolveUserRolesFallback: createRolesFallback(),
       enforcerProvider: {
         provide: AUTHZ_ENFORCER,
         useFactory: async (configService: ConfigService) => {
@@ -119,3 +121,23 @@ const strategies = [JwtStrategy];
   ],
 })
 export class AppModule {}
+
+
+/**
+ * Redis 角色缓存兜底解析器：直接查数据库（仅 Redis 故障或缓存缺失时触发）。
+ * 使用独立的 PrismaClient 惰性单例，避免与 Nest DI 模块边界耦合。
+ */
+let rolesFallbackPrisma: import('@prisma/client').PrismaClient | null = null;
+function createRolesFallback() {
+  return async (uid: string): Promise<string[]> => {
+    rolesFallbackPrisma ??= new (require('@prisma/client').PrismaClient)();
+    const prisma = rolesFallbackPrisma as NonNullable<typeof rolesFallbackPrisma>;
+    const userRoles = await prisma.sysUserRole.findMany({ where: { userId: uid } });
+    if (userRoles.length === 0) return [];
+    const roles = await prisma.sysRole.findMany({
+      where: { id: { in: userRoles.map((u) => u.roleId) } },
+      select: { code: true },
+    });
+    return roles.map((r) => r.code);
+  };
+}

@@ -43,9 +43,18 @@ export class AuthZGuard implements CanActivate {
         throw new UnauthorizedException();
       }
 
-      const userRoles = await RedisUtility.instance.smembers(
-        `${CacheConstant.AUTH_TOKEN_PREFIX}${user.uid}`,
-      );
+      let userRoles: string[] = [];
+      try {
+        userRoles = await RedisUtility.instance.smembers(
+          `${CacheConstant.AUTH_TOKEN_PREFIX}${user.uid}`,
+        );
+      } catch (e) {
+        // Redis 故障：有兜底解析器则回退数据库，否则维持 fail-closed
+        if (!this.options.resolveUserRolesFallback) throw e;
+      }
+      if ((!userRoles || userRoles.length <= 0) && this.options.resolveUserRolesFallback) {
+        userRoles = await this.options.resolveUserRolesFallback(user.uid);
+      }
 
       if (userRoles && userRoles.length <= 0) {
         return false;

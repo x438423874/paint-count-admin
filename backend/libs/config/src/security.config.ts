@@ -26,7 +26,7 @@ function getJwtSecret(envKey: string): string {
 export const SecurityConfig = registerAs(securityRegToken, () => ({
   casbinModel: getEnvString('CASBIN_MODEL', 'model.conf'),
   jwtSecret: getJwtSecret('JWT_SECRET'),
-  jwtExpiresIn: getEnvNumber('JWT_EXPIRE_IN', 60 * 60 * 2),
+  jwtExpiresIn: getEnvNumber('JWT_EXPIRE_IN', 60 * 30),
   refreshJwtSecret: getJwtSecret('REFRESH_TOKEN_SECRET'),
   refreshJwtExpiresIn: getEnvNumber('REFRESH_TOKEN_EXPIRE_IN', 60 * 60 * 24 * 7),
   signReqTimestampDisparity: getEnvNumber(

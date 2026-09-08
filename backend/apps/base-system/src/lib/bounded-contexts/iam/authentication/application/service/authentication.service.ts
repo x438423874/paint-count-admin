@@ -5,6 +5,8 @@ import {
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
+
 import { EventPublisher, QueryBus } from '@nestjs/cqrs';
 import { JwtService } from '@nestjs/jwt';
 
@@ -106,7 +108,7 @@ export class AuthenticationService {
    * B) 登出：吊销 refresh token 并清理角色缓存。
    * 若传入 refreshToken，则只吊销该会话；否则吊销该用户所有未使用会话。
    */
-  async logout(userId: string, refreshToken?: string): Promise<void> {
+  async logout(userId: string, refreshToken?: string, accessJti?: string): Promise<void> {
     if (refreshToken) {
       await this.tokensWriteRepository.revokeRefreshToken(refreshToken);
     } else {
@@ -115,6 +117,28 @@ export class AuthenticationService {
     await RedisUtility.instance.del(
       `${CacheConstant.AUTH_TOKEN_PREFIX}${userId}`,
     );
+    // 登出即吊销当前访问令牌（删会话键后，JwtStrategy 会拒绝该 access token）
+    if (accessJti) {
+      await RedisUtility.instance.del(
+        `${CacheConstant.ACCESS_SESSION_PREFIX}${accessJti}`,
+      );
+    }
+  }
+
+  /**
+   * 查询用户角色：优先 Redis 缓存，Redis 故障时回退数据库。
+   */
+  async getUserRoles(userId: string): Promise<string[]> {
+    try {
+      const roles = await RedisUtility.instance.smembers(
+        `${CacheConstant.AUTH_TOKEN_PREFIX}${userId}`,
+      );
+      if (roles.length > 0) return roles;
+    } catch {
+      // Redis 故障，走数据库
+    }
+    const codes = await this.repository.findRolesByUserId(userId);
+    return Array.from(codes);
   }
 
   /**
@@ -133,11 +157,15 @@ export class AuthenticationService {
     const result = await this.repository.findRolesByUserId(userId);
     const roles = Array.from(result);
     const key = `${CacheConstant.AUTH_TOKEN_PREFIX}${userId}`;
-    await RedisUtility.instance.del(key);
-    if (roles.length > 0) {
-      await RedisUtility.instance.sadd(key, ...roles);
+    try {
+      await RedisUtility.instance.del(key);
+      if (roles.length > 0) {
+        await RedisUtility.instance.sadd(key, ...roles);
+      }
+      await RedisUtility.instance.expire(key, this.securityConfig.jwtExpiresIn);
+    } catch {
+      // 角色缓存写入失败不阻断登录/刷新：鉴权守卫在 Redis 故障时会回退数据库查角色
     }
-    await RedisUtility.instance.expire(key, this.securityConfig.jwtExpiresIn);
   }
 
   async execPasswordLogin(
@@ -205,16 +233,30 @@ export class AuthenticationService {
     username: string,
     domain: string,
   ): Promise<{ token: string; refreshToken: string }> {
+    const jti = randomUUID();
     const payload: IAuthentication = {
       uid: userId,
       username: username,
       domain: domain,
+      jti,
     };
     const accessToken = await this.jwtService.signAsync(payload);
     const refreshToken = await this.jwtService.signAsync(payload, {
       secret: this.securityConfig.refreshJwtSecret,
       expiresIn: this.securityConfig.refreshJwtExpiresIn,
     });
+
+    // 登出即吊销：记录访问令牌会话（TTL 与 access 有效期一致），登出时删除该键
+    try {
+      await RedisUtility.instance.set(
+        `${CacheConstant.ACCESS_SESSION_PREFIX}${jti}`,
+        userId,
+        'EX',
+        this.securityConfig.jwtExpiresIn,
+      );
+    } catch {
+      // Redis 故障时跳过会话登记（JwtStrategy 对 Redis 故障降级放行），不影响登录
+    }
 
     return { token: accessToken, refreshToken };
   }
