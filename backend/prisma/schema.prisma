@@ -54,6 +54,7 @@ model SysUser {
 
   userShops   SysUserShop[]
 
+  @@index([domain])
   @@map("sys_user")
 }
 
@@ -74,6 +75,7 @@ model CasbinRule {
   v4    String?
   v5    String?
 
+  @@index([ptype, v0])
   @@map("casbin_rule")
 }
 
@@ -203,6 +205,8 @@ model SysOperationLog {
   duration    Int
   createdAt   DateTime @default(now()) @map("created_at")
 
+  @@index([createdAt])
+  @@index([username])
   @@map("sys_operation_log")
 }
 
