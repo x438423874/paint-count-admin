@@ -1,6 +1,7 @@
-import { Controller, Get, Post, Put, Delete, Body, Query, Param, Request } from '@nestjs/common';
+import { Controller, Get, Post, Put, Delete, Body, Query, Param, Request, UseGuards } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 
+import { AuthZGuard, UsePermissions } from '@lib/infra/casbin';
 import { Log } from '@lib/infra/decorators/log.decorator';
 import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
 import { ApiRes } from '@lib/infra/rest/res.response';
@@ -9,8 +10,13 @@ import { PaintVehicleService } from '../../service/paint-vehicle.service';
 import { UserShopService } from '../../service/user-shop.service';
 import { CreateVehicleDto, UpdateVehicleDto, PageVehicleDto } from '../dto/vehicle.dto';
 
+/**
+ * 车辆主数据按车牌全局唯一、跨门店共享（录单自动 upsert 走服务内部，不受此权限限制）。
+ * 读接口维持登录 + 数据权限过滤；写操作要求 paint:vehicle 权限点（限管理角色）。
+ */
 @ApiTags('Paint - Vehicle')
 @Log('车辆管理')
+@UseGuards(AuthZGuard)
 @Controller('paint/vehicle')
 export class PaintVehicleController {
   constructor(
@@ -19,6 +25,7 @@ export class PaintVehicleController {
   ) {}
 
   @Post()
+  @UsePermissions({ resource: 'paint:vehicle', action: 'create' })
   @ApiOperation({ summary: '创建车辆/客户主数据' })
   async create(@Body() dto: CreateVehicleDto) {
     const data = await this.vehicleService.create(dto);
@@ -26,6 +33,7 @@ export class PaintVehicleController {
   }
 
   @Put()
+  @UsePermissions({ resource: 'paint:vehicle', action: 'update' })
   @ApiOperation({ summary: '更新车辆/客户主数据' })
   async update(@Body() dto: UpdateVehicleDto) {
     const data = await this.vehicleService.update(dto);
@@ -33,6 +41,7 @@ export class PaintVehicleController {
   }
 
   @Delete(':id')
+  @UsePermissions({ resource: 'paint:vehicle', action: 'delete' })
   @ApiOperation({ summary: '删除车辆（关联工单 vehicleId 自动置空，工单数据不删除）' })
   async delete(@Param('id') id: string) {
     await this.vehicleService.delete(id);

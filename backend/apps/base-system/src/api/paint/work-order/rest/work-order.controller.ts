@@ -312,6 +312,7 @@ export class WorkOrderController {
   }
 
   @Post('ocr')
+  @UsePermissions({ resource: 'paint:work-order', action: 'create' }) // OCR 是付费 LLM 调用，限可录单角色
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 20, ttl: 60000 } }) // 每分钟20次：纯OCR识别
   @ApiOperation({ summary: 'OCR识别图片中的工单信息（支持门店模板精准识别）' })

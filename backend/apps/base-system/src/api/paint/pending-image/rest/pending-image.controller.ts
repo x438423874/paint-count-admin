@@ -1,8 +1,9 @@
-import { Controller, Get, Post, Delete, Body, Query, Param, Req, BadRequestException, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Get, Post, Delete, Body, Query, Param, Req, BadRequestException, HttpCode, HttpStatus, UseGuards } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { FastifyRequest } from 'fastify';
 
+import { AuthZGuard, UsePermissions } from '@lib/infra/casbin';
 import { Log } from '@lib/infra/decorators/log.decorator';
 import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
 import { ApiRes } from '@lib/infra/rest/res.response';
@@ -12,8 +13,13 @@ import { UserShopService } from '../../service/user-shop.service';
 import { PagePendingImageDto, ManualMatchDto, CreateOrderFromPendingDto, CorrectPendingImageOcrDto } from '../dto/pending-image.dto';
 
 
+/**
+ * 读接口维持登录 + assertShopAccess 数据权限；写操作按 paint:pending-image 权限点控制：
+ * upload/match/create-order/correct/retry 含店员（录入流程），assign/delete 限管理角色。
+ */
 @ApiTags('Paint - PendingImage')
 @Log('图片池')
+@UseGuards(AuthZGuard)
 @Controller('paint/pending-image')
 export class PendingImageController {
   constructor(
@@ -23,6 +29,7 @@ export class PendingImageController {
 
   /** 上传单张图片到图片池（上传即返回，OCR 后台异步识别） */
   @Post('upload')
+  @UsePermissions({ resource: 'paint:pending-image', action: 'upload' })
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 120, ttl: 60000 } })
   @ApiOperation({ summary: '上传图片到图片池（OCR 后台异步识别 + 自动匹配工单）' })
@@ -83,6 +90,7 @@ export class PendingImageController {
 
   /** 直接上传图片到指定工单（创建工单页“直接创建工单”模式：图片作为工单 BEFORE 图，不经图片池） */
   @Post('attach-to-order')
+  @UsePermissions({ resource: 'paint:pending-image', action: 'upload' })
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 120, ttl: 60000 } })
   @ApiOperation({ summary: '上传图片直接关联到指定工单（作为 BEFORE 图，不进图片池）' })
@@ -139,6 +147,7 @@ export class PendingImageController {
 
   /** 批量上传：multipart 多文件 + 公共 shopId/settlementMonth 字段（上传即返回，OCR 后台异步） */
   @Post('batch-upload')
+  @UsePermissions({ resource: 'paint:pending-image', action: 'upload' })
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 30, ttl: 60000 } })
   @ApiOperation({ summary: '批量上传图片到图片池（OCR 后台异步识别）' })
@@ -230,6 +239,7 @@ export class PendingImageController {
 
   /** 重新自动匹配（工单后导入场景） */
   @Post(':id/auto-match')
+  @UsePermissions({ resource: 'paint:pending-image', action: 'match' })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: '重新自动匹配' })
   async autoMatch(@Param('id') id: string, @Req() request: AuthenticatedRequest) {
@@ -242,6 +252,7 @@ export class PendingImageController {
 
   /** 人工指派到指定工单 */
   @Post(':id/match')
+  @UsePermissions({ resource: 'paint:pending-image', action: 'assign' })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: '人工指派到工单（手动归类）' })
   async manualMatch(@Param('id') id: string, @Body() dto: ManualMatchDto, @Req() request: AuthenticatedRequest) {
@@ -255,6 +266,7 @@ export class PendingImageController {
 
   /** 补建工单（用 OCR 资料建无幅数工单 + 关联图片） */
   @Post(':id/create-order')
+  @UsePermissions({ resource: 'paint:pending-image', action: 'create-order' })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: '补建工单（无幅数）' })
   async createOrder(@Param('id') id: string, @Body() dto: CreateOrderFromPendingDto, @Req() request: AuthenticatedRequest) {
@@ -267,6 +279,7 @@ export class PendingImageController {
 
   /** 人工修正 OCR 识别结果（待匹配/待确认/失败的图片均可修正），并立即重新匹配 */
   @Post(':id/correct-ocr')
+  @UsePermissions({ resource: 'paint:pending-image', action: 'correct' })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: '修正 OCR 识别结果并重新匹配' })
   async correctOcr(@Param('id') id: string, @Body() dto: CorrectPendingImageOcrDto, @Req() request: AuthenticatedRequest) {
@@ -279,6 +292,7 @@ export class PendingImageController {
 
   /** 重新 OCR */
   @Post(':id/retry-ocr')
+  @UsePermissions({ resource: 'paint:pending-image', action: 'retry' })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: '重新 OCR 识别' })
   async retryOcr(@Param('id') id: string, @Req() request: AuthenticatedRequest) {
@@ -291,6 +305,7 @@ export class PendingImageController {
 
   /** 删除图片池记录 */
   @Delete(':id')
+  @UsePermissions({ resource: 'paint:pending-image', action: 'delete' })
   @ApiOperation({ summary: '删除图片池记录' })
   async delete(@Param('id') id: string, @Req() request: AuthenticatedRequest) {
     const pending = await this.pendingImageService.findById(id);
