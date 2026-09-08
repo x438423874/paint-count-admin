@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Post, Request } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { FastifyRequest } from 'fastify';
 
 import { PasswordIdentifierDTO } from '@app/base-system/lib/bounded-contexts/iam/authentication/application/dto/password-identifier.dto';
@@ -25,6 +26,7 @@ export class AuthenticationController {
   constructor(private readonly authenticationService: AuthenticationService) {}
 
   @Public()
+  @Throttle({ default: { limit: 5, ttl: 60000 } }) // 每 IP 每分钟 5 次：防口令爆破
   @Post('login')
   @ApiOperation({
     summary: 'Password-based User Authentication',
@@ -58,6 +60,7 @@ export class AuthenticationController {
   }
 
   @Public()
+  @Throttle({ default: { limit: 30, ttl: 60000 } }) // 刷新令牌：正常使用远低于此阈值
   @Post('refreshToken')
   async refreshToken(
     @Body('refreshToken') refreshToken: string,

@@ -136,8 +136,8 @@ export class PendingImageService implements OnApplicationBootstrap {
    * 将图片直接关联到指定工单（创建工单页“直接创建工单”模式使用）
    * 图片作为该工单的 BEFORE 图，不经图片池、不触发 OCR 自动建单/匹配。
    */
-  async attachToOrder(params: { imageBuffer: Buffer; fileName: string; mimeType: string; shopId: string; orderId: string; operatorId?: string; operatorName?: string }) {
-    const { imageBuffer, fileName, mimeType, shopId, orderId, operatorId, operatorName } = params
+  async attachToOrder(params: { imageBuffer: Buffer; fileName: string; mimeType: string; shopId: string; orderId: string; operatorId?: string; operatorName?: string; thumbnailBuffer?: Buffer | null }) {
+    const { imageBuffer, fileName, mimeType, shopId, orderId, operatorId, operatorName, thumbnailBuffer } = params
 
     // 校验工单存在且属于该门店
     const order = await this.prisma.paintWorkOrder.findFirst({ where: { id: orderId, shopId } })
@@ -147,11 +147,16 @@ export class PendingImageService implements OnApplicationBootstrap {
 
     const key = `${Date.now()}-${crypto.randomUUID()}-${fileName}`
     const url = await this.imageService.saveImageFile(imageBuffer, key, shopId, undefined)
+    let thumbnailUrl: string | undefined
+    if (thumbnailBuffer) {
+      thumbnailUrl = await this.imageService.saveImageFile(thumbnailBuffer, `thumb_${key}`, shopId, undefined)
+    }
 
     const created = await this.prisma.paintWorkOrderImage.create({
       data: {
         orderId: order.id,
         url,
+        thumbnailUrl,
         imageType: PaintImageType.BEFORE,
         fileSize: imageBuffer.length,
         description: operatorName ? `上传人：${operatorName}` : undefined,

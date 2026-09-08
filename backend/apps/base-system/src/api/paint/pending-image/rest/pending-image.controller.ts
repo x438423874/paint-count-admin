@@ -93,6 +93,7 @@ export class PendingImageController {
     let buffer: Buffer | null = null;
     let filename = '';
     let mimetype = '';
+    let thumbnailBuffer: Buffer | null = null;
 
     for await (const part of parts) {
       if (part.type === 'file') {
@@ -100,6 +101,9 @@ export class PendingImageController {
           buffer = await part.toBuffer();
           filename = part.filename;
           mimetype = part.mimetype;
+        } else if (!thumbnailBuffer) {
+          // 第二个文件视为缩略图（列表展示用），与 upload/quick-create 端点约定一致
+          thumbnailBuffer = await part.toBuffer();
         } else {
           await part.toBuffer();
         }
@@ -126,6 +130,7 @@ export class PendingImageController {
       imageBuffer: buffer,
       fileName: filename,
       mimeType: mimetype,
+      thumbnailBuffer,
       operatorId: (request as any).user?.uid,
       operatorName: (request as any).user?.username,
     });

@@ -1067,11 +1067,35 @@ export class WorkOrderService {
     const dateStr = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}`;
     const seqKey = `paint:order_seq:${shopCode}:${dateStr}`;
 
-    // 使用 Redis INCR 原子递增，避免并发重复
-    let seq = await RedisUtility.instance.incr(seqKey);
+    // 使用 Redis INCR 原子递增，避免并发重复；Redis 不可用时回退数据库兜底，保证录单不中断
+    let seq: number;
+    try {
+      seq = await RedisUtility.instance.incr(seqKey);
 
-    // 新 key 时从数据库同步当天实际最大序号作为初始值
-    if (seq === 1) {
+      // 新 key 时从数据库同步当天实际最大序号作为初始值
+      if (seq === 1) {
+        const todayStart = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+        const todayEnd = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59, 999);
+        const todayOrders = await client.paintWorkOrder.findMany({
+          where: { shopId, orderDate: { gte: todayStart, lte: todayEnd } },
+          select: { orderNo: true },
+          orderBy: { orderNo: 'desc' },
+          take: 1,
+        });
+        const maxSeq = todayOrders.length > 0 && todayOrders[0].orderNo
+          ? parseOrderNoSeq(todayOrders[0].orderNo)
+          : 0;
+
+        // 设置初始值（NX 避免覆盖其他并发请求已设置的值），然后再次递增获取真实序号
+        await RedisUtility.instance.set(seqKey, maxSeq, 'EX', 2 * 24 * 60 * 60, 'NX');
+        seq = await RedisUtility.instance.incr(seqKey);
+      }
+
+      // 确保 key 有过期时间，避免长期残留
+      await RedisUtility.instance.expire(seqKey, 2 * 24 * 60 * 60);
+    } catch {
+      // Redis 故障兜底：查当日最大序号 +1 继续生成。降级窗口内无原子递增，极端并发下
+      // 同店同日可能重号，属可接受代价；Redis 恢复后自动回到 INCR 路径（seq===1 时会重同步）。
       const todayStart = new Date(date.getFullYear(), date.getMonth(), date.getDate());
       const todayEnd = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59, 999);
       const todayOrders = await client.paintWorkOrder.findMany({
@@ -1083,14 +1107,8 @@ export class WorkOrderService {
       const maxSeq = todayOrders.length > 0 && todayOrders[0].orderNo
         ? parseOrderNoSeq(todayOrders[0].orderNo)
         : 0;
-
-      // 设置初始值（NX 避免覆盖其他并发请求已设置的值），然后再次递增获取真实序号
-      await RedisUtility.instance.set(seqKey, maxSeq, 'EX', 2 * 24 * 60 * 60, 'NX');
-      seq = await RedisUtility.instance.incr(seqKey);
+      seq = maxSeq + 1;
     }
-
-    // 确保 key 有过期时间，避免长期残留
-    await RedisUtility.instance.expire(seqKey, 2 * 24 * 60 * 60);
 
     return formatOrderNo(shopCode, date, seq);
   }
