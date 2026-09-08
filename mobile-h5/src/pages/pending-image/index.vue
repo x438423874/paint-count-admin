@@ -256,7 +256,7 @@ async function onAfterRead(fileItem: any) {
     // 压缩 + 上传（429/5xx 自动重试，统一走 useImageUpload）
     const result = await uploadCompressed(
       f.file as File,
-      compressed => uploadPendingImage(compressed, selectedShopId.value, selectedMonth.value || undefined, 'POOL'),
+      (compressed, thumbnail) => uploadPendingImage(compressed, selectedShopId.value, selectedMonth.value || undefined, 'POOL', thumbnail),
     )
     if (result.ok) {
       uploadDone.value++

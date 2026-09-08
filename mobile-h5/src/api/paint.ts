@@ -154,10 +154,12 @@ export function ocrRecognizeImage(file: File, shopId?: string, ocrMode: OcrMode 
   })
 }
 
-export function uploadWorkOrderImage(orderId: string, file: File, imageType: string = 'BEFORE') {
+export function uploadWorkOrderImage(orderId: string, file: File, imageType: string = 'BEFORE', thumbnail?: File) {
   const formData = new FormData()
   formData.append('file', file)
   formData.append('imageType', imageType)
+  if (thumbnail)
+    formData.append('thumbnail', thumbnail)
   return request.post(`/paint/work-order/${orderId}/images`, formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
   })
@@ -313,13 +315,15 @@ export function getPendingImageCandidates(id: string) {
  * @param settlementMonth 结算月份（可选）
  * @param source 图片来源：POOL=图片池直接上传（用于匹配已有工单）；CREATE=新建工单时带图上传
  */
-export function uploadPendingImage(file: File, shopId: string, settlementMonth?: string, source: 'POOL' | 'CREATE' = 'POOL') {
+export function uploadPendingImage(file: File, shopId: string, settlementMonth?: string, source: 'POOL' | 'CREATE' = 'POOL', thumbnail?: File) {
   const formData = new FormData()
   formData.append('file', file)
   formData.append('shopId', shopId)
   if (settlementMonth)
     formData.append('settlementMonth', settlementMonth)
   formData.append('source', source)
+  if (thumbnail)
+    formData.append('thumbnail', thumbnail)
   return request.post<PaintPendingImage>('/paint/pending-image/upload', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
     timeout: 120000,
@@ -331,11 +335,13 @@ export function autoMatchPendingImage(id: string) {
 }
 
 /** 上传图片直接关联到指定工单（作为 BEFORE 图，不进图片池）。用于创建工单页“直接创建工单”模式。 */
-export function uploadPendingImageToOrder(file: File, shopId: string, orderId: string) {
+export function uploadPendingImageToOrder(file: File, shopId: string, orderId: string, thumbnail?: File) {
   const formData = new FormData()
   formData.append('file', file)
   formData.append('shopId', shopId)
   formData.append('orderId', orderId)
+  if (thumbnail)
+    formData.append('thumbnail', thumbnail)
   return request.post<PaintOrderImage>('/paint/pending-image/attach-to-order', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
     timeout: 120000,

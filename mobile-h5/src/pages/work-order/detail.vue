@@ -657,7 +657,7 @@ async function saveEdit() {
 
       // 3. 批量上传新图片（压缩 + 429/5xx 自动重试统一走 useImageUpload）
       for (const item of editPendingUploads.value) {
-        await uploadCompressed(item.file, compressed => uploadWorkOrderImage(orderId.value, compressed, 'BEFORE'))
+        await uploadCompressed(item.file, (compressed, thumbnail) => uploadWorkOrderImage(orderId.value, compressed, 'BEFORE', thumbnail))
       }
     }
 

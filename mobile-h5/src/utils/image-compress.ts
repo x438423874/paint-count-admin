@@ -74,3 +74,27 @@ function canvasToBlob(canvas: HTMLCanvasElement, quality: number): Promise<Blob>
     )
   })
 }
+
+/**
+ * 生成列表用缩略图（1280px / 0.8 质量，约 150-300KB）
+ * @param fallback 生成失败时的兜底图（通常传压缩后的主图，避免回退到数 MB 原图）
+ */
+export async function compressThumbnail(file: File, fallback: File): Promise<File> {
+  try {
+    let bitmap: ImageBitmap
+    try {
+      bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' })
+    } catch {
+      bitmap = await createImageBitmap(file)
+    }
+    const canvas = resizeCanvas(bitmap, 1280)
+    const blob = await canvasToBlob(canvas, 0.8)
+    bitmap.close()
+    canvas.width = 0
+    canvas.height = 0
+    if (!blob || blob.size === 0) return fallback
+    return new File([blob], file.name, { type: 'image/jpeg' })
+  } catch {
+    return fallback
+  }
+}

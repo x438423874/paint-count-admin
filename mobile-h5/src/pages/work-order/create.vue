@@ -70,12 +70,17 @@ const showUploadModePicker = ref(false)
 // 结算月份选择列统一走 recentMonthOptions（当月及往前共 13 个月）
 const monthColumns = computed(() => recentMonthOptions({ months: 13 }))
 
+// 本地时区格式化为 yyyy-MM-dd（避免 toISOString 的 UTC 截断出现前一天）
+function formatLocalDate(d: Date) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
 const dateColumns = computed(() => {
   const list = []
   const now = new Date()
   for (let i = 0; i < 30; i++) {
     const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i)
-    const value = d.toISOString().slice(0, 10)
+    const value = formatLocalDate(d)
     const weekDay = ['日', '一', '二', '三', '四', '五', '六'][d.getDay()]
     const label = `${value} 周${weekDay}`
     list.push({ text: label, value })
@@ -465,13 +470,13 @@ async function batchQuickCreate(files: File[]) {
   for (const file of files) {
     batchProgress.value.current++
 
-    const doUpload = (compressed: File) => {
+    const doUpload = (compressed: File, thumbnail: File) => {
       if (uploadMode.value === 'create') {
         // 直接创建工单：图片作为当前工单的 BEFORE 图，不经图片池
-        return uploadPendingImageToOrder(compressed, form.shopId, createdOrderId.value)
+        return uploadPendingImageToOrder(compressed, form.shopId, createdOrderId.value, thumbnail)
       }
       // OCR 创建工单：上传到图片池，后端 OCR 后自动按门店/结算月份 + OCR 资料补建工单
-      return uploadPendingImage(compressed, form.shopId, form.settlementMonth || undefined, 'CREATE')
+      return uploadPendingImage(compressed, form.shopId, form.settlementMonth || undefined, 'CREATE', thumbnail)
     }
     const result = await uploadCompressed(file, doUpload)
 
@@ -610,7 +615,7 @@ function handleOcrRecognize() {
 
 onMounted(() => {
   isManual.value = (route.query.mode as string) === 'manual'
-  const today = new Date().toISOString().slice(0, 10)
+  const today = formatLocalDate(new Date())
   // 工单日期默认不填，可通过OCR识别填充
   form.settlementMonth = today.slice(0, 7)
   loadSpecialPaints()

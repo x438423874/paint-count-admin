@@ -1,4 +1,4 @@
-import { compressImage } from '@/utils/image-compress'
+import { compressImage, compressThumbnail } from '@/utils/image-compress'
 
 /**
  * 图片上传共享流程：压缩 → 上传（429/5xx 自动重试）→ 失败信息映射
@@ -34,20 +34,23 @@ export function isRetryableUploadError(err: any): boolean {
 
 /**
  * 压缩并上传单个文件，429/5xx 自动重试。
+ * 同时生成 1280px 缩略图交由调用方随表单上传（后端存为 thumbnailUrl，
+ * 列表页优先展示缩略图，避免直接加载 1920px 原图的流量消耗）。
  * @param file 原始图片文件
- * @param doUpload 接收压缩后的 File 完成实际上传
+ * @param doUpload 接收压缩后的 File 与缩略图完成实际上传
  * @param options 重试配置（maxRetry 最大重试次数默认 2，retryDelay 重试间隔毫秒默认 2000）
  */
 export async function uploadCompressed(
   file: File,
-  doUpload: (compressed: File) => Promise<unknown>,
+  doUpload: (compressed: File, thumbnail: File) => Promise<unknown>,
   options: UploadRetryOptions = {},
 ): Promise<UploadAttemptResult> {
   const { maxRetry = 2, retryDelay = 2000 } = options
   const compressed = await compressImage(file)
+  const thumbnail = await compressThumbnail(file, compressed)
   for (let attempt = 0; ; attempt++) {
     try {
-      await doUpload(compressed)
+      await doUpload(compressed, thumbnail)
       return { ok: true, file: compressed }
     }
     catch (err) {
