@@ -22,6 +22,7 @@ export function fetchWorkOrderPage(params: {
   size?: number;
   shopId?: string;
   plateNumber?: string;
+  orderNo?: string;
   customerName?: string;
   settlementMonth?: string;
   status?: string;
@@ -136,6 +137,15 @@ export function removeWorkOrderImage(imageId: string) {
   return request({
     url: `/paint/work-order/images/${imageId}`,
     method: 'delete'
+  });
+}
+
+/** 批量审核工单（逐单校验，失败不影响其余） */
+export function batchAuditWorkOrders(ids: string[]) {
+  return request<{ success: number; failed: number; errors: { id: string; message: string }[] }>({
+    url: '/paint/work-order/batch-audit',
+    method: 'post',
+    data: { ids }
   });
 }
 

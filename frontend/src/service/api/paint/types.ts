@@ -485,14 +485,29 @@ export interface SealOverviewItem {
   orderCount: number;
   totalPaintCount: number;
   reworkCount: number;
+  /** 待审核工单数 */
+  pendingCount: number;
+  /** 待审核幅数合计 */
+  pendingPaintCount: number;
+  /** 当月是否有工单数据（false = 漏导入风险提示） */
+  hasData: boolean;
   isSealed: boolean;
   sealedAt: string | null;
   sealedBy: string | null;
 }
 
+export interface SealOverviewSummary {
+  shopsWithData: number;
+  shopsWithoutData: number;
+  pendingOrderTotal: number;
+  pendingPaintTotal: number;
+  sealedCount: number;
+}
+
 export interface SealOverviewResult {
   list: SealOverviewItem[];
   total: number;
+  summary?: SealOverviewSummary;
 }
 
 export interface PaintVehicle {

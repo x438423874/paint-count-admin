@@ -9,14 +9,35 @@ export interface SealOverviewItem {
   orderCount: number;
   totalPaintCount: number;
   reworkCount: number;
+  /** 待审核工单数（封单防线上的重要指标） */
+  pendingCount: number;
+  /** 待审核幅数合计 */
+  pendingPaintCount: number;
+  /** 当月是否有工单数据（false = 漏导入风险提示） */
+  hasData: boolean;
   isSealed: boolean;
   sealedAt: Date | null;
   sealedBy: string | null;
 }
 
+export interface SealOverviewSummary {
+  /** 当月有数据的门店数 */
+  shopsWithData: number;
+  /** 当月无数据的门店数（漏导入风险） */
+  shopsWithoutData: number;
+  /** 待审核工单合计 */
+  pendingOrderTotal: number;
+  /** 待审核幅数合计 */
+  pendingPaintTotal: number;
+  /** 已封单门店数 */
+  sealedCount: number;
+}
+
 export interface SealOverviewResult {
   list: SealOverviewItem[];
   total: number;
+  /** 仅按月份查询时提供，用于封单页「结算就绪度」横幅 */
+  summary?: SealOverviewSummary;
 }
 
 @Injectable()
@@ -24,7 +45,7 @@ export class SealService {
   constructor(private readonly prisma: PrismaService) {}
 
   /** 封单：锁定门店+月份，之后不允许修改/删除该月工单 */
-  async seal(shopId: string, month: string, sealedBy?: string) {
+  async seal(shopId: string, month: string, sealedBy?: string, options?: { force?: boolean }) {
     await this.assertShopExists(shopId);
 
     const existing = await this.prisma.paintSettlementMonth.findUnique({
@@ -33,6 +54,17 @@ export class SealService {
 
     if (existing?.isSealed) {
       throw new BadRequestException(`${month} 已封单，请勿重复操作`);
+    }
+
+    // 防线：尚有未审核工单（草稿/待审核）时默认拒绝封单——未审核单的幅数会计入月度结算金额，
+    // 封单后审核被锁死，等于未经人审的数据直接进入结算。确认要带未审核封单需显式 force。
+    const unauditedCount = await this.prisma.paintWorkOrder.count({
+      where: { shopId, settlementMonth: month, status: { in: ['DRAFT', 'PENDING'] } },
+    });
+    if (unauditedCount > 0 && !options?.force) {
+      throw new BadRequestException(
+        `该门店 ${month} 尚有 ${unauditedCount} 单未审核（草稿/待审核），封单后将无法再审核。请先完成审核；确认要强制封单请使用强制封单。`,
+      );
     }
 
     // 查询该月工单统计
@@ -191,6 +223,14 @@ export class SealService {
       _count: { _all: true },
     });
 
+    const pendingGroups = await this.prisma.paintWorkOrder.groupBy({
+      by: ['shopId', 'settlementMonth'],
+      // 未审核 = 草稿 + 待审核（两者幅数均计入月度结算）
+      where: { ...baseWhere, status: { in: ['DRAFT', 'PENDING'] } },
+      _count: { _all: true },
+      _sum: { totalPaintCount: true },
+    });
+
     const sealWhere: any = {};
     if (shopId) sealWhere.shopId = shopId;
     if (month) sealWhere.month = month;
@@ -198,6 +238,14 @@ export class SealService {
 
     const reworkMap = new Map<string, number>();
     reworkGroups.forEach(g => reworkMap.set(`${g.shopId}|${g.settlementMonth}`, g._count._all));
+
+    const pendingCountMap = new Map<string, number>();
+    const pendingPaintMap = new Map<string, number>();
+    pendingGroups.forEach(g => {
+      const key = `${g.shopId}|${g.settlementMonth}`;
+      pendingCountMap.set(key, g._count._all);
+      pendingPaintMap.set(key, g._sum.totalPaintCount?.toNumber() ?? 0);
+    });
 
     const sealMap = new Map<string, (typeof sealRecords)[number]>();
     sealRecords.forEach(r => sealMap.set(`${r.shopId}|${r.month}`, r));
@@ -209,7 +257,7 @@ export class SealService {
     });
     const shopNameMap = new Map(shops.map(s => [s.id, s.name]));
 
-    const all = groups.map(g => {
+    const all: SealOverviewItem[] = groups.map(g => {
       const m = g.settlementMonth ?? '';
       const key = `${g.shopId}|${m}`;
       const seal = sealMap.get(key);
@@ -220,20 +268,67 @@ export class SealService {
         orderCount: g._count._all,
         totalPaintCount: g._sum.totalPaintCount?.toNumber() ?? 0,
         reworkCount: reworkMap.get(key) || 0,
+        pendingCount: pendingCountMap.get(key) || 0,
+        pendingPaintCount: pendingPaintMap.get(key) || 0,
+        hasData: true,
         isSealed: !!seal?.isSealed,
         sealedAt: seal?.sealedAt || null,
         sealedBy: seal?.sealedBy || null,
       };
     });
 
-    // 按月降序、门店升序排序
-    all.sort((a, b) => b.month.localeCompare(a.month) || a.shopId.localeCompare(b.shopId));
+    // 漏导入防线：按月份查询时，为「启用但当月无任何工单」的门店补零值行，
+    // 避免漏导入的门店在封单页隐身导致整月漏算
+    if (month) {
+      const covered = new Set(all.map(r => `${r.shopId}|${r.month}`));
+      const enabledShops = await this.prisma.paintShop.findMany({
+        where: { status: 'ENABLED', ...(shopId ? { id: shopId } : {}) },
+        select: { id: true, name: true },
+      });
+      for (const shop of enabledShops) {
+        const key = `${shop.id}|${month}`;
+        if (covered.has(key)) continue;
+        covered.add(key);
+        const seal = sealMap.get(key);
+        all.push({
+          shopId: shop.id,
+          shopName: shop.name,
+          month,
+          orderCount: 0,
+          totalPaintCount: 0,
+          reworkCount: 0,
+          pendingCount: 0,
+          pendingPaintCount: 0,
+          hasData: false,
+          isSealed: !!seal?.isSealed,
+          sealedAt: seal?.sealedAt || null,
+          sealedBy: seal?.sealedBy || null,
+        });
+      }
+    }
+
+    // 按月降序、无数据行置前提醒、门店升序排序
+    all.sort((a, b) =>
+      b.month.localeCompare(a.month) ||
+      Number(a.hasData) - Number(b.hasData) ||
+      a.shopId.localeCompare(b.shopId),
+    );
 
     const total = all.length;
     const start = (current - 1) * size;
     const list = all.slice(start, start + size);
 
-    return { list, total };
+    const summary: SealOverviewSummary | undefined = month
+      ? {
+          shopsWithData: all.filter(r => r.hasData).length,
+          shopsWithoutData: all.filter(r => !r.hasData && !r.isSealed).length,
+          pendingOrderTotal: all.filter(r => !r.isSealed).reduce((s, r) => s + r.pendingCount, 0),
+          pendingPaintTotal: all.filter(r => !r.isSealed).reduce((s, r) => s + r.pendingPaintCount, 0),
+          sealedCount: all.filter(r => r.isSealed).length,
+        }
+      : undefined;
+
+    return { list, total, summary };
   }
 
   /** 校验门店+月份是否已封单，若封单则抛出异常 */

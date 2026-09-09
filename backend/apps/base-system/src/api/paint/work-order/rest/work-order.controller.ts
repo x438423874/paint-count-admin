@@ -394,6 +394,20 @@ export class WorkOrderController {
     return ApiRes.success(data);
   }
 
+  @Post('batch-audit')
+  @UsePermissions({ resource: 'paint:work-order', action: 'audit' })
+  @ApiOperation({ summary: '批量审核工单（逐单校验，失败不影响其余）' })
+  async batchAudit(@Body() body: { ids: string[] }, @Request() req: AuthenticatedRequest) {
+    if (!body.ids || !Array.isArray(body.ids) || body.ids.length === 0) {
+      throw new BadRequestException('请选择要审核的工单');
+    }
+    for (const id of body.ids) {
+      await this.userShopService.assertWorkOrderAccess(req.user.uid, id);
+    }
+    const data = await this.auditService.batchAudit(body.ids, req.user?.username);
+    return ApiRes.success(data);
+  }
+
   @Post('unaudit/:id')
   @UsePermissions({ resource: 'paint:work-order', action: 'unaudit' })
   @ApiOperation({ summary: '取消审核' })

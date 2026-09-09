@@ -709,6 +709,7 @@ export class WorkOrderService {
         ],
       }),
       ...(dto.customerName && { customerName: { contains: dto.customerName } }),
+      ...(dto.orderNo && { orderNo: { contains: dto.orderNo } }),
       ...(dto.settlementMonth && { settlementMonth: dto.settlementMonth }),
       ...statusFilter,
       ...(dto.isRework !== undefined && { isRework: dto.isRework }),

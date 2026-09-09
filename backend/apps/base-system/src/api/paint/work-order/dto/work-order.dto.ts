@@ -247,6 +247,16 @@ export class PageWorkOrderDto {
   @IsString()
   plateNumber?: string;
 
+  @ApiPropertyOptional({ description: '工单号（模糊匹配）' })
+  @IsOptional()
+  @IsString()
+  orderNo?: string;
+
+  @ApiPropertyOptional({ description: '关键词（车牌/工单号模糊匹配，移动端搜索框用）' })
+  @IsOptional()
+  @IsString()
+  keyword?: string;
+
   @ApiPropertyOptional({ description: '客户名称' })
   @IsOptional()
   @IsString()

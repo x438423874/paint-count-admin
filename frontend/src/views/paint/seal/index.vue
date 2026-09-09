@@ -23,6 +23,7 @@ import {
   type PaintOrderStatus,
   type PaintWorkOrder,
   type SealOverviewItem,
+  type SealOverviewSummary,
   fetchSealOverview,
   fetchWorkOrderPage,
   sealSettlementMonth,
@@ -56,6 +57,7 @@ function formatMonth(ts: number | null) {
 
 const loading = ref(false);
 const data = ref<SealOverviewItem[]>([]);
+const summary = ref<SealOverviewSummary | null>(null);
 const pagination = reactive({
   page: 1,
   pageSize: 20,
@@ -76,6 +78,7 @@ async function loadData() {
     if (!error && res) {
       data.value = res.list;
       pagination.itemCount = res.total;
+      summary.value = res.summary || null;
     }
   } finally {
     loading.value = false;
@@ -103,9 +106,28 @@ function handleReset() {
 }
 
 function confirmSeal(row: SealOverviewItem) {
+  if (!row.hasData) {
+    message.warning(`${row.shopName} ${row.month} 当月无工单数据，无需封单`);
+    return;
+  }
   const stats = `\n\n该月共 ${row.orderCount} 条工单（${Number(row.totalPaintCount).toFixed(1)} 幅）${
     row.reworkCount > 0 ? `，另有返工 ${row.reworkCount} 条` : ''
   }`;
+
+  // 防线：尚有待审核工单时，二次确认后走强制封单（后端仍会校验 force 标记）
+  if (row.pendingCount > 0) {
+    dialog.warning({
+      title: '存在待审核工单',
+      content: `「${row.shopName} - ${row.month}」尚有 ${row.pendingCount} 单（${Number(
+        row.pendingPaintCount
+      ).toFixed(1)} 幅）未审核。未审核单的幅数也会计入该月结算金额，封单后将无法再审核。确认要强制封单吗？`,
+      positiveText: '强制封单',
+      negativeText: '取消',
+      onPositiveClick: () => doSeal(row, true)
+    });
+    return;
+  }
+
   dialog.warning({
     title: '确认封单',
     content: `确定封单「${row.shopName} - ${row.month}」？封单后该月工单将不允许修改、删除和审核操作。${stats}`,
@@ -115,14 +137,64 @@ function confirmSeal(row: SealOverviewItem) {
   });
 }
 
-async function doSeal(row: SealOverviewItem) {
+async function doSeal(row: SealOverviewItem, force = false) {
   try {
-    await sealSettlementMonth(row.shopId, row.month);
+    await sealSettlementMonth(row.shopId, row.month, force);
     message.success('封单成功，该月工单已锁定');
     loadData();
   } catch (e: any) {
     message.error(e?.message || '封单失败');
   }
+}
+
+/** 一键封单：按当前月份封单所有「有数据且未封单」的门店；有 待审核/无数据 的门店自动跳过并提示 */
+const batchSealing = ref(false);
+async function handleBatchSeal() {
+  const month = formatMonth(filters.month);
+  if (!month) {
+    message.warning('请先选择月份，再一键封单');
+    return;
+  }
+  const targets = data.value.filter(r => !r.isSealed);
+  if (targets.length === 0) {
+    message.success('该月所有门店均已封单');
+    return;
+  }
+  const skipped = targets.filter(r => !r.hasData || r.pendingCount > 0);
+  const willSeal = targets.filter(r => r.hasData && r.pendingCount === 0);
+
+  dialog.warning({
+    title: '一键封单',
+    content: `将封单 ${willSeal.length} 家门店${
+      skipped.length > 0
+        ? `；跳过 ${skipped.length} 家（${skipped
+            .map(r => `${r.shopName}${r.pendingCount > 0 ? `：${r.pendingCount} 单待审核` : '：无数据'}`)
+            .join('、')}）`
+        : ''
+    }。确认继续？`,
+    positiveText: `封单 ${willSeal.length} 家`,
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      batchSealing.value = true;
+      let ok = 0;
+      const failed: string[] = [];
+      for (const row of willSeal) {
+        try {
+          await sealSettlementMonth(row.shopId, row.month);
+          ok += 1;
+        } catch (e: any) {
+          failed.push(`${row.shopName}：${e?.message || '失败'}`);
+        }
+      }
+      batchSealing.value = false;
+      if (failed.length > 0) {
+        message.error(`封单完成 ${ok} 家，失败 ${failed.length} 家：${failed.join('；')}`);
+      } else {
+        message.success(`已封单 ${ok} 家门店`);
+      }
+      loadData();
+    }
+  });
 }
 
 async function doUnseal(row: SealOverviewItem) {
@@ -180,6 +252,19 @@ const columns: DataTableColumns<SealOverviewItem> = [
   { title: '工单数', key: 'orderCount', width: 90 },
   { title: '返工数', key: 'reworkCount', width: 90 },
   {
+    title: '待审核',
+    key: 'pendingCount',
+    width: 120,
+    render: row =>
+      row.pendingCount > 0
+        ? h(
+            NTag,
+            { type: 'warning', size: 'small' },
+            { default: () => `${row.pendingCount} 单 / ${Number(row.pendingPaintCount).toFixed(1)} 幅` }
+          )
+        : h(NText, { depth: 3 }, { default: () => '0' })
+  },
+  {
     title: '封单状态',
     key: 'isSealed',
     width: 170,
@@ -212,7 +297,11 @@ const columns: DataTableColumns<SealOverviewItem> = [
         { size: 4 },
         {
           default: () => [
-            h(NButton, { size: 'small', onClick: () => openDetail(row) }, { default: () => '查看明细' }),
+            h(
+              NButton,
+              { size: 'small', onClick: () => openDetail(row), disabled: !row.hasData },
+              { default: () => '查看明细' }
+            ),
             row.isSealed
               ? h(
                   NPopconfirm,
@@ -257,6 +346,16 @@ onMounted(() => {
   <div>
     <NCard title="封单管理" :bordered="false">
       <NSpace vertical :size="16">
+        <NAlert v-if="summary" :type="summary.shopsWithoutData > 0 || summary.pendingOrderTotal > 0 ? 'warning' : 'success'" :bordered="false">
+          结算就绪度：本月有数据的门店 {{ summary.shopsWithData }} 家
+          <template v-if="summary.shopsWithoutData > 0">、无数据门店 {{ summary.shopsWithoutData }} 家（注意漏导入）</template>
+          、待审核 {{ summary.pendingOrderTotal }} 单 / {{ Number(summary.pendingPaintTotal).toFixed(1) }} 幅
+          、已封单 {{ summary.sealedCount }} 家。待审核单的幅数也会计入该月结算金额，建议审核完毕后再封单。
+        </NAlert>
+        <NAlert v-else type="default" :bordered="false">
+          提示：选择「月份」可查看该月全部启用门店的结算就绪度（含无数据门店提醒），并可一键封单。
+        </NAlert>
+
         <NForm inline :model="filters" @submit.prevent="handleSearch">
           <NFormItem label="门店">
             <NSelect
@@ -280,6 +379,14 @@ onMounted(() => {
             <NSpace>
               <NButton type="primary" @click="handleSearch">查询</NButton>
               <NButton @click="handleReset">重置</NButton>
+              <NPopconfirm @positive-click="handleBatchSeal">
+                <template #trigger>
+                  <NButton type="error" ghost :loading="batchSealing" :disabled="!filters.month">
+                    一键封单（按所选月份）
+                  </NButton>
+                </template>
+                将按所选月份封单所有「有数据且无待审核」的门店，有 待审核/无数据 的门店会跳过并列出。确认继续？
+              </NPopconfirm>
             </NSpace>
           </NFormItem>
         </NForm>
@@ -292,7 +399,8 @@ onMounted(() => {
           :remote="true"
           :bordered="true"
           :single-line="false"
-          :scroll-x="900"
+          :scroll-x="1000"
+          :row-class-name="row => (row.hasData ? '' : 'seal-row-nodata')"
           @update:page="handlePageChange"
           @update:page-size="handlePageSizeChange"
         />
@@ -318,3 +426,11 @@ onMounted(() => {
     </NDrawer>
   </div>
 </template>
+
+
+<style scoped>
+:deep(.seal-row-nodata td) {
+  color: #b0b0b0;
+  background-color: #fafafa;
+}
+</style>

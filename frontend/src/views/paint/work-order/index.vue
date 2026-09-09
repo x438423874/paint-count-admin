@@ -30,6 +30,7 @@ import {
 import { PAINT_ORDER_STATUS_LABEL, getPaintOrderStatusTagType } from '@/constants/paint';
 import {
   auditWorkOrder,
+  batchAuditWorkOrders,
   batchSettleWorkOrders,
   batchUnsettleWorkOrders,
   deleteWorkOrder,
@@ -84,6 +85,12 @@ onMounted(() => {
   const id = route.query.id as string;
   if (id) {
     viewDetail(id);
+  }
+  // 对账页「去创建」等入口通过 orderNo 跳转：落到列表后自动按工单号过滤
+  const orderNo = route.query.orderNo as string;
+  if (orderNo) {
+    searchParams.orderNo = orderNo;
+    getData();
   }
 });
 
@@ -510,6 +517,7 @@ const {
     size: 10,
     shopId: undefined as string | undefined,
     plateNumber: undefined as string | undefined,
+    orderNo: undefined as string | undefined,
     customerName: undefined as string | undefined,
     status: undefined as string | undefined,
     settlementMonth: undefined as string | undefined,
@@ -923,6 +931,37 @@ async function handleUnvoid(orderId: string) {
   await getData();
 }
 
+// 批量审核相关
+const batchAuditLoading = ref(false);
+
+// 选中的工单中可审核的（待审核状态）
+const auditableIds = computed(() => {
+  return data.value
+    .filter((o: any) => checkedRowKeys.value.includes(o.id) && o.status === 'PENDING')
+    .map((o: any) => o.id);
+});
+
+async function handleBatchAudit() {
+  const ids = auditableIds.value;
+  if (ids.length === 0) {
+    window.$message?.warning('选中的工单中没有可审核的（需为待审核状态）');
+    return;
+  }
+  batchAuditLoading.value = true;
+  const { data, error } = await batchAuditWorkOrders(ids);
+  batchAuditLoading.value = false;
+  if (error) return;
+  if (data) {
+    if (data.failed === 0) {
+      window.$message?.success(`批量审核成功：${data.success} 条`);
+    } else {
+      window.$message?.warning(`审核完成：成功 ${data.success} 条，失败 ${data.failed} 条`);
+    }
+  }
+  checkedRowKeys.value = [];
+  await getData();
+}
+
 // 批量结算相关
 const batchSettleLoading = ref(false);
 const batchUnsettleLoading = ref(false);
@@ -1165,6 +1204,17 @@ async function handleBatchQuickUpload({ file }: { file: File }) {
           />
         </NSpace>
         <NSpace align="center" :size="6">
+          <NText depth="3" style="white-space: nowrap">工单号</NText>
+          <NInput
+            :value="searchParams.orderNo || ''"
+            placeholder="搜索工单号"
+            clearable
+            style="width: 150px"
+            @update:value="(val: string) => { searchParams.orderNo = val || undefined; }"
+            @keyup.enter="getDataByPage()"
+          />
+        </NSpace>
+        <NSpace align="center" :size="6">
           <NText depth="3" style="white-space: nowrap">客户</NText>
           <NInput
             :value="searchParams.customerName || ''"
@@ -1203,6 +1253,12 @@ async function handleBatchQuickUpload({ file }: { file: File }) {
 
         <NButton v-if="allowBatchOcr" type="info" @click="openBatchOcrFill">一键OCR填充</NButton>
         <NButton type="success" :disabled="!selectedShopId" @click="batchOcrVisible = true">批量OCR录入</NButton>
+        <NPopconfirm v-if="allowAudit && auditableIds.length > 0" @positive-click="handleBatchAudit">
+          <template #trigger>
+            <NButton type="primary" ghost :loading="batchAuditLoading">批量审核（{{ auditableIds.length }} 条）</NButton>
+          </template>
+          确认审核选中的 {{ auditableIds.length }} 条待审核工单？
+        </NPopconfirm>
         <NPopconfirm v-if="allowSettle && settleableIds.length > 0" @positive-click="handleBatchSettle">
           <template #trigger>
             <NButton type="info" :loading="batchSettleLoading">批量结算（{{ settleableIds.length }} 条）</NButton>

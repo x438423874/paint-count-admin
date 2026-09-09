@@ -3,11 +3,11 @@ import type { SealOverviewResult, SettlementMonthRecord } from './types';
 
 // ==================== 封单管理 API ====================
 
-export function sealSettlementMonth(shopId: string, month: string) {
+export function sealSettlementMonth(shopId: string, month: string, force = false) {
   return request<SettlementMonthRecord>({
     url: '/paint/seal/seal',
     method: 'post',
-    data: { shopId, month }
+    data: { shopId, month, force }
   });
 }
 

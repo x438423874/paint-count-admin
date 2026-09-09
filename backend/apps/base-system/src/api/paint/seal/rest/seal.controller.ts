@@ -26,12 +26,12 @@ export class SealController {
   @Post('seal')
   @UsePermissions({ resource: 'paint:seal', action: 'seal' })
   @ApiOperation({ summary: '封单：锁定门店+月份' })
-  async seal(@Body() body: { shopId: string; month: string }, @Request() _req: AuthenticatedRequest) {
+  async seal(@Body() body: { shopId: string; month: string; force?: boolean }, @Request() _req: AuthenticatedRequest) {
     if (!body.shopId || !body.month) {
       throw new BadRequestException('请提供门店ID和月份');
     }
     await this.userShopService.assertShopAccess(_req.user.uid, body.shopId);
-    const data = await this.sealService.seal(body.shopId, body.month, _req.user?.uid);
+    const data = await this.sealService.seal(body.shopId, body.month, _req.user?.uid, { force: body.force === true });
     return ApiRes.success(data);
   }
 

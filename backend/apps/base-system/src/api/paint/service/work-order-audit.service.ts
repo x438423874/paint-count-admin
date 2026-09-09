@@ -35,6 +35,24 @@ export class WorkOrderAuditService {
     });
   }
 
+  /** 批量审核：逐单复用单个审核逻辑（含封单/状态校验），失败不影响其余工单 */
+  async batchAudit(
+    ids: string[],
+    auditedBy?: string,
+  ): Promise<{ success: number; failed: number; errors: { id: string; message: string }[] }> {
+    const errors: { id: string; message: string }[] = [];
+    let success = 0;
+    for (const id of ids) {
+      try {
+        await this.audit({ id, auditedBy });
+        success += 1;
+      } catch (e) {
+        errors.push({ id, message: e instanceof Error ? e.message : String(e) });
+      }
+    }
+    return { success, failed: errors.length, errors };
+  }
+
   /** 取消审核 */
   async unaudit(id: string) {
     const existing = await this.prisma.paintWorkOrder.findUnique({
