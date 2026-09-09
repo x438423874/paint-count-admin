@@ -382,6 +382,13 @@ export class PendingImageService implements OnApplicationBootstrap {
     const orderDate = pending.ocrDate ? new Date(pending.ocrDate) : null;
     const plate = (pending.ocrPlateNumber || '').trim();
 
+    // 车牌精确命中系统车辆时，工单的不变属性（VIN/车型/品牌/客户名）优先采用系统沉淀值
+    const existingVehicle = plate ? await this.vehicleService.findExactByPlate(plate) : null;
+    const orderVin = existingVehicle?.vin || pending.ocrVin || '';
+    const orderCarModel = existingVehicle?.carModel || pending.ocrCarModel || '';
+    const orderBrand = existingVehicle?.brand || pending.ocrBrand || '';
+    const orderCustomerName = existingVehicle?.customerName || pending.ocrCustomerName || '';
+
     const order = await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       // 沉淀车辆
       let vehicleId: string | undefined;
@@ -398,6 +405,10 @@ export class PendingImageService implements OnApplicationBootstrap {
           },
           pending.shopId,
           orderDate || undefined,
+          {
+            // 系统已有该车辆时不让 OCR 值改写主档属性（工单上的字段已优先采用系统值）
+            preserveAttributesIfExisting: !!existingVehicle,
+          },
         );
       }
 
@@ -407,10 +418,10 @@ export class PendingImageService implements OnApplicationBootstrap {
           shopId: pending.shopId,
           orderDate,
           plateNumber: plate || '',
-          carModel: pending.ocrCarModel || '',
-          vin: pending.ocrVin || '',
-          brand: pending.ocrBrand || '',
-          customerName: pending.ocrCustomerName || '',
+          carModel: orderCarModel,
+          vin: orderVin,
+          brand: orderBrand,
+          customerName: orderCustomerName,
           phone: pending.ocrPhone || '',
           vehicleId: vehicleId || null,
           totalPaintCount: 0, // 无幅数

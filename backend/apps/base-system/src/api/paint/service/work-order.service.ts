@@ -204,6 +204,17 @@ export class WorkOrderService {
     }
     const totalPaintCount = calculatedItems.reduce((sum, item) => sum + item.paintCount, 0);
 
+    // 车牌精确命中系统车辆时，工单的不变属性（VIN/车型/品牌/客户名）优先采用系统沉淀值——
+    // OCR 对这些字段的识别质量远低于多次工单沉淀 + 人工修正后的主档。
+    // 电话是易变联系方式，保留纸质单上的 OCR 识别值。
+    const existingVehicle = plateNumber?.trim()
+      ? await this.vehicleService.findExactByPlate(plateNumber)
+      : null;
+    const orderVin = existingVehicle?.vin || vin || '';
+    const orderCarModel = existingVehicle?.carModel || carModel || '';
+    const orderBrand = existingVehicle?.brand || brand || '';
+    const orderCustomerName = existingVehicle?.customerName || customerName || '';
+
     // 在事务内创建工单（批量上传时不自动生成工单号，等OCR填充）
     const order = await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       // 按车牌号 upsert 车辆主数据（自动沉淀，全局唯一）
@@ -216,7 +227,10 @@ export class WorkOrderService {
           brand: brand || undefined,
           customerName: customerName || undefined,
           phone: phone || undefined,
-        }, shopId, finalOrderDate || undefined);
+        }, shopId, finalOrderDate || undefined, {
+          // 系统已有该车辆时不让 OCR 值改写主档属性（工单上的字段已优先采用系统值）
+          preserveAttributesIfExisting: !!existingVehicle,
+        });
       }
 
       const created = await tx.paintWorkOrder.create({
@@ -225,10 +239,10 @@ export class WorkOrderService {
           shopId,
           orderDate: finalOrderDate,
           plateNumber: normalizePlateNumber(plateNumber).slice(0, 50),
-          carModel: carModel || '',
-          vin: vin || '',
-          brand: brand || '',
-          customerName: customerName || '',
+          carModel: orderCarModel,
+          vin: orderVin,
+          brand: orderBrand,
+          customerName: orderCustomerName,
           phone: phone || '',
           vehicleId: vehicleId || null,
           totalPaintCount,

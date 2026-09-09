@@ -13,6 +13,12 @@ export type VehicleFieldKey = 'vin' | 'carModel' | 'brand' | 'customerName' | 'p
  */
 export interface UpsertVehicleOptions {
   /**
+   * 为 true 时，若车牌已命中现有车辆，则完全不动其属性字段（VIN/车型/品牌/客户名/电话/联系人），
+   * 只更新 lastOrderAt/lastShopId——OCR 自动建单应传 false 值语义（preserveAttributes = 已有车辆），
+   * 避免「更长优先」启发式被 OCR 误读污染主档。新建车辆不受影响，属性照常填充。
+   */
+  preserveAttributesIfExisting?: boolean;
+  /**
    * 需要强制覆盖的字段。
    *
    * 列在这里的字段，其值来自**用户的显式编辑**（如工单编辑/OCR 修正时提交的车型），
@@ -278,6 +284,13 @@ export class PaintVehicleService {
    * - 更新 lastOrderAt / lastShopId 统计字段
    * - options.overwriteFields 中列出的字段以本次提交为准强制覆盖
    */
+  /** 按车牌精确查询车辆主数据（normalize 后完全匹配）。供 OCR 建单时优先采用系统沉淀信息。 */
+  async findExactByPlate(plateNumber: string): Promise<PaintVehicle | null> {
+    const plate = PaintVehicleService.normalizePlate(plateNumber);
+    if (!plate) return null;
+    return this.prisma.paintVehicle.findUnique({ where: { plateNumber: plate } });
+  }
+
   async upsertByPlateWithTx(
     tx: Prisma.TransactionClient,
     dto: UpsertVehicleByPlateDto,
@@ -335,13 +348,17 @@ export class PaintVehicleService {
       lastOrderAt: orderDate || new Date(),
       lastShopId: shopId,
     };
+    // 车牌已命中现有车辆且调用方要求保留属性（OCR 自动建单）：只更新统计字段
+    const preserveAttributes = existing != null && options?.preserveAttributesIfExisting === true;
     if (existing) {
-      const v = resolveField('carModel', existing.carModel, dto.carModel, smartUpdate); if (v) updateData.carModel = v;
-      const b = resolveField('brand', existing.brand, dto.brand, smartUpdate); if (b) updateData.brand = b;
-      const vi = resolveField('vin', existing.vin, dto.vin, fillIfEmpty); if (vi) updateData.vin = vi;
-      const cn = resolveField('customerName', existing.customerName, dto.customerName, fillIfEmpty); if (cn) updateData.customerName = cn;
-      const ph = resolveField('phone', existing.phone, dto.phone, fillIfEmpty); if (ph) updateData.phone = ph;
-      const cp = resolveField('contactPerson', existing.contactPerson, dto.contactPerson, fillIfEmpty); if (cp) updateData.contactPerson = cp;
+      if (!preserveAttributes) {
+        const v = resolveField('carModel', existing.carModel, dto.carModel, smartUpdate); if (v) updateData.carModel = v;
+        const b = resolveField('brand', existing.brand, dto.brand, smartUpdate); if (b) updateData.brand = b;
+        const vi = resolveField('vin', existing.vin, dto.vin, fillIfEmpty); if (vi) updateData.vin = vi;
+        const cn = resolveField('customerName', existing.customerName, dto.customerName, fillIfEmpty); if (cn) updateData.customerName = cn;
+        const ph = resolveField('phone', existing.phone, dto.phone, fillIfEmpty); if (ph) updateData.phone = ph;
+        const cp = resolveField('contactPerson', existing.contactPerson, dto.contactPerson, fillIfEmpty); if (cp) updateData.contactPerson = cp;
+      }
     } else {
       // 新建车辆：所有非空字段都写入
       if (dto.carModel?.trim()) updateData.carModel = dto.carModel.trim();
