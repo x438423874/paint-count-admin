@@ -362,6 +362,22 @@ export class PendingImageService implements OnApplicationBootstrap {
       throw new BadRequestException('该图片已归类，无需补建');
     }
 
+    // 防重复建单：工单可能已通过 Excel 导入存在（先录台账后补图片的场景）。
+    // 重复补建会造成同工单号两张单、幅数重复计入结算。
+    const ocrOrderNo = (pending.ocrOrderNo || '').trim();
+    if (ocrOrderNo) {
+      const duplicated = await this.prisma.paintWorkOrder.findFirst({
+        where: { shopId: pending.shopId, orderNo: ocrOrderNo, status: { not: 'VOID' } },
+        select: { id: true, orderNo: true, status: true, settlementMonth: true },
+      });
+      if (duplicated) {
+        throw new BadRequestException(
+          `系统已存在工单号 ${duplicated.orderNo} 的工单（状态：${duplicated.status}，结算月：${duplicated.settlementMonth ?? '未结算'}），` +
+            '该单可能为导入数据。请使用「人工指派」将图片归类到该工单，无需补建。',
+        );
+      }
+    }
+
     const settlementMonth = settlementMonthOverride || pending.settlementMonth || undefined;
     const orderDate = pending.ocrDate ? new Date(pending.ocrDate) : null;
     const plate = (pending.ocrPlateNumber || '').trim();
