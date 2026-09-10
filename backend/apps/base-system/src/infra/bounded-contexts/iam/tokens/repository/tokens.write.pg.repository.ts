@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import { Injectable } from '@nestjs/common';
 
 import { TokenStatus } from '@app/base-system/lib/bounded-contexts/iam/tokens/constants';
@@ -6,19 +8,32 @@ import { TokensWriteRepoPort } from '@app/base-system/lib/bounded-contexts/iam/t
 
 import { PrismaService } from '@lib/shared/prisma/prisma.service';
 
+/**
+ * 令牌哈希入库：sys_tokens 仅存 sha256 摘要（64 字符，远小于 VarChar(767)）。
+ * 好处：数据库泄露不等于全部在线会话泄露；长 JWT 也不会超列宽。
+ * 校验时对来料 token 做同样的哈希后匹配。
+ */
+function hashToken(token: string): string {
+  return createHash('sha256').update(token).digest('hex');
+}
+
 @Injectable()
 export class TokensWriteRepository implements TokensWriteRepoPort {
   constructor(private prisma: PrismaService) {}
 
   async save(tokens: TokensEntity): Promise<void> {
     await this.prisma.sysTokens.create({
-      data: tokens,
+      data: {
+        ...tokens,
+        accessToken: hashToken(tokens.accessToken),
+        refreshToken: hashToken(tokens.refreshToken),
+      },
     });
   }
 
   async consumeRefreshToken(refreshToken: string): Promise<{ count: number }> {
     const result = await this.prisma.sysTokens.updateMany({
-      where: { refreshToken, status: TokenStatus.UNUSED },
+      where: { refreshToken: hashToken(refreshToken), status: TokenStatus.UNUSED },
       data: { status: TokenStatus.USED },
     });
     return { count: result.count };
@@ -26,7 +41,7 @@ export class TokensWriteRepository implements TokensWriteRepoPort {
 
   async revokeRefreshToken(refreshToken: string): Promise<{ count: number }> {
     const result = await this.prisma.sysTokens.updateMany({
-      where: { refreshToken, status: TokenStatus.UNUSED },
+      where: { refreshToken: hashToken(refreshToken), status: TokenStatus.UNUSED },
       data: { status: TokenStatus.REVOKED },
     });
     return { count: result.count };

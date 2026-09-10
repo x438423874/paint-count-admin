@@ -51,8 +51,9 @@ export class AuthenticationService {
       throw new UnauthorizedException('Refresh token 不存在或已失效');
     }
 
+    // 验签用客户端传入的原始 refresh token（库里存的是哈希，不可直接验签）
     try {
-      await this.jwtService.verifyAsync(tokenDetails.refreshToken, {
+      await this.jwtService.verifyAsync(dto.refreshToken, {
         secret: this.securityConfig.refreshJwtSecret,
       });
     } catch {
