@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHash } from 'crypto';
+import { Jimp } from 'jimp';
 
 export interface LlmOcrItem {
   matchedName: string;   // 匹配到的系统部位名（匹配不到时为空字符串）
@@ -40,6 +41,7 @@ export class LlmOcrService {
   private readonly timeoutMs: number;
   private readonly cacheTtlMs: number;
   private readonly downgradeOnFail: boolean;
+  private readonly maxPixelWidth: number;
   /** 内容寻址缓存：key=sha256(buffer)+mode，value=识别结果与过期时间。
    *  说明：LLM 原始输出(含 matchedName)仅依赖图片内容与 mode；门店类别匹配在 OcrService 按当前 shop 重新进行，
    *  故以 buffer+mode 作为缓存键是语义安全的——重复上传/重试可零成本复用结果。单实例有效，多实例建议换 Redis。 */
@@ -60,7 +62,10 @@ export class LlmOcrService {
     this.timeoutMs = Number(this.configService.get<string>('LLM_OCR_TIMEOUT_MS')) || 60000;
     this.cacheTtlMs = Number(this.configService.get<string>('LLM_OCR_CACHE_TTL_MS')) || 24 * 60 * 60 * 1000;
     this.downgradeOnFail = this.configService.get<string>('LLM_OCR_DOWNGRADE_ON_FAIL') === 'true';
-    this.logger.log(`OCR配置: apiUrl=${this.apiUrl}, model=${this.model}, timeout=${this.timeoutMs}ms, cacheTtl=${this.cacheTtlMs}ms, downgradeOnFail=${this.downgradeOnFail}`);
+    // 发送前降采样长边（视觉 token 按图片分辨率计费，缩小长边可显著降低成本）。
+    // 0/未配置 = 原样发送。建议 1280~1600 之间取值，需用真实工单照片验证识别质量后再启用。
+    this.maxPixelWidth = Number(this.configService.get<string>('LLM_OCR_MAX_WIDTH')) || 0;
+    this.logger.log(`OCR配置: apiUrl=${this.apiUrl}, model=${this.model}, timeout=${this.timeoutMs}ms, cacheTtl=${this.cacheTtlMs}ms, downgradeOnFail=${this.downgradeOnFail}, maxPixelWidth=${this.maxPixelWidth || '关闭'}`);
   }
 
   async recognize(imageBuffer: Buffer, categories?: CategoryContext[], mode: OcrMode = 'all'): Promise<LlmOcrResult> {
@@ -90,7 +95,8 @@ export class LlmOcrService {
 
   /** 单次调用大模型（无缓存、无重试），仅在 callWithRetry 内被调用 */
   private async callLlm(imageBuffer: Buffer, categories?: CategoryContext[], mode: OcrMode = 'all'): Promise<LlmOcrResult> {
-    const base64 = `data:image/jpeg;base64,${imageBuffer.toString('base64')}`;
+    const payloadBuffer = await this.downscaleForLlm(imageBuffer);
+    const base64 = `data:image/jpeg;base64,${payloadBuffer.toString('base64')}`;
 
     // 根据模式构建 prompt
     const wantBasic = mode === 'basic' || mode === 'all';
@@ -157,6 +163,10 @@ export class LlmOcrService {
       }
 
       const data: any = await response.json();
+      const usage = data.usage;
+      if (usage) {
+        this.logger.log(`OCR用量(${this.model}): prompt=${usage.prompt_tokens} completion=${usage.completion_tokens} total=${usage.total_tokens}`);
+      }
       const content = data.choices?.[0]?.message?.content || '';
 
       // 去除思考过程标签（MiniMax M3 等推理模型可能输出思考内容）
@@ -193,6 +203,23 @@ export class LlmOcrService {
 
   private buildCacheKey(buffer: Buffer, mode: OcrMode): string {
     return `${createHash('sha256').update(buffer).digest('hex')}:${mode}`;
+  }
+
+  /** 发送前降采样：仅用于大模型调用的副本，不影响落盘原图（降采样失败时用原图） */
+  private async downscaleForLlm(buffer: Buffer): Promise<Buffer> {
+    if (!this.maxPixelWidth) return buffer;
+    try {
+      const image = await Jimp.read(buffer);
+      if (image.width <= this.maxPixelWidth) return buffer;
+      const before = image.width;
+      image.resize({ w: this.maxPixelWidth });
+      const out = await image.getBuffer('image/jpeg');
+      this.logger.log(`OCR图片降采样: ${before}px → ${this.maxPixelWidth}px（${buffer.length}B → ${out.length}B）`);
+      return out;
+    } catch (e) {
+      this.logger.warn(`OCR图片降采样失败，使用原图: ${e instanceof Error ? e.message : e}`);
+      return buffer;
+    }
   }
 
   private getFromCache(key: string): LlmOcrResult | null {
