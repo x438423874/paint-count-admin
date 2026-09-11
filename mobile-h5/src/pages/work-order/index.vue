@@ -873,6 +873,9 @@ onActivated(() => {
                   <span>{{ order._count?.images ?? order.images?.length }}</span>
                 </van-tag>
                 <OrderStatusTag :status="order.status" size="medium" />
+                <van-tag v-if="order.isAdjustment" type="warning" size="medium">
+                  调整
+                </van-tag>
                 <van-tag v-if="order.isRework" type="danger" size="medium">
                   返工
                 </van-tag>

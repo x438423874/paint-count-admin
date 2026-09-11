@@ -21,7 +21,7 @@ import type { OrderNoRule } from '@/api/paint'
 import { compressImage } from '@/utils/image-compress'
 import { resolveImageUrl } from '@/utils/image-url'
 import { phoneRegex, plateNumberRegex, vinRegex } from '@/utils/validators'
-import { computeItemPaintCount, computeTotalPaintCount, getPaintDecimalLength, normalizeOverridePaintCount } from '@/utils/paint-count'
+import { computeItemPaintCount, computeTotalPaintCount, formatAutoPaintCount, getPaintDecimalLength, normalizeOverridePaintCount } from '@/utils/paint-count'
 import { applyOcrFields } from '@/utils/ocr-fields'
 import { fetchImageAsFile, uploadCompressed } from '@/composables/useImageUpload'
 import { canAudit, canDelete, canEdit } from '@/utils/permission'
@@ -233,7 +233,7 @@ function enterEdit() {
   editPendingUploads.value = []
   editPendingDeleteIds.value = []
   loadEditStandards()
-  loadSpecialPaints()
+  loadSpecialPaints(order.value?.shopId)
   loadEditOrderNoRules()
   clearEditErrors()
   isEditing.value = true
@@ -403,9 +403,11 @@ function clearEditErrors() {
   ocrVinCorrectionMsg.value = ''
 }
 
-async function loadSpecialPaints() {
+async function loadSpecialPaints(shopId?: string) {
+  // 仅加载该门店关联标准模板下的特殊车漆，避免不同模板间同名车漆重复出现
+  const templateId = shopId ? shops.value.find(s => s.id === shopId)?.standardTemplateId : undefined
   try {
-    const res = await getSpecialPaintList(true)
+    const res = await getSpecialPaintList(true, templateId)
     specialPaints.value = (res as any as PaintSpecialPaint[]) || []
   }
   catch {
@@ -968,6 +970,44 @@ function onPaintCountBlur(item: CreateWorkOrderItemDto) {
   normalizeOverridePaintCount(item)
 }
 
+// 特殊车漆选项（编辑模式）
+const specialPaintOptions = computed(() => [
+  { text: '无', value: '' },
+  ...specialPaints.value.map(sp => ({ text: `${sp.name} x${sp.multiplier}`, value: sp.id })),
+])
+
+const showSpecialPaintPicker = ref(false)
+const editingSpecialPaintIndex = ref(-1)
+
+function openSpecialPaintPicker(index: number) {
+  editingSpecialPaintIndex.value = index
+  showSpecialPaintPicker.value = true
+}
+
+function onSpecialPaintConfirm(value: string) {
+  const index = editingSpecialPaintIndex.value
+  if (index < 0 || !editForm.items[index])
+    return
+  const item = editForm.items[index]
+  const nextId = value || undefined
+  if ((item.specialPaintId || undefined) === nextId)
+    return
+  item.specialPaintId = nextId
+  // 系数变化后，原有覆盖幅数不再匹配自动计算值时清除覆盖，保证按新系数重算
+  if (item.overridePaintCount !== undefined && item.overridePaintCount !== null) {
+    const autoCount = getEditItemAutoPaintCount(item)
+    if (Math.abs(item.overridePaintCount - autoCount) >= 0.01)
+      item.overridePaintCount = undefined
+  }
+}
+
+function getSpecialPaintName(specialPaintId?: string) {
+  if (!specialPaintId)
+    return '无'
+  const sp = specialPaints.value.find(s => s.id === specialPaintId)
+  return sp ? `${sp.name} x${sp.multiplier}` : '无'
+}
+
 const editTotalPaintCount = computed(() => computeTotalPaintCount(editForm.items, editStandards.value, specialPaints.value))
 
 const editPartCount = computed(() => {
@@ -1009,6 +1049,7 @@ onMounted(() => {
         <div class="status-left">
           <van-icon :name="orderStatusIcon(order.status)" size="20" color="#fff" />
           <span class="status-text">{{ orderStatusLabel(order.status) }}</span>
+          <van-tag v-if="order.isAdjustment" type="warning" size="medium">调整单</van-tag>
         </div>
         <span class="order-no">{{ order.orderNo }}</span>
       </div>
@@ -1217,8 +1258,8 @@ onMounted(() => {
                     @blur="onPaintCountBlur(item)"
                     @update:model-value="(val: number) => { item.overridePaintCount = val }"
                   />
-                  <span v-else class="paint-count-value" @click="item.overridePaintCount = Number(getEditItemAutoPaintCount(item).toFixed(1))">
-                    {{ getEditItemAutoPaintCount(item).toFixed(1) }}
+                  <span v-else class="paint-count-value" @click="item.overridePaintCount = Number(formatAutoPaintCount(getEditItemAutoPaintCount(item), Boolean(item.specialPaintId)))">
+                    {{ formatAutoPaintCount(getEditItemAutoPaintCount(item), Boolean(item.specialPaintId)) }}
                   </span>
                   <van-icon
                     v-if="item.overridePaintCount !== undefined && item.overridePaintCount !== null"
@@ -1230,6 +1271,14 @@ onMounted(() => {
                   />
                 </div>
               </div>
+            </div>
+            <div v-if="specialPaints.length > 0 && item.quantity > 0" class="special-paint-row">
+              <van-cell
+                title="特殊车漆"
+                :value="getSpecialPaintName(item.specialPaintId)"
+                is-link
+                @click="openSpecialPaintPicker(index)"
+              />
             </div>
           </div>
           <div class="add-item-btn" @click="addEditItem">
@@ -1258,7 +1307,7 @@ onMounted(() => {
           </div>
           <div class="total-item">
             <span class="total-label">总幅数</span>
-            <span class="total-value highlight">{{ editTotalPaintCount.toFixed(1) }}</span>
+            <span class="total-value highlight">{{ formatAutoPaintCount(editTotalPaintCount, editForm.items.some(i => i.specialPaintId)) }}</span>
           </div>
         </div>
       </div>
@@ -1369,6 +1418,14 @@ onMounted(() => {
       v-model:show="showCategoryMultiPicker"
       :options="categoryMultiOptions"
       @confirm="onCategoryMultiConfirm"
+    />
+
+    <!-- 特殊车漆选择器（编辑模式） -->
+    <PopupPicker
+      v-model:show="showSpecialPaintPicker"
+      :columns="specialPaintOptions"
+      title="特殊车漆"
+      @confirm="onSpecialPaintConfirm"
     />
 
     <!-- 编辑日期选择器 -->
@@ -1729,6 +1786,15 @@ onMounted(() => {
     :deep(.van-stepper) {
       width: 100%;
     }
+  }
+}
+
+.special-paint-row {
+  margin-top: 8px;
+
+  :deep(.van-cell) {
+    padding: 6px 0;
+    font-size: 13px;
   }
 }
 

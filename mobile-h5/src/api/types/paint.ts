@@ -101,6 +101,8 @@ export interface PaintWorkOrder {
   abnormalRemark?: string
   isRework: boolean
   reworkRemark?: string
+  /** 幅数调整单（负幅数对冲，统计只计幅数不计工单数） */
+  isAdjustment?: boolean
   totalPaintCount: number
   remark?: string
   mergeGroupId?: string
