@@ -178,6 +178,7 @@ export interface PageWorkOrderDto {
   size?: number
   shopId?: string
   plateNumber?: string
+  orderNo?: string
   customerName?: string
   settlementMonth?: string
   status?: PaintOrderStatus

@@ -25,6 +25,8 @@ export class ManualMatchDto {
 /** 补建工单时可选覆盖的字段 */
 export class CreateOrderFromPendingDto {
   /** 结算月份（默认用图片池记录的月份） */
+  @IsOptional()
+  @IsString()
   settlementMonth?: string;
 }
 

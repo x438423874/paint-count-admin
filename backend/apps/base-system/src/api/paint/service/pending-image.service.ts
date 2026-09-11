@@ -363,22 +363,26 @@ export class PendingImageService implements OnApplicationBootstrap {
     }
 
     // 防重复建单：工单可能已通过 Excel 导入存在（先录台账后补图片的场景）。
-    // 重复补建会造成同工单号两张单、幅数重复计入结算。
+    // 业务规则：同一结算月内同工单号不允许重复（幅数会重复计入结算）；跨结算月允许。
+    const settlementMonth = settlementMonthOverride || pending.settlementMonth || undefined;
     const ocrOrderNo = (pending.ocrOrderNo || '').trim();
     if (ocrOrderNo) {
       const duplicated = await this.prisma.paintWorkOrder.findFirst({
-        where: { shopId: pending.shopId, orderNo: ocrOrderNo, status: { not: 'VOID' } },
+        where: {
+          shopId: pending.shopId,
+          orderNo: ocrOrderNo,
+          settlementMonth: settlementMonth ?? null,
+          status: { not: 'VOID' },
+        },
         select: { id: true, orderNo: true, status: true, settlementMonth: true },
       });
       if (duplicated) {
         throw new BadRequestException(
-          `系统已存在工单号 ${duplicated.orderNo} 的工单（状态：${duplicated.status}，结算月：${duplicated.settlementMonth ?? '未结算'}），` +
-            '该单可能为导入数据。请使用「人工指派」将图片归类到该工单，无需补建。',
+          `该店 ${duplicated.settlementMonth ?? '未结算'} 已存在工单号 ${duplicated.orderNo} 的工单（状态：${duplicated.status}），同结算月不允许重复。` +
+            '如为导入数据，请使用「人工指派」将图片归类到该工单。',
         );
       }
     }
-
-    const settlementMonth = settlementMonthOverride || pending.settlementMonth || undefined;
     const orderDate = pending.ocrDate ? new Date(pending.ocrDate) : null;
     const plate = (pending.ocrPlateNumber || '').trim();
 

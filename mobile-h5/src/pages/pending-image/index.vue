@@ -306,7 +306,44 @@ async function onRetryOcr(item: PaintPendingImage) {
   }
 }
 
-function onCreateOrder(item: PaintPendingImage) {
+async function onCreateOrder(item: PaintPendingImage) {
+  // 防重复预检：同结算月内同工单号的工单可能已通过 Excel 导入存在。
+  // 命中时直接引导「一键归类到该工单」，而不是补建出重复单（幅数会重复计入结算）。
+  const orderNo = (item.ocrOrderNo || '').trim()
+  if (orderNo) {
+    try {
+      const res: any = await getWorkOrderPage({
+        shopId: selectedShopId.value || undefined,
+        settlementMonth: selectedMonth.value || undefined,
+        orderNo,
+        current: 1,
+        size: 1,
+      })
+      const existed = res?.records?.[0]
+      if (existed) {
+        confirmAction({
+          title: '发现系统已有该工单',
+          message: `系统已存在工单号 ${orderNo} 的工单（可能为导入数据）。是否直接把这张图片归类到该工单？`,
+        })
+          .then(async () => {
+            try {
+              await manualMatchPendingImage(item.id, existed.id)
+              showNotify({ type: 'success', message: `已归类到工单 ${existed.orderNo || orderNo}` })
+              onRefresh()
+            }
+            catch (e: any) {
+              showNotify({ type: 'danger', message: e?.response?.data?.message || e?.message || '归类失败' })
+            }
+          })
+          .catch(() => void 0)
+        return
+      }
+    }
+    catch {
+      // 预检失败不阻断补建，后端仍有兜底校验
+    }
+  }
+
   confirmAction({
     title: '补建工单',
     message: '将用 OCR 基础资料创建一条无幅数工单并归类该图片，是否继续？',
@@ -317,7 +354,7 @@ function onCreateOrder(item: PaintPendingImage) {
       onRefresh()
     }
     catch (e: any) {
-      showNotify({ type: 'danger', message: e?.message || '操作失败' })
+      showNotify({ type: 'danger', message: e?.response?.data?.message || e?.message || '操作失败' })
     }
   }).catch(() => void 0)
 }
