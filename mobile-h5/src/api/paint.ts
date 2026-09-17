@@ -68,6 +68,15 @@ export function getWorkOrderStatusCounts(shopId?: string, settlementMonth?: stri
   return request.get<{ total: number, pending: number, audited: number, settled: number }>('/paint/work-order/status-counts', { params: { shopId, settlementMonth } })
 }
 
+/** 导出工单 Excel 台账（Blob，由调用方触发下载） */
+export function exportWorkOrderExcel(shopId: string, settlementMonth?: string, mode: 'detail' | 'summary' = 'detail') {
+  return request.get<Blob>('/paint/work-order/export', {
+    params: { shopId, settlementMonth, mode },
+    responseType: 'blob',
+    timeout: 120000,
+  })
+}
+
 export function getWorkOrderDetail(id: string) {
   return request.get<PaintWorkOrder>(`/paint/work-order/${id}`)
 }
@@ -181,9 +190,12 @@ export function getShopCategoriesWithStandard(shopId: string) {
 
 // ===== 特殊车漆 API =====
 
-export function getSpecialPaintList(activeOnly = true) {
+export function getSpecialPaintList(activeOnly = true, templateId?: string) {
+  const params: Record<string, string> = {}
+  if (activeOnly) params.activeOnly = 'true'
+  if (templateId) params.templateId = templateId
   return request.get<PaintSpecialPaint[]>('/paint/standard-template/special-paints', {
-    params: activeOnly ? { activeOnly: 'true' } : {},
+    params,
   })
 }
 

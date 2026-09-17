@@ -6,6 +6,7 @@ import {
   getCategories,
   getWorkOrderPage,
   getWorkOrderStatusCounts,
+  exportWorkOrderExcel,
   mergeWorkOrders,
   ocrRecognizeImage,
   updateWorkOrder,
@@ -188,6 +189,38 @@ async function loadOrders(reset = false) {
   }
   finally {
     loading.value = false
+  }
+}
+
+const exporting = ref(false)
+
+/** 导出当前门店/结算月的工单 Excel 台账 */
+async function onExport() {
+  if (exporting.value)
+    return
+  if (!searchForm.shopId) {
+    showNotify({ type: 'warning', message: '导出前请先在「筛选」中选择门店' })
+    showFilterPopup.value = true
+    return
+  }
+  exporting.value = true
+  try {
+    const blob: any = await exportWorkOrderExcel(searchForm.shopId, searchForm.settlementMonth || undefined)
+    const url = URL.createObjectURL(blob instanceof Blob ? blob : new Blob([blob]))
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${getShopName(searchForm.shopId) || '工单'}_台账_${searchForm.settlementMonth || '全部'}.xlsx`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+    showNotify({ type: 'success', message: '已开始下载' })
+  }
+  catch (e: any) {
+    showNotify({ type: 'danger', message: e?.response?.data?.message || e?.message || '导出失败' })
+  }
+  finally {
+    exporting.value = false
   }
 }
 
@@ -785,6 +818,12 @@ onActivated(() => {
         <div class="filter-trigger" @click="router.push({ name: 'PendingImage' })">
           <van-icon name="photo-o" size="20" color="var(--color-primary)" />
           <span class="filter-text">图片池</span>
+        </div>
+        <div class="filter-trigger" @click="onExport">
+          <van-icon name="description" size="20" color="var(--color-primary)" />
+          <span class="filter-text" :style="{ color: exporting ? 'var(--color-text-muted)' : 'var(--color-primary)' }">
+            {{ exporting ? '导出中…' : '导出' }}
+          </span>
         </div>
         <div v-if="allowBatchOcr" class="filter-trigger" @click="toggleSelectionMode">
           <van-icon name="checked" size="20" :color="selectionMode ? '#52c41a' : 'var(--color-primary)'" />

@@ -33,6 +33,11 @@ export class RedisUtility {
         db: config.standalone.db,
       });
     }
+    // ioredis 的 error 事件若无监听器会直接把进程打崩（Redis 瞬断 = 全站宕机）。
+    // 各业务已有降级/兜底逻辑，这里只记录日志保持进程存活。
+    this._instance.on('error', (err) => {
+      console.error('[Redis] 连接错误:', err.message);
+    });
     return this._instance;
   }
 
