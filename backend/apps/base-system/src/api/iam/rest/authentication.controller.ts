@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Request } from '@nestjs/common';
+import { Body, Controller, Get, Post, Put, Request } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { FastifyRequest } from 'fastify';
@@ -16,6 +16,8 @@ import { Ip2regionService } from '@lib/shared/ip2region/ip2region.service';
 import { IAuthentication } from '@lib/typings/global';
 import { getClientIpAndPort } from '@lib/utils/ip.util';
 
+import { ChangePasswordDto } from '../dto/change-password.dto';
+import { UpdateProfileDto } from '../dto/update-profile.dto';
 import { PasswordLoginDto } from '../dto/password-login.dto';
 
 @ApiTags('Authentication - Module')
@@ -98,6 +100,30 @@ export class AuthenticationController {
   ): Promise<ApiRes<any>> {
     const user: IAuthentication = req.user;
     await this.authenticationService.logout(user.uid, refreshToken, user.jti);
+    return ApiRes.success(null);
+  }
+
+  @Get('profile')
+  @ApiOperation({ summary: '查询个人资料（昵称/手机号/邮箱）' })
+  async getSelfProfile(@Request() req: AuthenticatedRequest): Promise<ApiRes<any>> {
+    const data = await this.authenticationService.getProfile(req.user.uid);
+    return ApiRes.success(data);
+  }
+
+  @Put('profile')
+  @Log('认证', '修改个人资料', { logBody: false })
+  @ApiOperation({ summary: '修改个人资料（仅昵称/手机号/邮箱）' })
+  async updateSelfProfile(@Body() dto: UpdateProfileDto, @Request() req: AuthenticatedRequest): Promise<ApiRes<any>> {
+    const data = await this.authenticationService.updateProfile(req.user.uid, dto);
+    return ApiRes.success(data);
+  }
+
+  @Put('password')
+  @Log('认证', '修改密码', { logBody: false })
+  @ApiOperation({ summary: '修改密码（成功后所有设备需重新登录）' })
+  async changeSelfPassword(@Body() dto: ChangePasswordDto, @Request() req: AuthenticatedRequest): Promise<ApiRes<null>> {
+    await this.authenticationService.changePassword(req.user.uid, dto.oldPassword, dto.newPassword);
+    await this.authenticationService.logout(req.user.uid);
     return ApiRes.success(null);
   }
 

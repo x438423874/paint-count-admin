@@ -2,6 +2,7 @@
 import { useUserStore } from '@/stores'
 import { canEdit as canEditRole } from '@/utils/permission'
 import { confirmAction } from '@/composables/useConfirm'
+import { changePassword, getUserProfile, updateUserProfile } from '@/api/user'
 
 const router = useRouter()
 const userStore = useUserStore()
@@ -10,6 +11,107 @@ const userInfo = computed(() => userStore.userInfo)
 const allowCreate = canEditRole()
 
 const appVersion = ref('1.0.0')
+
+// ==================== 个人资料 ====================
+const profile = ref<{ nickName?: string, phoneNumber?: string, email?: string } | null>(null)
+const profileLoading = ref(false)
+
+async function loadProfile() {
+  profileLoading.value = true
+  try {
+    const res: any = await getUserProfile()
+    profile.value = { nickName: res?.nickName || '', phoneNumber: res?.phoneNumber || '', email: res?.email || '' }
+  }
+  catch {
+    profile.value = null
+  }
+  finally {
+    profileLoading.value = false
+  }
+}
+
+// ==================== 编辑资料 ====================
+const editPopup = reactive({ show: false, submitting: false })
+const editForm = reactive({ nickName: '', phoneNumber: '', email: '' })
+
+function openEditProfile() {
+  editForm.nickName = profile.value?.nickName || ''
+  editForm.phoneNumber = profile.value?.phoneNumber || ''
+  editForm.email = profile.value?.email || ''
+  editPopup.show = true
+}
+
+async function submitProfile() {
+  if (!editForm.nickName.trim()) {
+    showNotify({ type: 'warning', message: '请输入昵称' })
+    return
+  }
+  if (editForm.phoneNumber && !/^1[3-9]\d{9}$/.test(editForm.phoneNumber)) {
+    showNotify({ type: 'warning', message: '手机号格式不正确' })
+    return
+  }
+  editPopup.submitting = true
+  try {
+    const res: any = await updateUserProfile({
+      nickName: editForm.nickName.trim(),
+      phoneNumber: editForm.phoneNumber || undefined,
+      email: editForm.email || undefined,
+    })
+    profile.value = { nickName: res?.nickName || '', phoneNumber: res?.phoneNumber || '', email: res?.email || '' }
+    editPopup.show = false
+    showNotify({ type: 'success', message: '资料已更新' })
+  }
+  catch (e: any) {
+    showNotify({ type: 'danger', message: e?.message || '保存失败' })
+  }
+  finally {
+    editPopup.submitting = false
+  }
+}
+
+// ==================== 修改密码 ====================
+const pwdPopup = reactive({ show: false, submitting: false })
+const pwdForm = reactive({ oldPassword: '', newPassword: '', confirmPassword: '' })
+
+function openChangePassword() {
+  pwdForm.oldPassword = ''
+  pwdForm.newPassword = ''
+  pwdForm.confirmPassword = ''
+  pwdPopup.show = true
+}
+
+async function submitPassword() {
+  if (!pwdForm.oldPassword) {
+    showNotify({ type: 'warning', message: '请输入旧密码' })
+    return
+  }
+  if (pwdForm.newPassword.length < 6) {
+    showNotify({ type: 'warning', message: '新密码至少 6 位' })
+    return
+  }
+  if (pwdForm.newPassword !== pwdForm.confirmPassword) {
+    showNotify({ type: 'warning', message: '两次输入的新密码不一致' })
+    return
+  }
+  pwdPopup.submitting = true
+  try {
+    await changePassword(pwdForm.oldPassword, pwdForm.newPassword)
+    pwdPopup.show = false
+    showNotify({ type: 'success', message: '密码已修改，请重新登录' })
+    await userStore.logout()
+    router.replace({ name: 'Login' })
+  }
+  catch (e: any) {
+    showNotify({ type: 'danger', message: e?.message || '修改失败' })
+  }
+  finally {
+    pwdPopup.submitting = false
+  }
+}
+
+onMounted(() => {
+  loadProfile()
+})
 
 function handleLogout() {
   confirmAction({
@@ -38,7 +140,7 @@ function clearCache() {
         </div>
         <div class="user-detail">
           <div class="user-name">
-            {{ userInfo.nickname || userInfo.username || '未登录' }}
+            {{ profile?.nickName || userInfo.nickname || userInfo.username || '未登录' }}
           </div>
           <div class="user-role">
             {{ userInfo.roles?.join('、') || '普通用户' }}
@@ -77,6 +179,8 @@ function clearCache() {
 
     <!-- 设置列表 -->
     <div class="menu-section">
+      <van-cell title="编辑资料" icon="user-edit-o" is-link @click="openEditProfile" />
+      <van-cell title="修改密码" icon="shield-o" is-link @click="openChangePassword" />
       <van-cell title="清除缓存" icon="delete-o" is-link @click="clearCache" />
       <van-cell title="关于系统" icon="info-o" is-link>
         <template #right-icon>
@@ -93,6 +197,40 @@ function clearCache() {
     </div>
 
     <div style="height: 80px;" />
+
+    <!-- 编辑资料 -->
+    <van-popup v-model:show="editPopup.show" position="bottom" round style="padding: 20px">
+      <div class="popup-title">编辑资料</div>
+      <van-form @submit="submitProfile">
+        <van-cell-group inset>
+          <van-field v-model="editForm.nickName" label="昵称" placeholder="请输入昵称" required :maxlength="30" />
+          <van-field v-model="editForm.phoneNumber" label="手机号" placeholder="请输入手机号" type="tel" :maxlength="11" />
+          <van-field v-model="editForm.email" label="邮箱" placeholder="请输入邮箱" />
+        </van-cell-group>
+        <div style="margin: 16px">
+          <van-button block round type="primary" :loading="editPopup.submitting" native-type="submit">
+            保存
+          </van-button>
+        </div>
+      </van-form>
+    </van-popup>
+
+    <!-- 修改密码 -->
+    <van-popup v-model:show="pwdPopup.show" position="bottom" round style="padding: 20px">
+      <div class="popup-title">修改密码</div>
+      <van-form @submit="submitPassword">
+        <van-cell-group inset>
+          <van-field v-model="pwdForm.oldPassword" label="旧密码" placeholder="请输入旧密码" type="password" required />
+          <van-field v-model="pwdForm.newPassword" label="新密码" placeholder="至少 6 位" type="password" required />
+          <van-field v-model="pwdForm.confirmPassword" label="确认密码" placeholder="再次输入新密码" type="password" required />
+        </van-cell-group>
+        <div style="margin: 16px">
+          <van-button block round type="primary" :loading="pwdPopup.submitting" native-type="submit">
+            确认修改
+          </van-button>
+        </div>
+      </van-form>
+    </van-popup>
   </div>
 </template>
 
@@ -226,5 +364,13 @@ function clearCache() {
 
 .logout-section {
   padding: 20px 16px;
+}
+
+.popup-title {
+  text-align: center;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 12px;
 }
 </style>

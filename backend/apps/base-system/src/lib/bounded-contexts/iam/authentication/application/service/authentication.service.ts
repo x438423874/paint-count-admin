@@ -22,10 +22,12 @@ import { IAuthentication } from '@lib/typings/global';
 
 import { TokenGeneratedEvent } from '../../../tokens/domain/events/token-generated.event';
 import { TokensEntity } from '../../../tokens/domain/tokens.entity';
-import { UserReadRepoPortToken } from '../../constants';
+import { UserReadRepoPortToken, UserWriteRepoPortToken } from '../../constants';
 import { UserLoggedInEvent } from '../../domain/events/user-logged-in.event';
+import { Password } from '../../domain/password.value-object';
 import { User } from '../../domain/user';
 import { UserReadRepoPort } from '../../ports/user.read.repo-port';
+import { UserWriteRepoPort } from '../../ports/user.write.repo-port';
 import { PasswordIdentifierDTO } from '../dto/password-identifier.dto';
 import { RefreshTokenDTO } from '../dto/refresh-token.dto';
 
@@ -40,6 +42,8 @@ export class AuthenticationService {
     @Inject(SecurityConfig.KEY) private securityConfig: ISecurityConfig,
     @Inject(TokensWriteRepoPortToken)
     private readonly tokensWriteRepository: TokensWriteRepoPort,
+    @Inject(UserWriteRepoPortToken)
+    private readonly userWriteRepository: UserWriteRepoPort,
   ) {}
 
   async refreshToken(dto: RefreshTokenDTO) {
@@ -140,6 +144,77 @@ export class AuthenticationService {
     }
     const codes = await this.repository.findRolesByUserId(userId);
     return Array.from(codes);
+  }
+
+  /** 查询个人资料（自助） */
+  async getProfile(userId: string) {
+    const user = await this.repository.findUserById(userId);
+    if (!user) throw new NotFoundException('用户不存在');
+    return {
+      userId: user.id,
+      username: user.username,
+      nickName: user.nickName,
+      phoneNumber: user.phoneNumber,
+      email: user.email,
+      avatar: user.avatar,
+    };
+  }
+
+  /** 修改个人资料（自助）：仅昵称/手机号/邮箱，用户名与角色状态不可自改 */
+  async updateProfile(
+    userId: string,
+    dto: { nickName?: string; phoneNumber?: string; email?: string },
+  ) {
+    const user = await this.repository.findUserById(userId);
+    if (!user) throw new NotFoundException('用户不存在');
+
+    const nickName = dto.nickName !== undefined ? dto.nickName.trim() : user.nickName;
+    if (!nickName) throw new BadRequestException('昵称不能为空');
+    const phoneNumber = dto.phoneNumber !== undefined ? dto.phoneNumber.trim() : user.phoneNumber;
+    const email = dto.email !== undefined ? dto.email.trim() : user.email;
+
+    try {
+      await this.userWriteRepository.update(
+        new User({
+          id: user.id,
+          username: user.username,
+          password: user.password,
+          domain: user.domain,
+          status: user.status,
+          createdAt: new Date(),
+          createdBy: userId,
+          nickName,
+          avatar: user.avatar,
+          email,
+          phoneNumber,
+        }),
+      );
+    } catch (e: any) {
+      // 手机号/邮箱有唯一约束，撞车时给出可读提示
+      if (e?.code === 'P2002') throw new BadRequestException('手机号或邮箱已被其他账号使用');
+      throw e;
+    }
+    return this.getProfile(userId);
+  }
+
+  /** 修改密码（自助）：校验旧密码 → 哈希新密码 → 吊销全部刷新令牌（所有设备重新登录） */
+  async changePassword(userId: string, oldPassword: string, newPassword: string) {
+    const user = await this.repository.findUserById(userId);
+    if (!user) throw new NotFoundException('用户不存在');
+
+    const current = Password.fromHashed(user.password);
+    if (!(await current.compare(oldPassword))) {
+      throw new BadRequestException('旧密码不正确');
+    }
+    if (oldPassword === newPassword) {
+      throw new BadRequestException('新密码不能与旧密码相同');
+    }
+
+    const newPasswordHashed = await Password.hash(newPassword);
+    await this.userWriteRepository.updatePassword(userId, newPasswordHashed.getValue(), userId);
+
+    // 安全：改密后吊销该用户所有刷新令牌并清理角色缓存，全部设备回到登录页
+    await this.logout(userId);
   }
 
   /**

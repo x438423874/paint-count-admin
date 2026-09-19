@@ -70,4 +70,11 @@ export class UserWriteRepository implements UserWriteRepoPort {
       },
     });
   }
+
+  async updatePassword(userId: string, hashedPassword: string, updatedBy: string): Promise<void> {
+    await this.prisma.sysUser.update({
+      where: { id: userId },
+      data: { password: hashedPassword, updatedAt: new Date(), updatedBy },
+    });
+  }
 }
