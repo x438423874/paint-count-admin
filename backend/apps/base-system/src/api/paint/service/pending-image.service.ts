@@ -8,6 +8,7 @@ import { PaintImageService } from './paint-image.service';
 import { OcrService } from './ocr.service';
 import { PaintVehicleService } from './paint-vehicle.service';
 import { SealService } from '../seal/seal.service';
+import { correctOrderNo, OrderNoRule } from './order-no-corrector';
 import { CorrectPendingImageOcrDto, PagePendingImageDto } from '../pending-image/dto/pending-image.dto';
 import { BACKEND_ROOT } from './upload-root';
 import crypto from 'crypto';
@@ -103,10 +104,33 @@ export class PendingImageService implements OnApplicationBootstrap {
 
       const ocr = await this.ocrService.recognizeWithTemplate(buffer, shopId, 'basic');
 
+      // 工单号规则引导纠正：OCR 常见 O↔0、丢前导 0 等混淆，用门店规则做有界搜索，
+      // 仅唯一候选匹配规则时才自动纠正（多候选/无候选保留原值走人工流程）
+      let ocrOrderNo = ocr.orderNo || null;
+      if (ocrOrderNo) {
+        const shop = await this.prisma.paintShop.findUnique({
+          where: { id: shopId },
+          select: { orderNoRules: true },
+        });
+        let rules: OrderNoRule[] = [];
+        try {
+          rules = shop?.orderNoRules ? (JSON.parse(shop.orderNoRules) as OrderNoRule[]) : [];
+        } catch {
+          rules = [];
+        }
+        const correction = correctOrderNo(ocrOrderNo, rules);
+        if (correction.corrected && correction.corrected !== correction.raw) {
+          this.logger.log(
+            `工单号自动纠正: ${correction.raw} -> ${correction.corrected} (pending=${pendingId})`,
+          );
+          ocrOrderNo = correction.corrected;
+        }
+      }
+
       await this.prisma.paintPendingImage.update({
         where: { id: pendingId },
         data: {
-          ocrOrderNo: ocr.orderNo || null,
+          ocrOrderNo,
           ocrPlateNumber: ocr.plateNumber || null,
           ocrVin: ocr.vin || null,
           ocrCarModel: ocr.carModel || null,
