@@ -489,9 +489,11 @@ async function batchQuickCreate(files: File[]) {
     batchProgress.value.current++
 
     // 每张图片独立处理。直接创建工单：先上传图片到图片池（成功即已安全落库），
-    // 再立即为该图片补建独立工单并归档（一图一单）；补建失败图片仍在图片池可补建。
+    // 再立即为该图片补建独立工单并归档（一图一单）；同号工单已存在时自动归档到已有工单；
+    // 补建失败图片仍在图片池可补建。
     let createdOrderNoForImage = ''
     let pendingCreateWarn = ''
+    let attachedToExisting = false
     const doUpload = async (compressed: File, thumbnail: File) => {
       if (uploadMode.value !== 'create') {
         // OCR 创建工单：上传到图片池，后端 OCR 后自动按门店/结算月份 + OCR 资料补建工单
@@ -503,6 +505,7 @@ async function batchQuickCreate(files: File[]) {
       try {
         const order: any = await createOrderFromPending(pending.id, form.settlementMonth || undefined)
         createdOrderNoForImage = order?.orderNo || order?.order?.orderNo || ''
+        attachedToExisting = !!order?.attached
       }
       catch (e: any) {
         const msg: string = e?.message || ''
@@ -524,7 +527,9 @@ async function batchQuickCreate(files: File[]) {
         fileName: file.name,
         success: true,
         message: uploadMode.value === 'create'
-          ? (createdOrderNoForImage ? `已创建工单 ${createdOrderNoForImage}，图片已归档` : `图片已上传${pendingCreateWarn ? `（${pendingCreateWarn}，可稍后在图片池补建工单）` : ''}`)
+          ? (createdOrderNoForImage
+              ? (attachedToExisting ? `图片已归档到已有工单 ${createdOrderNoForImage}` : `已创建工单 ${createdOrderNoForImage}，图片已归档`)
+              : `图片已上传${pendingCreateWarn ? `（${pendingCreateWarn}，可稍后在图片池补建工单）` : ''}`)
           : '已加入图片池，OCR 后将自动建单',
       })
     }

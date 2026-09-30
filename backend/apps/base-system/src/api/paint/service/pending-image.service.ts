@@ -290,20 +290,20 @@ export class PendingImageService implements OnApplicationBootstrap {
     await this.sealService.assertOrderNotSealed(order.id);
     if (!fullOrder) throw new NotFoundException('目标工单不存在');
 
-    // 已审核/已结算/异常/作废的工单不可再修改：直接拒绝归类，避免触发后续写操作异常（500）
-    const LOCKED_STATUSES = ['AUDITED', 'SETTLED', 'ABNORMAL', 'VOID'];
+    // 作废工单不可归类。已审核/已结算允许「仅归档图片」模式（不改工单任何数据字段）：
+    // Excel 导入并审核后的工单，现场补拍照片归档是正常业务，不应被拒之门外。
+    const IMAGE_ONLY_STATUSES = ['AUDITED', 'SETTLED'];
     const STATUS_LABEL: Record<string, string> = {
       AUDITED: '已审核',
       SETTLED: '已结算',
       ABNORMAL: '异常',
       VOID: '已作废',
     };
-    if (LOCKED_STATUSES.includes(fullOrder.status)) {
+    if (fullOrder.status === 'VOID') {
       const orderNo = fullOrder.orderNo || fullOrder.id;
-      throw new BadRequestException(
-        `工单「${orderNo}」当前状态为「${STATUS_LABEL[fullOrder.status] || fullOrder.status}」，已审核/已结算/异常/作废的工单不允许再归类图片。请改选其他未审核的工单进行归类。`,
-      );
+      throw new BadRequestException(`工单「${orderNo}」已作废，不允许归类图片`);
     }
+    const imageOnly = IMAGE_ONLY_STATUSES.includes(fullOrder.status);
 
     // 只填空字段
     const fillEmpty = (cur: string | null | undefined, ocrVal: string | null | undefined): string | undefined => {
@@ -314,13 +314,15 @@ export class PendingImageService implements OnApplicationBootstrap {
       return undefined;
     };
 
-    const newPlate = fillEmpty(fullOrder.plateNumber, pending.ocrPlateNumber);
-    const newVin = fillEmpty(fullOrder.vin, pending.ocrVin);
-    const newCarModel = fillEmpty(fullOrder.carModel, pending.ocrCarModel);
-    const newBrand = fillEmpty(fullOrder.brand, pending.ocrBrand);
-    const newCustomerName = fillEmpty(fullOrder.customerName, pending.ocrCustomerName);
-    const newPhone = fillEmpty(fullOrder.phone, pending.ocrPhone);
-    const newOrderDateStr = fillEmpty(fullOrder.orderDate ? fullOrder.orderDate.toISOString().slice(0, 10) : null, pending.ocrDate);
+    const newPlate = imageOnly ? undefined : fillEmpty(fullOrder.plateNumber, pending.ocrPlateNumber);
+    const newVin = imageOnly ? undefined : fillEmpty(fullOrder.vin, pending.ocrVin);
+    const newCarModel = imageOnly ? undefined : fillEmpty(fullOrder.carModel, pending.ocrCarModel);
+    const newBrand = imageOnly ? undefined : fillEmpty(fullOrder.brand, pending.ocrBrand);
+    const newCustomerName = imageOnly ? undefined : fillEmpty(fullOrder.customerName, pending.ocrCustomerName);
+    const newPhone = imageOnly ? undefined : fillEmpty(fullOrder.phone, pending.ocrPhone);
+    const newOrderDateStr = imageOnly
+      ? undefined
+      : fillEmpty(fullOrder.orderDate ? fullOrder.orderDate.toISOString().slice(0, 10) : null, pending.ocrDate);
 
     await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const updateData: Prisma.PaintWorkOrderUpdateInput = {};
@@ -430,10 +432,16 @@ export class PendingImageService implements OnApplicationBootstrap {
         select: { id: true, orderNo: true, status: true, settlementMonth: true },
       });
       if (duplicated) {
-        throw new BadRequestException(
-          `该店 ${duplicated.settlementMonth ?? '未结算'} 已存在工单号 ${duplicated.orderNo} 的工单（状态：${duplicated.status}），同结算月不允许重复。` +
-            '如为导入数据，请使用「人工指派」将图片归类到该工单。',
-        );
+        // 同号工单已存在（多为 Excel 台账先导入）：自动把图片归档到该工单，不再报错。
+        // applyMatch 内部处理锁定状态：已审核/已结算走「仅归档图片」，作废不会出现在这里。
+        await this.applyMatch(pending, duplicated, '同号工单已存在，图片自动归档');
+        return {
+          id: pendingId,
+          orderId: duplicated.id,
+          orderNo: duplicated.orderNo,
+          attached: true,
+          status: PendingImageStatus.MANUAL,
+        };
       }
     }
     const orderDate = pending.ocrDate ? new Date(pending.ocrDate) : null;
@@ -506,7 +514,7 @@ export class PendingImageService implements OnApplicationBootstrap {
     if (order.vehicleId) {
       await this.vehicleService.refreshStats(order.vehicleId).catch(() => void 0);
     }
-    return { id: pendingId, orderId: order.id, status: PendingImageStatus.MANUAL };
+    return { id: pendingId, orderId: order.id, orderNo: order.orderNo, attached: false, status: PendingImageStatus.MANUAL };
   }
 
   // ==================== 识别结果修正 ====================
