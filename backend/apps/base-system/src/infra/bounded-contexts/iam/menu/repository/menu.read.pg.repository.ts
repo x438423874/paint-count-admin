@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { Status } from '@prisma/client';
+import { MenuType, Status } from '@prisma/client';
 
 import {
   MenuProperties,
@@ -57,10 +57,12 @@ export class MenuReadPostgresRepository implements MenuReadRepoPort {
     const menuIds = roleMenus.map((rm) => rm.menuId);
 
     if (menuIds.length > 0) {
+      // 按钮型菜单只承载权限标识，不参与路由构建
       return this.prisma.sysMenu.findMany({
         where: {
           id: { in: menuIds },
           status: Status.ENABLED,
+          menuType: { not: MenuType.button },
         },
       });
     }
@@ -85,6 +87,7 @@ export class MenuReadPostgresRepository implements MenuReadRepoPort {
     const menuIds = roleMenus.map((rm) => rm.menuId);
 
     if (menuIds.length > 0) {
+      // 授权回显数据源：包含按钮型菜单行（菜单+按钮同一份绑定存储）
       return this.prisma.sysMenu.findMany({
         where: {
           id: { in: menuIds },

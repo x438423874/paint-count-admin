@@ -1,23 +1,18 @@
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { QueryBus } from '@nestjs/cqrs';
 
-import { EndpointProperties } from '@app/base-system/lib/bounded-contexts/api-endpoint/api-endpoint/domain/endpoint.read.model';
-import { FindEndpointsByIdsQuery } from '@app/base-system/lib/bounded-contexts/api-endpoint/api-endpoint/queries/endpoints.by-ids.query';
 import { DomainProperties } from '@app/base-system/lib/bounded-contexts/iam/domain/domain/domain.read.model';
 import { FindDomainByCodeQuery } from '@app/base-system/lib/bounded-contexts/iam/domain/queries/domain.by-code.query';
 import { MenuProperties } from '@app/base-system/lib/bounded-contexts/iam/menu/domain/menu.read.model';
-import { MenuIdsByUserIdAndDomainQuery } from '@app/base-system/lib/bounded-contexts/iam/menu/queries/menu-ids.by-user_id&domain.query';
 import { MenusByIdsQuery } from '@app/base-system/lib/bounded-contexts/iam/menu/queries/menus.by-ids.query';
 import { RoleProperties } from '@app/base-system/lib/bounded-contexts/iam/role/domain/role.read.model';
 import { FindRoleByIdQuery } from '@app/base-system/lib/bounded-contexts/iam/role/queries/role.by-id.query';
 
 import { ISecurityConfig, SecurityConfig } from '@lib/config';
 import { CacheConstant } from '@lib/constants/cache.constant';
-import { AuthZRBACService } from '@lib/infra/casbin';
 import { PrismaService } from '@lib/shared/prisma/prisma.service';
 import { RedisUtility } from '@lib/shared/redis/redis.util';
 
-import { RoleAssignPermissionCommand } from '../../commands/role-assign-permission.command';
 import { RoleAssignRouteCommand } from '../../commands/role-assign-route.command';
 import { RoleAssignUserCommand } from '../../commands/role-assign-user.command';
 import { UserProperties } from '../../domain/user.read.model';
@@ -28,42 +23,10 @@ import { UsersByIdsQuery } from '../../queries/users.by-ids.query';
 export class AuthorizationService {
   constructor(
     private readonly queryBus: QueryBus,
-    private readonly authZRBACService: AuthZRBACService,
     private readonly prisma: PrismaService,
     @Inject(SecurityConfig.KEY)
     private readonly securityConfig: ISecurityConfig,
   ) {}
-
-  async assignPermission(command: RoleAssignPermissionCommand) {
-    const { domainCode, roleCode } = await this.checkDomainAndRole(
-      command.domain,
-      command.roleId,
-    );
-
-    const permissions = await this.queryBus.execute<
-      FindEndpointsByIdsQuery,
-      EndpointProperties[]
-    >(new FindEndpointsByIdsQuery(command.permissions));
-    if (!permissions.length) {
-      throw new NotFoundException('One or more permissions not found.');
-    }
-
-    const existingPermissions =
-      await this.authZRBACService.enforcer.getFilteredPolicy(
-        0,
-        roleCode,
-        '',
-        '',
-        domainCode,
-      );
-
-    await this.syncRolePermissions(
-      roleCode,
-      domainCode,
-      permissions,
-      existingPermissions,
-    );
-  }
 
   async assignRoutes(command: RoleAssignRouteCommand) {
     const { domainCode, roleId } = await this.checkDomainAndRole(
@@ -76,13 +39,18 @@ export class AuthorizationService {
       MenuProperties[]
     >(new MenusByIdsQuery(command.menuIds));
     if (!routes.length) {
-      throw new NotFoundException('One or more routes not found.');
+      throw new NotFoundException('部分菜单不存在');
     }
 
-    const existingRouteIds = await this.queryBus.execute<
-      MenuIdsByUserIdAndDomainQuery,
-      number[]
-    >(new MenuIdsByUserIdAndDomainQuery(roleId, domainCode));
+    // 已分配路由必须按「角色+域」查 sys_role_menu 去重。
+    // 此前误用 MenuIdsByUserIdAndDomainQuery（把 roleId 当 userId 查用户角色），
+    // 导致 existingRouteIds 恒为空，重复分配时 create 撞 sys_role_menu 主键报 500。
+    const existingRouteIds = await this.prisma.sysRoleMenu
+      .findMany({
+        where: { roleId, domain: domainCode },
+        select: { menuId: true },
+      })
+      .then((rows) => rows.map((r) => r.menuId));
 
     const newRouteIds = command.menuIds.filter(
       (id) => !existingRouteIds.includes(id),
@@ -123,7 +91,7 @@ export class AuthorizationService {
       UserProperties[]
     >(new UsersByIdsQuery(command.userIds));
     if (!users.length) {
-      throw new NotFoundException('One or more users not found.');
+      throw new NotFoundException('部分用户不存在');
     }
 
     const existingUserIds = await this.queryBus.execute<
@@ -233,7 +201,7 @@ export class AuthorizationService {
       Readonly<DomainProperties> | null
     >(new FindDomainByCodeQuery(domainCode));
     if (!domain) {
-      throw new NotFoundException('Domain not found.');
+      throw new NotFoundException('域不存在');
     }
 
     const { roleCode } = await this.checkRole(roleId);
@@ -247,53 +215,10 @@ export class AuthorizationService {
       Readonly<RoleProperties> | null
     >(new FindRoleByIdQuery(roleId));
     if (!role) {
-      throw new NotFoundException('Role not found.');
+      throw new NotFoundException('角色不存在');
     }
 
     return { roleCode: role.code };
   }
 
-  private async syncRolePermissions(
-    roleCode: string,
-    domain: string,
-    newPermissions: EndpointProperties[],
-    existingPermissions: string[][],
-  ): Promise<void> {
-    // 转换新权限为 Casbin 策略格式
-    const newPermSet = new Set(
-      newPermissions.map((perm) =>
-        JSON.stringify([roleCode, perm.resource, perm.action, domain, 'allow']),
-      ),
-    );
-
-    const existingPermSet = new Set(
-      existingPermissions.map((perm) => JSON.stringify(perm)),
-    );
-
-    // 删除在新权限中不存在的现有权限
-    for (const perm of existingPermissions) {
-      if (!newPermSet.has(JSON.stringify(perm))) {
-        await this.authZRBACService.enforcer.removeFilteredPolicy(
-          0,
-          roleCode,
-          perm[1],
-          perm[2],
-          domain,
-        );
-      }
-    }
-
-    // 添加不存在的新权限
-    for (const perm of newPermissions) {
-      const permArray = [roleCode, perm.resource, perm.action, domain, 'allow'];
-      if (!existingPermSet.has(JSON.stringify(permArray))) {
-        await this.authZRBACService.enforcer.addPermissionForUser(
-          roleCode,
-          perm.resource,
-          perm.action,
-          domain,
-        );
-      }
-    }
-  }
 }

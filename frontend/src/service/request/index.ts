@@ -139,6 +139,13 @@ export const request = createFlatRequest<App.Service.Response, RequestInstanceSt
       let message = error.response?.data.message ?? error.message;
       let backendErrorCode = '';
 
+      // 无响应（断网/超时）：axios 默认文案是英文的 Network Error，替换为可读提示
+      if (!error.response) {
+        message = /timeout/i.test(String(error.message))
+          ? '请求超时，请稍后重试'
+          : '网络异常，请检查网络连接';
+      }
+
       // get backend error message and code
       if (error.code === BACKEND_ERROR_CODE) {
         message = error.response?.data?.message ?? message;

@@ -97,6 +97,11 @@ export class RouteCreateDto {
   @ValidateIf((o) => o.multiTab !== null)
   @IsBoolean({ message: 'multiTab must be a boolean' })
   multiTab: boolean | null;
+
+  @ApiProperty({ required: false, description: '按钮型菜单的权限标识（resource:action）' })
+  @ValidateIf((o) => o.permission !== null && o.permission !== undefined)
+  @IsString({ message: 'permission must be a string' })
+  permission: string | null;
 }
 
 export class RouteUpdateDto extends RouteCreateDto {

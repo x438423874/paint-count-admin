@@ -1,7 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 
-import { UserProperties } from '@app/base-system/lib/bounded-contexts/iam/authentication/domain/user.read.model';
+import {
+  UserPageItem,
+  UserProperties,
+} from '@app/base-system/lib/bounded-contexts/iam/authentication/domain/user.read.model';
 import { UserReadRepoPort } from '@app/base-system/lib/bounded-contexts/iam/authentication/ports/user.read.repo-port';
 import { PageUsersQuery } from '@app/base-system/lib/bounded-contexts/iam/authentication/queries/page-users.query';
 
@@ -46,7 +49,7 @@ export class UserReadRepository implements UserReadRepoPort {
     avatar: true,
     email: true,
     phoneNumber: true,
-    nickName: true,
+    realName: true,
     status: true,
     createdAt: true,
     createdBy: true,
@@ -71,7 +74,7 @@ export class UserReadRepository implements UserReadRepoPort {
 
   async pageUsers(
     query: PageUsersQuery,
-  ): Promise<PaginationResult<UserProperties>> {
+  ): Promise<PaginationResult<UserPageItem>> {
     const where: Prisma.SysUserWhereInput = {};
 
     if (query.username) {
@@ -80,9 +83,9 @@ export class UserReadRepository implements UserReadRepoPort {
       };
     }
 
-    if (query.nickName) {
-      where.nickName = {
-        contains: query.nickName,
+    if (query.realName) {
+      where.realName = {
+        contains: query.realName,
       };
     }
 
@@ -99,12 +102,73 @@ export class UserReadRepository implements UserReadRepoPort {
 
     const total = await this.prisma.sysUser.count({ where: where });
 
-    return new PaginationResult<UserProperties>(
+    const items = await this.attachRolesAndShops(users);
+
+    return new PaginationResult<UserPageItem>(
       query.current,
       query.size,
       total,
-      users,
+      items,
     );
+  }
+
+  /** 批量补充每个用户的角色名与绑定门店（含在岗期） */
+  private async attachRolesAndShops(
+    users: UserProperties[],
+  ): Promise<UserPageItem[]> {
+    if (users.length === 0) return [];
+
+    const userIds = users.map((user) => user.id);
+
+    const [userRoles, roleRows, userShops] = await Promise.all([
+      this.prisma.sysUserRole.findMany({
+        where: { userId: { in: userIds } },
+        select: { userId: true, roleId: true },
+      }),
+      this.prisma.sysRole.findMany({
+        select: { id: true, name: true },
+      }),
+      this.prisma.sysUserShop.findMany({
+        where: { userId: { in: userIds } },
+        orderBy: { startAt: 'desc' },
+        select: {
+          userId: true,
+          shopId: true,
+          startAt: true,
+          endAt: true,
+          shop: { select: { name: true } },
+        },
+      }),
+    ]);
+
+    const roleNameById = new Map(roleRows.map((role) => [role.id, role.name]));
+
+    const rolesByUser = new Map<string, string[]>();
+    for (const userRole of userRoles) {
+      const roleName = roleNameById.get(userRole.roleId);
+      if (!roleName) continue;
+      const list = rolesByUser.get(userRole.userId) ?? [];
+      list.push(roleName);
+      rolesByUser.set(userRole.userId, list);
+    }
+
+    const shopsByUser = new Map<string, UserPageItem['shops']>();
+    for (const userShop of userShops) {
+      const list = shopsByUser.get(userShop.userId) ?? [];
+      list.push({
+        shopId: userShop.shopId,
+        shopName: userShop.shop.name,
+        startAt: userShop.startAt,
+        endAt: userShop.endAt,
+      });
+      shopsByUser.set(userShop.userId, list);
+    }
+
+    return users.map((user) => ({
+      ...user,
+      roles: rolesByUser.get(user.id) ?? [],
+      shops: shopsByUser.get(user.id) ?? [],
+    }));
   }
 
   async getUserByUsername(

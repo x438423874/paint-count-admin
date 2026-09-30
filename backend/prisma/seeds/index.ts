@@ -15,7 +15,7 @@ const run = async () => {
   await initSysDomain();
   await initSysUserRole();
   await initSysRoleMenu();
-  await initCasbinRule();
+  await initCasbinRule(); // 系统级按钮权限（原 casbin 种子）
   // 喷漆业务：菜单/角色菜单/权限点（数据导自生产库，替代手工执行的 add-*-menu.sql）
   await initPaint();
 };

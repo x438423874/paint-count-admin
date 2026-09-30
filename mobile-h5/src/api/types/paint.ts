@@ -116,6 +116,12 @@ export interface PaintWorkOrder {
   _duplicateCount?: number
   /** 运行时标记：同车牌在其它结算月份也有结算工单（列表「跨月结算」标签） */
   _hasOtherMonthSettlement?: boolean
+  /** 运行时标记：所属门店+结算月份是否已封单（封单工单隐藏修改类操作） */
+  _isSealed?: boolean
+  /** 运行时标记：客户信息已脱敏（无 paint:work-order:view-customer 权限） */
+  _customerMasked?: boolean
+  /** 运行时标记：同单号其它结算月份已结算的幅数合计（跨月标签展示用） */
+  _otherMonthPaintCount?: number
 }
 
 export interface PaintOrderImage {
@@ -423,6 +429,8 @@ export interface PaintPendingImage {
   matchedAt?: string | null
   shop?: { id: string; name: string; code: string }
   order?: { id: string; orderNo: string | null; plateNumber: string | null; settlementMonth: string | null; status: string } | null
+  /** 运行时标记：所属门店+结算月份是否已封单（封单图片隐藏归类/修改操作） */
+  _sealed?: boolean
 }
 
 export interface PendingImageStatusCounts {

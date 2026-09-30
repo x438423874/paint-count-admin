@@ -96,7 +96,8 @@ export function createVitePlugins(mode: string) {
     createViteVConsole(mode),
 
     // https://github.com/vuejs/devtools-next
-    VueDevTools(),
+    // 默认隐藏调试悬浮标；需要时在 .env 里设 VITE_ENABLE_DEVTOOLS=true
+    ...(env.VITE_ENABLE_DEVTOOLS === 'true' ? [VueDevTools()] : []),
 
     // https://github.com/antfu/vite-plugin-pwa
     VitePWA({

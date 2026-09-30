@@ -17,7 +17,7 @@ import { UserCreateCommand } from '@app/base-system/lib/bounded-contexts/iam/aut
 import { UserDeleteCommand } from '@app/base-system/lib/bounded-contexts/iam/authentication/commands/user-delete.command';
 import { UserUpdateCommand } from '@app/base-system/lib/bounded-contexts/iam/authentication/commands/user-update.command';
 import {
-  UserProperties,
+  UserPageItem,
   UserReadModel,
 } from '@app/base-system/lib/bounded-contexts/iam/authentication/domain/user.read.model';
 import { PageUsersQuery } from '@app/base-system/lib/bounded-contexts/iam/authentication/queries/page-users.query';
@@ -47,17 +47,17 @@ export class UserController {
   @ApiResponseDoc({ type: UserReadModel, isPaged: true })
   async page(
     @Query() queryDto: PageUsersDto,
-  ): Promise<ApiRes<PaginationResult<UserProperties>>> {
+  ): Promise<ApiRes<PaginationResult<UserPageItem>>> {
     const query = new PageUsersQuery({
       current: queryDto.current,
       size: queryDto.size,
       username: queryDto.username,
-      nickName: queryDto.nickName,
+      realName: queryDto.realName,
       status: queryDto.status,
     });
     const result = await this.queryBus.execute<
       PageUsersQuery,
-      PaginationResult<UserProperties>
+      PaginationResult<UserPageItem>
     >(query);
     return ApiRes.success(result);
   }
@@ -78,7 +78,7 @@ export class UserController {
         dto.username,
         dto.password,
         dto.domain,
-        dto.nickName,
+        dto.realName,
         dto.avatar,
         dto.email,
         dto.phoneNumber,
@@ -103,11 +103,12 @@ export class UserController {
       new UserUpdateCommand(
         dto.id,
         dto.username,
-        dto.nickName,
+        dto.realName,
         dto.avatar,
         dto.email,
         dto.phoneNumber,
         req.user.uid,
+        dto.password,
       ),
     );
     return ApiRes.ok();

@@ -153,7 +153,7 @@ export class AuthenticationService {
     return {
       userId: user.id,
       username: user.username,
-      nickName: user.nickName,
+      realName: user.realName,
       phoneNumber: user.phoneNumber,
       email: user.email,
       avatar: user.avatar,
@@ -163,13 +163,12 @@ export class AuthenticationService {
   /** 修改个人资料（自助）：仅昵称/手机号/邮箱，用户名与角色状态不可自改 */
   async updateProfile(
     userId: string,
-    dto: { nickName?: string; phoneNumber?: string; email?: string },
+    dto: { realName?: string; phoneNumber?: string; email?: string },
   ) {
     const user = await this.repository.findUserById(userId);
     if (!user) throw new NotFoundException('用户不存在');
 
-    const nickName = dto.nickName !== undefined ? dto.nickName.trim() : user.nickName;
-    if (!nickName) throw new BadRequestException('昵称不能为空');
+    const realName = dto.realName !== undefined ? dto.realName.trim() : user.realName;
     const phoneNumber = dto.phoneNumber !== undefined ? dto.phoneNumber.trim() : user.phoneNumber;
     const email = dto.email !== undefined ? dto.email.trim() : user.email;
 
@@ -183,7 +182,7 @@ export class AuthenticationService {
           status: user.status,
           createdAt: new Date(),
           createdBy: userId,
-          nickName,
+          realName: realName || null,
           avatar: user.avatar,
           email,
           phoneNumber,
@@ -250,7 +249,8 @@ export class AuthenticationService {
     const { identifier, password } = dto;
     const user = await this.repository.findUserByIdentifier(identifier);
     if (!user) {
-      throw new NotFoundException('User not found.');
+      // 与密码错误统一口径：不暴露账号是否存在
+      throw new BadRequestException('账号或密码错误');
     }
     const userAggregate = new User(user);
     const loginResult = await userAggregate.loginUser(password);

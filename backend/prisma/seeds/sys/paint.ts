@@ -1,3 +1,5 @@
+import crypto from 'node:crypto';
+
 import { prisma } from '../helper';
 
 /**
@@ -80,6 +82,8 @@ const PAINT_CASBIN: { role: string; resource: string; action: string; domain: st
     { role: 'ROLE_ADMIN', resource: 'paint:pending-image', action: 'assign', domain: 'built-in' },
     { role: 'ROLE_SHOP_ADMIN', resource: 'paint:pending-image', action: 'assign', domain: 'built-in' },
     { role: 'ROLE_SUPER', resource: 'paint:pending-image', action: 'assign', domain: 'built-in' },
+    { role: 'ROLE_SUPER', resource: 'paint:work-order', action: 'view-customer', domain: 'built-in' },
+    { role: 'ROLE_SHOP_ADMIN', resource: 'paint:work-order', action: 'view-customer', domain: 'built-in' },
     { role: 'ROLE_ADMIN', resource: 'paint:pending-image', action: 'correct', domain: 'built-in' },
     { role: 'ROLE_SHOP_ADMIN', resource: 'paint:pending-image', action: 'correct', domain: 'built-in' },
     { role: 'ROLE_SHOP_STAFF', resource: 'paint:pending-image', action: 'correct', domain: 'built-in' },
@@ -197,6 +201,8 @@ export const initPaint = async () => {
   }
 
   // 2) 角色菜单（复合主键 upsert）
+  const roles = await prisma.sysRole.findMany({ select: { id: true, code: true } });
+
   for (const rm of PAINT_ROLE_MENUS) {
     await prisma.sysRoleMenu.upsert({
       where: { roleId_menuId_domain: { roleId: rm.roleId, menuId: rm.menuId, domain: rm.domain } },
@@ -205,17 +211,85 @@ export const initPaint = async () => {
     });
   }
 
-  // 3) Casbin 权限点：先读已有键，再补齐缺失（表无唯一约束，不能 skipDuplicates）
-  const existing = await prisma.casbinRule.findMany({
-    where: { ptype: 'p', v1: { startsWith: 'paint:' } },
-    select: { v0: true, v1: true, v2: true },
-  });
-  const keys = new Set(existing.map(r => r.v0 + '|' + r.v1 + '|' + r.v2));
-  const missing = PAINT_CASBIN.filter((r: { role: string; resource: string; action: string }) => !keys.has(r.role + '|' + r.resource + '|' + r.action));
-  if (missing.length > 0) {
-    await prisma.casbinRule.createMany({
-      data: missing.map(r => ({ ptype: 'p', v0: r.role, v1: r.resource, v2: r.action, v3: r.domain || 'built-in', v4: 'allow' })),
-    });
+  // 3) 按钮权限（芋道式）：每个权限点 → 按钮菜单行 + 角色绑定（原 casbin 策略已废弃）
+  const PERM_PARENT: Record<string, number> = {
+    'paint:work-order:view-customer': 101,
+    'paint:work-order:reconcile': 109,
+    'paint:statistics:export': 102,
+    'paint:seal:read': 112,
+    'paint:seal:seal': 112,
+    'paint:seal:unseal': 112,
+  };
+  const RESOURCE_PARENT: Record<string, number> = {
+    'paint:work-order': 101,
+    'paint:vehicle': 110,
+    'paint:pending-image': 111,
+  };
+  const RESOURCE_LABELS: Record<string, string> = {
+    'paint:work-order': '工单',
+    'paint:statistics': '统计',
+    'paint:vehicle': '车辆',
+    'paint:pending-image': '图片',
+    'paint:seal': '封单',
+  };
+  const ACTION_LABELS: Record<string, string> = {
+    create: '创建', 'quick-create': '快速建单', 'batch-create': '批量创建', 'batch-ocr': '批量OCR',
+    update: '更新', delete: '删除', import: '导入', audit: '审核', unaudit: '反审核',
+    settle: '结算', unsettle: '取消结算', 'batch-settle': '批量结算', 'batch-unsettle': '批量取消结算',
+    merge: '合并', reconcile: '对账', abnormal: '异常标注', void: '作废', unvoid: '恢复作废',
+    items: '项目明细', export: '导出', read: '查看', seal: '封单', unseal: '解封',
+    upload: '上传', match: '匹配', assign: '归类', 'create-order': '补建工单', correct: '修正', retry: '重试',
+  };
+
+  const uniquePerms = [...new Set(PAINT_CASBIN.map((r: { resource: string; action: string }) => `${r.resource}:${r.action}`))];
+  const buttonIdByPerm = new Map<string, number>();
+
+  for (const perm of uniquePerms) {
+    const parent = PERM_PARENT[perm] || RESOURCE_PARENT[perm.slice(0, perm.lastIndexOf(':'))];
+    if (!parent) {
+      console.warn('[paint] 无父菜单映射，跳过按钮：' + perm);
+      continue;
+    }
+    const splitAt = perm.lastIndexOf(':');
+    const resource = perm.slice(0, splitAt);
+    const action = perm.slice(splitAt + 1);
+    const menuName = `${RESOURCE_LABELS[resource] || resource}${ACTION_LABELS[action] || action}`;
+    const routeName = 'btn_' + crypto.createHash('md5').update(perm).digest('hex').slice(0, 16);
+
+    let menu = await prisma.sysMenu.findFirst({ where: { permission: perm } });
+    if (!menu) {
+      menu = await prisma.sysMenu.create({
+        data: {
+          menuType: 'button',
+          menuName,
+          permission: perm,
+          routeName,
+          routePath: '',
+          component: '',
+          status: 'ENABLED',
+          pid: parent,
+          order: 0,
+          constant: false,
+          createdBy: 'seed',
+        },
+      });
+    }
+    buttonIdByPerm.set(perm, menu.id);
   }
-  console.log('[paint] 菜单 12、角色菜单 52、权限点补齐 ' + missing.length + '/' + 110);
+
+  let boundCount = 0;
+  for (const rule of PAINT_CASBIN) {
+    const perm = `${rule.resource}:${rule.action}`;
+    const menuId = buttonIdByPerm.get(perm);
+    const role = roles.find((r: { code: string }) => r.code === rule.role);
+    if (!menuId || !role) continue;
+    const bound = await prisma.sysRoleMenu.findFirst({
+      where: { roleId: role.id, menuId, domain: rule.domain || 'built-in' },
+    });
+    if (!bound) {
+      await prisma.sysRoleMenu.create({ data: { roleId: role.id, menuId, domain: rule.domain || 'built-in' } });
+      boundCount++;
+    }
+  }
+  console.log('[paint] 菜单 12、角色菜单 52、按钮 ' + uniquePerms.length + ' 个、新增绑定 ' + boundCount + ' 条');
 };

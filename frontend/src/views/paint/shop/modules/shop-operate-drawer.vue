@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, reactive, watch, ref } from 'vue';
-import { createPaintShop, updatePaintShop, fetchStandardTemplateList } from '@/service/api';
+import { computed, reactive, ref, watch } from 'vue';
+import { createPaintShop, fetchStandardTemplateList, updatePaintShop } from '@/service/api';
 import { useFormRules, useNaiveForm } from '@/hooks/common/form';
 import { $t } from '@/locales';
 

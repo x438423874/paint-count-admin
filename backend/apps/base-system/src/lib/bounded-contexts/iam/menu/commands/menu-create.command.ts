@@ -22,5 +22,6 @@ export class MenuCreateCommand implements ICommand {
     readonly href: string | null,
     readonly multiTab: boolean | null,
     readonly uid: string,
+    readonly permission: string | null,
   ) {}
 }

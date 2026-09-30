@@ -2,6 +2,8 @@ import { BadRequestException, Inject } from '@nestjs/common';
 import { CommandHandler, ICommandHandler } from '@nestjs/cqrs';
 import { Status } from '@prisma/client';
 
+import { Password } from '@app/base-system/lib/bounded-contexts/iam/authentication/domain/password.value-object';
+
 import { UserUpdateCommand } from '../../commands/user-update.command';
 import { UserReadRepoPortToken, UserWriteRepoPortToken } from '../../constants';
 import { User } from '../../domain/user';
@@ -31,16 +33,27 @@ export class UserUpdateHandler
 
     const userUpdateProperties: UserUpdateProperties = {
       id: command.id,
-      nickName: command.nickName,
+      username: command.username,
+      realName: command.realName?.trim() || null,
       status: Status.ENABLED,
       avatar: command.avatar,
-      email: command.email,
-      phoneNumber: command.phoneNumber,
+      // 唯一索引列：空串转 null，避免与其它空串用户撞唯一约束（NULL 不参与唯一比较）
+      email: command.email?.trim() || null,
+      phoneNumber: command.phoneNumber?.trim() || null,
       createdAt: new Date(),
       createdBy: command.uid,
     };
 
     const user = new User(userUpdateProperties);
     await this.userWriteRepository.update(user);
+
+    if (command.password) {
+      const hashedPassword = await Password.hash(command.password);
+      await this.userWriteRepository.updatePassword(
+        command.id,
+        hashedPassword.getValue(),
+        command.uid,
+      );
+    }
   }
 }

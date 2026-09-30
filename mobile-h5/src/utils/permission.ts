@@ -7,8 +7,15 @@ import { getMyPerms } from '@/api/paint'
  */
 let permsCache: string[] | null = null
 
+/** 退出/切换账号后调用：清除权限点缓存，避免新账号沿用上一账号的权限点 */
+export function resetPermsCache(): void {
+  permsCache = null
+}
+
 /** 拉取当前用户权限点集合（登录成功后 / 应用启动时调用） */
 export async function fetchMyPerms(): Promise<void> {
+  // 已有权限数据时跳过（登录后 info 与预取可能各调一次），减少无效请求
+  if (Array.isArray(permsCache)) return
   try {
     const res = await getMyPerms()
     permsCache = (res as any)?.data || (res as any) || []
@@ -79,6 +86,51 @@ export function canAudit(): boolean {
 export function canDelete(): boolean {
   if (permReady()) return hasPerm('paint:work-order:delete')
   return hasRole('ROLE_SUPER', 'R_SUPER', 'ROLE_SHOP_ADMIN')
+}
+
+/** 是否可标记/取消异常（权限点优先）：门店管理员默认未授权，仅超管回退 */
+export function canAbnormal(): boolean {
+  if (permReady()) return hasPerm('paint:work-order:abnormal')
+  return isSuperAdmin()
+}
+
+/** 工单 Excel 导出（权限点优先；未就绪时回退超管/门店管理员，与历史行为一致） */
+export function canExportWorkOrder(): boolean {
+  if (permReady()) return hasPerm('paint:work-order:export')
+  return hasRole('ROLE_SUPER', 'R_SUPER', 'ROLE_SHOP_ADMIN')
+}
+
+/** 车辆档案编辑（权限点优先，未就绪时仅超管） */
+export function canVehicleUpdate(): boolean {
+  if (permReady()) return hasPerm('paint:vehicle:update')
+  return isSuperAdmin()
+}
+
+/** 车辆档案删除（权限点优先，未就绪时仅超管） */
+export function canVehicleDelete(): boolean {
+  if (permReady()) return hasPerm('paint:vehicle:delete')
+  return isSuperAdmin()
+}
+
+/**
+ * 图片池各操作权限（权限点优先；未就绪时回退到工单编辑权，与旧行为一致）。
+ * 后端每个操作有独立权限点：upload/match/assign/create-order/correct/retry/delete
+ */
+export function canPending(action: 'upload' | 'match' | 'assign' | 'create-order' | 'correct' | 'retry' | 'delete'): boolean {
+  if (permReady()) return hasPerm(`paint:pending-image:${action}`)
+  return canEdit()
+}
+
+/** 是否可进入车辆管理（读接口登录即可，但入口仅对有车辆管理权限的角色显示） */
+export function canManageVehicle(): boolean {
+  if (permReady()) return hasPerm('paint:vehicle:create')
+  return isSuperAdmin()
+}
+
+/** 是否可结算/取消结算（权限点优先）：结算口径仅超级管理员操作 */
+export function canSettle(): boolean {
+  if (permReady()) return hasPerm('paint:work-order:settle')
+  return isSuperAdmin()
 }
 
 /** 是否可使用一键OCR批量填充（权限点优先，角色码回退） */

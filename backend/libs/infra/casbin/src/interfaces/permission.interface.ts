@@ -1,4 +1,4 @@
-import { AuthActionVerb } from '../casbin';
+import { AuthActionVerb } from '../constants/authz.constants';
 
 export interface Permission {
   resource: string;

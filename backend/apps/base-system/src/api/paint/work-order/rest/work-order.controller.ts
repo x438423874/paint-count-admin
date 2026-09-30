@@ -11,6 +11,7 @@ import { ApiRes } from '@lib/infra/rest/res.response';
 
 import { OcrService } from '../../service/ocr.service';
 import { UserShopService } from '../../service/user-shop.service';
+import { maskCustomerName, maskPhone } from '../../service/customer-masking.util';
 import { WorkOrderAuditService } from '../../service/work-order-audit.service';
 import { WorkOrderExcelService } from '../../service/work-order-excel.service';
 import { WorkOrderMergeService } from '../../service/work-order-merge.service';
@@ -436,7 +437,18 @@ export class WorkOrderController {
   async page(@Query() dto: PageWorkOrderDto, @Request() req: AuthenticatedRequest) {
     // 数据权限：按门店在岗期过滤（超管/财务不限制）
     const orderScope = await this.userShopService.getOrderAccessScope(req.user.uid);
-    const data = await this.workOrderService.page(dto, orderScope);
+    const viewCustomer = await this.userShopService.canViewCustomerInfo(req.user.uid);
+    const data = await this.workOrderService.page(dto, orderScope, viewCustomer);
+    return ApiRes.success(data);
+  }
+
+  @Get('by-order-no')
+  @ApiOperation({ summary: '按工单号查询各结算月工单摘要（跨月结算明细）' })
+  async findByOrderNo(
+    @Query('orderNo') orderNo: string,
+    @Query('shopId') shopId?: string,
+  ) {
+    const data = await this.workOrderService.findSettlementsByOrderNo(orderNo, shopId);
     return ApiRes.success(data);
   }
 
@@ -450,7 +462,17 @@ export class WorkOrderController {
   ) {
     // 数据权限：仅返回当前用户有权访问的门店（在岗期内）的重复工单
     const orderScope = await this.userShopService.getOrderAccessScope(req.user.uid);
+    const viewCustomer = await this.userShopService.canViewCustomerInfo(req.user.uid);
     const data = await this.mergeService.findDuplicateOrders(orderNo, excludeId, orderScope, settlementMonth);
+    // 客户信息脱敏：与工单列表/详情同一口径（完结数据脱敏）
+    if (!viewCustomer) {
+      for (const record of data || []) {
+        if (record.status === 'SETTLED' || record.status === 'VOID' || (record as any)._isSealed) {
+          record.customerName = maskCustomerName(record.customerName);
+          record.phone = maskPhone(record.phone);
+        }
+      }
+    }
     return ApiRes.success(data);
   }
 
@@ -597,9 +619,11 @@ export class WorkOrderController {
   @Get(':id')
   @ApiOperation({ summary: '获取工单详情(含项目和图片)' })
   async findById(@Param('id') id: string, @Request() req: AuthenticatedRequest) {
-    await this.userShopService.assertWorkOrderAccess(req.user.uid, id);
-    const data = await this.workOrderService.findById(id);
-    return ApiRes.success(data);
+    // 详情为只读查看：跨月结算关联工单放行（返回 _viewOnly 供前端隐藏修改入口）
+    const fullAccess = await this.userShopService.assertWorkOrderViewAccess(req.user.uid, id);
+    const viewCustomer = await this.userShopService.canViewCustomerInfo(req.user.uid);
+    const data = await this.workOrderService.findById(id, viewCustomer);
+    return ApiRes.success(fullAccess ? data : { ...data, _viewOnly: true });
   }
 
   @Post(':id/items')
@@ -697,6 +721,7 @@ export class WorkOrderController {
   }
 
   @Get('export')
+  @UsePermissions({ resource: 'paint:work-order', action: 'export' })
   @ApiOperation({ summary: '导出Excel台账' })
   async exportExcel(
     @Query('shopId') shopId: string,

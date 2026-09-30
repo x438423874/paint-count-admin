@@ -7,6 +7,11 @@ import type { MyScope } from '@/api/paint'
  */
 let scopePromise: Promise<MyScope | null> | null = null
 
+/** 退出/切换账号后调用：清除 my-scope 会话缓存，避免新账号读到上一账号的数据权限与在岗期 */
+export function resetScopeCache(): void {
+  scopePromise = null
+}
+
 export function getMyScopeCached(): Promise<MyScope | null> {
   if (!scopePromise) {
     scopePromise = getMyScope()
@@ -47,4 +52,22 @@ export function latestTenureMonth(scope: MyScope | null | undefined): string | n
     if (monthInTenure(m, scope)) return m
   }
   return null
+}
+
+/** 最早的入职月份（各绑定在岗开始时间的最小值，yyyy-MM）；超管/财务或未加载返回 null */
+export function earliestTenureMonth(scope: MyScope | null | undefined): string | null {
+  if (!scope || scope.kind !== 'tenure') return null
+  const months = scope.shops
+    .map(t => (t.startAt ? monthOf(t.startAt) : ''))
+    .filter(Boolean)
+  return months.length ? months.sort()[0] : null
+}
+
+/** 最早的入职时间（本地 Date）；超管/财务或未加载返回 null */
+export function earliestTenureDate(scope: MyScope | null | undefined): Date | null {
+  if (!scope || scope.kind !== 'tenure') return null
+  const times = scope.shops
+    .map(t => (t.startAt ? new Date(t.startAt).getTime() : Number.NaN))
+    .filter(t => !Number.isNaN(t))
+  return times.length ? new Date(Math.min(...times)) : null
 }

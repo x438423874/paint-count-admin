@@ -1,15 +1,17 @@
 <script setup lang="tsx">
-import { NButton, NPopconfirm, NTag, NInput, NSpace } from 'naive-ui';
-import { ref, onMounted } from 'vue';
+import { onMounted, ref } from 'vue';
 import { useRoute } from 'vue-router';
-import { fetchPaintVehiclePage, deletePaintVehicle } from '@/service/api';
+import { NButton, NInput, NPopconfirm, NSpace, NTag } from 'naive-ui';
+import { deletePaintVehicle, fetchPaintVehiclePage } from '@/service/api';
+import { useAppStore } from '@/store/modules/app';
 import { useTable, useTableOperate } from '@/hooks/common/table';
+import { canManageVehicle, canVehicleDelete, canVehicleUpdate } from '@/utils/permission';
 import VehicleOperateDrawer from './modules/vehicle-operate-drawer.vue';
 import VehicleHistoryDrawer from './modules/vehicle-history-drawer.vue';
-import { canEdit } from '@/utils/permission';
-import { useAppStore } from '@/store/modules/app';
 
-const allowEdit = canEdit();
+const allowCreate = canManageVehicle();
+const allowUpdate = canVehicleUpdate();
+const allowDelete = canVehicleDelete();
 const route = useRoute();
 const appStore = useAppStore();
 
@@ -51,7 +53,11 @@ const {
       title: '车牌号',
       align: 'center',
       width: 120,
-      render: (row: any) => <NTag type="primary" size="small">{row.plateNumber}</NTag>
+      render: (row: any) => (
+        <NTag type="primary" size="small">
+          {row.plateNumber}
+        </NTag>
+      )
     },
     {
       key: 'carModel',
@@ -96,7 +102,7 @@ const {
       title: '累计幅数',
       align: 'center',
       width: 100,
-      render: (row: any) => <span class="font-bold text-primary">{Number(row.totalPaintCount).toFixed(1)}</span>
+      render: (row: any) => <span class="text-primary font-bold">{Number(row.totalPaintCount).toFixed(1)}</span>
     },
     {
       key: 'lastOrderAt',
@@ -124,12 +130,12 @@ const {
           <NButton type="info" ghost size="small" onClick={() => openHistory(row)}>
             历史
           </NButton>
-          {allowEdit && (
+          {allowUpdate && (
             <NButton type="primary" ghost size="small" onClick={() => edit(row.id)}>
               编辑
             </NButton>
           )}
-          {allowEdit && (
+          {allowDelete && (
             <NPopconfirm onPositiveClick={() => handleDelete(row.id)}>
               {{
                 default: () => '删除车辆不会删除关联工单，仅解除关联。确认删除？',
@@ -147,15 +153,10 @@ const {
   ]
 });
 
-const {
-  drawerVisible,
-  operateType,
-  editingData,
-  handleAdd,
-  handleEdit,
-  checkedRowKeys,
-  onDeleted
-} = useTableOperate(data as any, getData);
+const { drawerVisible, operateType, editingData, handleAdd, handleEdit, checkedRowKeys, onDeleted } = useTableOperate(
+  data as any,
+  getData
+);
 
 function edit(id: string) {
   handleEdit(id);
@@ -248,7 +249,7 @@ onMounted(() => {
           @add="handleAdd"
           @refresh="getData"
         >
-          <template v-if="allowEdit" #default>
+          <template v-if="allowCreate" #default>
             <NButton size="small" ghost type="primary" @click="handleAdd">
               <template #icon>
                 <icon-ic-round-plus class="text-icon" />
@@ -281,10 +282,7 @@ onMounted(() => {
       @submitted="getDataByPage"
     />
 
-    <VehicleHistoryDrawer
-      v-model:visible="historyVisible"
-      :vehicle="historyVehicle"
-    />
+    <VehicleHistoryDrawer v-model:visible="historyVisible" :vehicle="historyVehicle" />
   </div>
 </template>
 

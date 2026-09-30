@@ -40,7 +40,8 @@ const { columns, columnChecks, data, loading, getData, getDataByPage } = useTabl
       render: row => {
         const tagMap: Record<Api.SystemManage.MenuType, NaiveUI.ThemeColor> = {
           directory: 'default',
-          menu: 'primary'
+          menu: 'primary',
+          button: 'warning'
         };
 
         const label = $t(menuTypeRecord[row.menuType]);
@@ -79,16 +80,25 @@ const { columns, columnChecks, data, loading, getData, getDataByPage } = useTabl
       }
     },
     {
+      key: 'permission',
+      title: $t('page.manage.menu.permission'),
+      align: 'center',
+      minWidth: 180,
+      render: row => row.permission || '-'
+    },
+    {
       key: 'routeName',
       title: $t('page.manage.menu.routeName'),
       align: 'center',
-      minWidth: 120
+      minWidth: 120,
+      render: row => row.routeName || '-'
     },
     {
       key: 'routePath',
       title: $t('page.manage.menu.routePath'),
       align: 'center',
-      minWidth: 120
+      minWidth: 120,
+      render: row => row.routePath || '-'
     },
     {
       key: 'status',
@@ -147,9 +157,9 @@ const { columns, columnChecks, data, loading, getData, getDataByPage } = useTabl
       width: 230,
       render: row => (
         <div class="flex-center justify-end gap-8px">
-          {row.menuType === 'directory' && (
+          {(row.menuType === 'directory' || row.menuType === 'menu') && (
             <NButton type="primary" ghost size="small" onClick={() => handleAddChildMenu(row)}>
-              {$t('page.manage.menu.addChildMenu')}
+              {row.menuType === 'menu' ? '添加按钮' : $t('page.manage.menu.addChildMenu')}
             </NButton>
           )}
           <NButton type="primary" ghost size="small" onClick={() => handleEdit(row)}>
@@ -246,7 +256,7 @@ const allPages = ref<string[]>([]);
         :data="data"
         size="small"
         :flex-height="!appStore.isMobile"
-        :scroll-x="1088"
+        :scroll-x="1260"
         :loading="loading"
         :row-key="row => row.id"
         remote

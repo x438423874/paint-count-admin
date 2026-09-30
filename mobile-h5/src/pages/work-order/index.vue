@@ -7,6 +7,7 @@ import {
   getWorkOrderPage,
   getWorkOrderStatusCounts,
   exportWorkOrderExcel,
+  getWorkOrderSettlements,
   mergeWorkOrders,
   ocrRecognizeImage,
   updateWorkOrder,
@@ -19,12 +20,15 @@ import { showNotify } from 'vant'
 import { compressImage } from '@/utils/image-compress'
 import { fetchImageAsFile } from '@/composables/useImageUpload'
 import { recentMonthOptions } from '@/utils/month-options'
-import { canBatchOcr as canBatchOcrRole, canEdit as canEditRole } from '@/utils/permission'
+import { canBatchOcr as canBatchOcrRole, canEdit as canEditRole, canSettle, canManageVehicle, canExportWorkOrder } from '@/utils/permission'
 import { useShopOptions } from '@/composables/useShopOptions'
 
 const router = useRouter()
 const allowBatchOcr = canBatchOcrRole()
 const allowEdit = canEditRole()
+const allowSettle = canSettle()
+const allowVehicle = canManageVehicle()
+const allowExport = canExportWorkOrder()
 
 const searchForm = reactive({
   plateNumber: '',
@@ -82,7 +86,14 @@ const monthColumns = computed(() => recentMonthOptions({ includeAll: true, scope
 
 // ==================== 数据可见范围提示（在岗期口径） ====================
 
-const scopeHintDismissed = ref(false)
+// 数据范围提示的关闭状态按「登录会话」存储：本次登录内关闭不再显示，重新登录后恢复
+const SCOPE_HINT_DISMISS_KEY = 'paint-h5-wo-scope-hint-dismissed'
+const scopeHintDismissed = ref(!!sessionStorage.getItem(SCOPE_HINT_DISMISS_KEY))
+
+function dismissScopeHint() {
+  scopeHintDismissed.value = true
+  sessionStorage.setItem(SCOPE_HINT_DISMISS_KEY, '1')
+}
 
 const scopeHintText = computed(() => {
   if (!scope.value || scope.value.kind !== 'tenure')
@@ -132,6 +143,28 @@ async function loadStatusCounts() {
   }
 }
 
+function buildOrderParams(page: number) {
+  const params: any = {
+    current: page,
+    size,
+  }
+  if (searchForm.plateNumber)
+    params.plateNumber = searchForm.plateNumber
+  if (searchForm.shopId)
+    params.shopId = searchForm.shopId
+  if (searchForm.settlementMonth)
+    params.settlementMonth = searchForm.settlementMonth
+  if (searchForm.status)
+    params.status = searchForm.status
+  if (searchForm.isRework !== undefined)
+    params.isRework = searchForm.isRework
+  if (searchForm.categoryId)
+    params.categoryId = searchForm.categoryId
+  if (searchForm.isNewPart !== undefined)
+    params.isNewPart = searchForm.isNewPart
+  return params
+}
+
 async function loadOrders(reset = false) {
   if (loading.value)
     return
@@ -146,24 +179,7 @@ async function loadOrders(reset = false) {
 
   loading.value = true
   try {
-    const params: any = {
-      current: current.value,
-      size,
-    }
-    if (searchForm.plateNumber)
-      params.plateNumber = searchForm.plateNumber
-    if (searchForm.shopId)
-      params.shopId = searchForm.shopId
-    if (searchForm.settlementMonth)
-      params.settlementMonth = searchForm.settlementMonth
-    if (searchForm.status)
-      params.status = searchForm.status
-    if (searchForm.isRework !== undefined)
-      params.isRework = searchForm.isRework
-    if (searchForm.categoryId)
-      params.categoryId = searchForm.categoryId
-    if (searchForm.isNewPart !== undefined)
-      params.isNewPart = searchForm.isNewPart
+    const params = buildOrderParams(current.value)
 
     const res = await getWorkOrderPage(params)
     const data = res as any as PageResult<PaintWorkOrder>
@@ -192,10 +208,96 @@ async function loadOrders(reset = false) {
   }
 }
 
+// ===== 列表脏标记：详情页/建单页删除或改状态后设置，列表返回时据此静默刷新 =====
+const LIST_DIRTY_KEY = 'work-order-list-dirty'
+
+function consumeListDirty(): boolean {
+  const dirty = sessionStorage.getItem(LIST_DIRTY_KEY) === '1'
+  if (dirty)
+    sessionStorage.removeItem(LIST_DIRTY_KEY)
+  return dirty
+}
+
+/**
+ * 静默重载已加载的各页（筛选条件不变，替换现有列表）：
+ * 修复详情页删除/改状态后 keepAlive 与 sessionStorage 缓存的列表行过期问题，
+ * 完成后尽量保持原滚动位置
+ */
+async function refreshLoadedOrdersSilently() {
+  if (loading.value)
+    return
+  const pages = Math.max(current.value, 1)
+  const prevScroll = window.scrollY || document.documentElement.scrollTop || 0
+  loading.value = true
+  try {
+    const collected: PaintWorkOrder[] = []
+    let total = totalPaintCount.value
+    let sawShortPage = false
+    for (let page = 1; page <= pages; page++) {
+      const res = await getWorkOrderPage(buildOrderParams(page))
+      const data = res as any as PageResult<PaintWorkOrder>
+      const list = data.records || []
+      total = data.totalPaintCount || 0
+      collected.push(...list)
+      if (list.length < size) {
+        sawShortPage = true
+        break
+      }
+    }
+    orders.value = collected
+    totalPaintCount.value = total
+    finished.value = sawShortPage
+    if (!sawShortPage)
+      current.value = pages
+    saveListState()
+    nextTick(() => window.scrollTo(0, prevScroll))
+  }
+  catch {
+    // 静默刷新失败时保留现有列表（状态计数仍会照常刷新）
+  }
+  finally {
+    loading.value = false
+  }
+}
+
 const exporting = ref(false)
 
-/** 导出当前门店/结算月的工单 Excel 台账 */
-async function onExport() {
+// 跨月结算明细弹层：点击「跨月结算·另结X幅」标签查看同单号各月已结工单
+const crossMonth = reactive({
+  show: false,
+  loading: false,
+  orderNo: '',
+  currentMonth: '',
+  list: [] as { id: string, settlementMonth: string | null, totalPaintCount: string, status: string }[],
+})
+
+async function openCrossMonth(order: PaintWorkOrder) {
+  crossMonth.orderNo = order.orderNo || ''
+  crossMonth.currentMonth = order.settlementMonth || ''
+  crossMonth.list = []
+  crossMonth.show = true
+  crossMonth.loading = true
+  try {
+    const res: any = await getWorkOrderSettlements(crossMonth.orderNo, searchForm.shopId || undefined)
+    crossMonth.list = (res as any) || []
+  }
+  catch (e: any) {
+    crossMonth.show = false
+    showNotify({ type: 'danger', message: e?.response?.data?.message || '查询失败' })
+  }
+  finally {
+    crossMonth.loading = false
+  }
+}
+
+// 导出方式选择：明细台账（含各部位列）/ 幅数汇总（只含总幅数），后端同接口按 mode 区分
+const showExportSheet = ref(false)
+const exportActions = [
+  { name: '导出明细台账', subname: '含日期、车型、车牌、工单号及各部位幅数列' },
+  { name: '导出幅数汇总', subname: '只含单号、车牌与总幅数' },
+]
+
+function onExport() {
   if (exporting.value)
     return
   if (!searchForm.shopId) {
@@ -203,13 +305,25 @@ async function onExport() {
     showFilterPopup.value = true
     return
   }
+  showExportSheet.value = true
+}
+
+function onExportSelect(_action: any, index: number) {
+  showExportSheet.value = false
+  doExport(index === 0 ? 'detail' : 'summary')
+}
+
+/** 按当前门店/结算月导出工单 Excel（mode=detail 台账明细 / summary 幅数汇总） */
+async function doExport(mode: 'detail' | 'summary') {
+  if (exporting.value)
+    return
   exporting.value = true
   try {
-    const blob: any = await exportWorkOrderExcel(searchForm.shopId, searchForm.settlementMonth || undefined)
+    const blob: any = await exportWorkOrderExcel(searchForm.shopId, searchForm.settlementMonth || undefined, mode)
     const url = URL.createObjectURL(blob instanceof Blob ? blob : new Blob([blob]))
     const a = document.createElement('a')
     a.href = url
-    a.download = `${getShopName(searchForm.shopId) || '工单'}_台账_${searchForm.settlementMonth || '全部'}.xlsx`
+    a.download = `${getShopName(searchForm.shopId) || '工单'}_${mode === 'summary' ? '幅数汇总' : '台账明细'}_${searchForm.settlementMonth || '全部'}.xlsx`
     document.body.appendChild(a)
     a.click()
     a.remove()
@@ -288,7 +402,7 @@ function formatDate(dateStr?: string) {
 
 // ===== 列表状态缓存 =====
 const LIST_STATE_KEY = 'work-order-list-state'
-const STATE_MAX_AGE = 5 * 60 * 1000
+const STATE_MAX_AGE = 30 * 60 * 1000
 // 标记是否已初始化（区分 onMounted 首次加载和 onActivated 重新激活）
 let hasInitialized = false
 
@@ -368,6 +482,12 @@ function initOnMounted() {
     sessionStorage.removeItem('work-order-detail-from-list')
     const restored = restoreListState()
     if (restored) {
+      // 详情页有删除/改状态等操作时行数据可能过期：
+      // 保留用户筛选条件与浏览位置，仅静默重载已加载页
+      // （等 restoreListState 的滚动恢复 nextTick 执行后再刷新，刷新前抓到的才是正确位置）
+      if (consumeListDirty()) {
+        void nextTick(() => refreshLoadedOrdersSilently())
+      }
       loadStatusCounts()
       return
     }
@@ -389,18 +509,24 @@ function initOnMounted() {
 function reactivateOnActivated(fromDetailExit: boolean) {
   if (fromDetailExit) {
     sessionStorage.removeItem('work-order-detail-from-list')
-    // 详情页可能修改了工单状态，刷新计数
+    // 详情页删除/改状态后，静默重载已加载页修复过期的列表行
+    const dirty = consumeListDirty()
     loadStatusCounts()
-    // 恢复滚动位置（keepAlive 内存缓存保留了列表，但滚动位置可能丢失）
-    const raw = sessionStorage.getItem(LIST_STATE_KEY)
-    if (raw) {
-      try {
-        const state = JSON.parse(raw)
-        if (state.timestamp && Date.now() - state.timestamp <= STATE_MAX_AGE) {
-          nextTick(() => window.scrollTo(0, state.scrollTop || 0))
+    if (dirty) {
+      void refreshLoadedOrdersSilently()
+    }
+    else {
+      // 恢复滚动位置（keepAlive 内存缓存保留了列表，但滚动位置可能丢失）
+      const raw = sessionStorage.getItem(LIST_STATE_KEY)
+      if (raw) {
+        try {
+          const state = JSON.parse(raw)
+          if (state.timestamp && Date.now() - state.timestamp <= STATE_MAX_AGE) {
+            nextTick(() => window.scrollTo(0, state.scrollTop || 0))
+          }
         }
+        catch { /* ignore */ }
       }
-      catch { /* ignore */ }
     }
   }
   // 重新设置 IntersectionObserver（组件可能经历了 onDeactivate -> onActivate）
@@ -601,20 +727,20 @@ const batchUnsettleLoading = ref(false)
 
 const settleableIds = computed(() => {
   return orders.value
-    .filter(o => checkedOrderIds.value.includes(o.id) && o.status === 'AUDITED')
+    .filter(o => checkedOrderIds.value.includes(o.id) && o.status === 'AUDITED' && !o._isSealed)
     .map(o => o.id)
 })
 
 const unsettleableIds = computed(() => {
   return orders.value
-    .filter(o => checkedOrderIds.value.includes(o.id) && o.status === 'SETTLED')
+    .filter(o => checkedOrderIds.value.includes(o.id) && o.status === 'SETTLED' && !o._isSealed)
     .map(o => o.id)
 })
 
 async function handleBatchSettle() {
   const ids = settleableIds.value
   if (ids.length === 0) {
-    showNotify({ type: 'warning', message: '选中的工单中没有可结算的（需为已审核状态）' })
+    showNotify({ type: 'warning', message: '选中的工单中没有可结算的（需为已审核且未封单）' })
     return
   }
   batchSettleLoading.value = true
@@ -640,7 +766,7 @@ async function handleBatchSettle() {
 async function handleBatchUnsettle() {
   const ids = unsettleableIds.value
   if (ids.length === 0) {
-    showNotify({ type: 'warning', message: '选中的工单中没有可取消结算的（需为已结算状态）' })
+    showNotify({ type: 'warning', message: '选中的工单中没有可取消结算的（需为已结算且未封单）' })
     return
   }
   batchUnsettleLoading.value = true
@@ -811,7 +937,7 @@ onActivated(() => {
           <van-icon name="filter-o" size="20" color="var(--color-primary)" />
           <span class="filter-text">筛选</span>
         </div>
-        <div class="filter-trigger" @click="router.push({ name: 'Vehicle' })">
+        <div v-if="allowVehicle" class="filter-trigger" @click="router.push({ name: 'Vehicle' })">
           <van-icon name="logistics" size="20" color="var(--color-primary)" />
           <span class="filter-text">车辆</span>
         </div>
@@ -819,7 +945,7 @@ onActivated(() => {
           <van-icon name="photo-o" size="20" color="var(--color-primary)" />
           <span class="filter-text">图片池</span>
         </div>
-        <div class="filter-trigger" @click="onExport">
+        <div v-if="allowExport" class="filter-trigger" @click="onExport">
           <van-icon name="description" size="20" color="var(--color-primary)" />
           <span class="filter-text" :style="{ color: exporting ? 'var(--color-text-muted)' : 'var(--color-primary)' }">
             {{ exporting ? '导出中…' : '导出' }}
@@ -838,13 +964,12 @@ onActivated(() => {
     <van-notice-bar
       v-if="scopeHintText && !scopeHintDismissed"
       mode="closeable"
-      wrapable
-      :scrollable="false"
+      :scrollable="true"
       left-icon="info-o"
       :text="scopeHintText"
       color="#ed6a0c"
       background="#fffbe8"
-      @close="scopeHintDismissed = true"
+      @close="dismissScopeHint"
     />
 
     <!-- 状态标签 -->
@@ -904,8 +1029,17 @@ onActivated(() => {
                 <van-tag v-if="order._isDuplicate" type="warning" size="medium" @click.stop="openMergePopup(order)">
                   合并
                 </van-tag>
-                <van-tag v-if="order._hasOtherMonthSettlement" type="success" size="medium" class="cross-month-tag">
-                  跨月结算
+                <van-tag v-if="order._isSealed" type="primary" size="medium">
+                  已封单
+                </van-tag>
+                <van-tag
+                  v-if="order._hasOtherMonthSettlement"
+                  type="success"
+                  size="medium"
+                  class="cross-month-tag"
+                  @click.stop="openCrossMonth(order)"
+                >
+                  跨月结算·另结{{ order._otherMonthPaintCount ?? 0 }}幅
                 </van-tag>
                 <van-tag v-if="order._count?.images || order.images?.length" type="primary" size="medium">
                   <van-icon name="photo-o" size="12" />
@@ -986,7 +1120,7 @@ onActivated(() => {
           OCR ({{ ocrPendingSelectedCount }})
         </van-button>
       </div>
-      <div class="selection-row selection-actions">
+      <div v-if="allowSettle" class="selection-row selection-actions">
         <van-button type="success" size="small" round block :disabled="settleableIds.length === 0" :loading="batchSettleLoading" @click="handleBatchSettle">
           批量结算 ({{ settleableIds.length }})
         </van-button>
@@ -1119,6 +1253,45 @@ onActivated(() => {
         </div>
       </div>
     </van-popup>
+
+    <!-- 跨月结算明细弹层 -->
+    <van-popup v-model:show="crossMonth.show" position="center" round class="cross-month-popup">
+      <div class="cross-month-title">跨月结算明细</div>
+      <div class="cross-month-sub">{{ crossMonth.orderNo }}</div>
+      <div v-if="crossMonth.loading" class="cross-month-loading">
+        <van-loading size="20">加载中…</van-loading>
+      </div>
+      <template v-else>
+        <div
+          v-for="item in crossMonth.list"
+          :key="item.id"
+          class="cross-month-item"
+          @click="goToDetail(item.id)"
+        >
+          <div class="cm-month">
+            {{ item.settlementMonth || '未结算' }}
+            <span
+              v-if="(item.settlementMonth || '') === crossMonth.currentMonth"
+              class="cm-current-tag"
+            >当前</span>
+          </div>
+          <div class="cm-count">{{ Number(item.totalPaintCount || 0) }} 幅</div>
+          <div class="cm-status">
+            <OrderStatusTag :status="item.status" size="medium" />
+          </div>
+        </div>
+        <div v-if="!crossMonth.list.length" class="cross-month-empty">暂无结算记录</div>
+      </template>
+    </van-popup>
+
+    <!-- 导出方式选择 -->
+    <van-action-sheet
+      v-model:show="showExportSheet"
+      :actions="exportActions"
+      cancel-text="取消"
+      close-on-click-action
+      @select="onExportSelect"
+    />
 
     <!-- 批量 OCR 弹窗 -->
     <van-popup
@@ -1883,5 +2056,73 @@ onActivated(() => {
 .merge-actions {
   padding: 12px 16px 24px;
   border-top: 1px solid var(--color-border);
+}
+
+.cross-month-popup {
+  width: 86%;
+  padding: 16px;
+
+  .cross-month-title {
+    font-size: 16px;
+    font-weight: 600;
+    text-align: center;
+  }
+
+  .cross-month-sub {
+    margin-top: 4px;
+    margin-bottom: 12px;
+    color: var(--color-text-secondary, #999);
+    font-size: 12px;
+    text-align: center;
+    word-break: break-all;
+  }
+
+  .cross-month-loading {
+    padding: 24px 0;
+    text-align: center;
+  }
+
+  .cross-month-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 4px;
+    border-bottom: 1px solid var(--color-border, #f0f0f0);
+    cursor: pointer;
+
+    &:active {
+      background: var(--color-fill-1, #f5f5f5);
+    }
+
+    &:last-of-type {
+      border-bottom: none;
+    }
+
+    .cm-month {
+      font-size: 14px;
+
+      .cm-current-tag {
+        display: inline-block;
+        margin-left: 6px;
+        padding: 1px 6px;
+        border-radius: 4px;
+        background: var(--color-primary-light, #e6f4ff);
+        color: var(--color-primary, #1677ff);
+        font-size: 11px;
+      }
+    }
+
+    .cm-count {
+      color: var(--color-success, #52c41a);
+      font-weight: 600;
+    }
+  }
+
+  .cross-month-empty {
+    padding: 24px 0;
+    color: var(--color-text-secondary, #999);
+    font-size: 13px;
+    text-align: center;
+  }
 }
 </style>

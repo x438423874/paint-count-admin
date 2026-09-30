@@ -47,7 +47,7 @@ export function refreshTokenApi(refreshToken: string) {
 export interface UserProfile {
   userId: string
   username: string
-  nickName?: string
+  realName?: string
   phoneNumber?: string
   email?: string
   avatar?: string
@@ -58,8 +58,8 @@ export function getUserProfile() {
   return request.get<UserProfile>('/auth/profile')
 }
 
-/** 修改个人资料（仅昵称/手机号/邮箱） */
-export function updateUserProfile(data: { nickName?: string, phoneNumber?: string, email?: string }) {
+/** 修改个人资料（仅姓名/手机号/邮箱） */
+export function updateUserProfile(data: { realName?: string, phoneNumber?: string, email?: string }) {
   return request.put<UserProfile>('/auth/profile', data)
 }
 

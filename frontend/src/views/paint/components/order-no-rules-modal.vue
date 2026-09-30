@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue';
-import { NModal, NSpace, NAlert, NEmpty, NFormItem, NInput, NInputNumber, NButton } from 'naive-ui';
-import { fetchOrderNoRules, saveOrderNoRules, analyzeOrderNoRules, type OrderNoRule } from '@/service/api';
+import { NAlert, NButton, NEmpty, NFormItem, NInput, NInputNumber, NModal, NSpace } from 'naive-ui';
+import { type OrderNoRule, analyzeOrderNoRules, fetchOrderNoRules, saveOrderNoRules } from '@/service/api';
 
 const props = defineProps<{
   show: boolean;
@@ -18,9 +18,12 @@ const editingRules = ref<OrderNoRule[]>([]);
 const loading = ref(false);
 const saving = ref(false);
 
-watch(() => props.show, (visible) => {
-  if (visible && props.shopId) loadRules();
-});
+watch(
+  () => props.show,
+  visible => {
+    if (visible && props.shopId) loadRules();
+  }
+);
 
 async function loadRules() {
   loading.value = true;

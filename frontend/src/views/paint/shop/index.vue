@@ -1,12 +1,12 @@
 <script setup lang="tsx">
-import { NButton, NTag, NSpace, NSelect, NInput, NText, NDropdown } from 'naive-ui';
-import { ref, computed } from 'vue';
-import { fetchPaintShopPage, deletePaintShop, fetchStandardTemplateList, applyTemplateToShop } from '@/service/api';
+import { computed, ref } from 'vue';
+import { NButton, NDropdown, NInput, NSelect, NSpace, NTag, NText } from 'naive-ui';
+import { applyTemplateToShop, deletePaintShop, fetchPaintShopPage, fetchStandardTemplateList } from '@/service/api';
 import { useTable, useTableOperate } from '@/hooks/common/table';
-import ShopOperateDrawer from './modules/shop-operate-drawer.vue';
+import { canEdit, canManageShop } from '@/utils/permission';
 import OrderNoRulesModal from '../components/order-no-rules-modal.vue';
 import ExcelConfigModal from '../components/excel-config-modal.vue';
-import { canManageShop, canEdit } from '@/utils/permission';
+import ShopOperateDrawer from './modules/shop-operate-drawer.vue';
 
 // 权限控制：门店的创建/编辑/删除仅超管可操作
 const allowManageShop = computed(() => canManageShop());
@@ -83,23 +83,41 @@ const {
       width: 180,
       render: (row: any) => {
         if (row.standardTemplate?.name) {
-          return <NTag type="success" size="small">{row.standardTemplate.name}</NTag>;
+          return (
+            <NTag type="success" size="small">
+              {row.standardTemplate.name}
+            </NTag>
+          );
         }
         return (
           <NSpace align="center" size={4}>
-            <NTag size="small" type="warning">未关联</NTag>
+            <NTag size="small" type="warning">
+              未关联
+            </NTag>
             {allowManageShop.value && showTemplateSelect.value === row.id ? (
               <NSelect
                 size="small"
                 style="width: 140px"
                 placeholder="选择模板"
-                options={templates.value.map(t => ({ label: t.version ? `${t.name}(v${t.version})` : t.name, value: t.id }))}
+                options={templates.value.map(t => ({
+                  label: t.version ? `${t.name}(v${t.version})` : t.name,
+                  value: t.id
+                }))}
                 loading={associating.value === row.id}
                 onUpdateValue={(val: string) => handleAssociateTemplate(row.id, val)}
-                onBlur={() => { showTemplateSelect.value = ''; }}
+                onBlur={() => {
+                  showTemplateSelect.value = '';
+                }}
               />
             ) : allowManageShop.value ? (
-              <NButton type="primary" text size="tiny" onClick={() => { showTemplateSelect.value = row.id; }}>
+              <NButton
+                type="primary"
+                text
+                size="tiny"
+                onClick={() => {
+                  showTemplateSelect.value = row.id;
+                }}
+              >
                 关联
               </NButton>
             ) : null}
@@ -134,11 +152,7 @@ const {
               </NButton>
             )}
             {moreOptions.length > 0 && (
-              <NDropdown
-                trigger="click"
-                options={moreOptions}
-                onSelect={(key: string) => handleActionSelect(key, row)}
-              >
+              <NDropdown trigger="click" options={moreOptions} onSelect={(key: string) => handleActionSelect(key, row)}>
                 <NButton size="small">更多</NButton>
               </NDropdown>
             )}
@@ -149,15 +163,10 @@ const {
   ]
 });
 
-const {
-  drawerVisible,
-  operateType,
-  editingData,
-  handleAdd,
-  handleEdit,
-  checkedRowKeys,
-  onDeleted
-} = useTableOperate(data as any, getData);
+const { drawerVisible, operateType, editingData, handleAdd, handleEdit, checkedRowKeys, onDeleted } = useTableOperate(
+  data as any,
+  getData
+);
 
 function edit(id: string) {
   handleEdit(id);
@@ -271,7 +280,7 @@ function handleActionSelect(key: string, row: any) {
 
       <NSpace align="center" :wrap="true" :size="[16, 12]" class="mb-12px">
         <NSpace align="center" :size="6">
-          <NText depth="3" style="white-space: nowrap;">门店名称</NText>
+          <NText depth="3" style="white-space: nowrap">门店名称</NText>
           <NInput
             :value="searchParams.name || ''"
             placeholder="搜索门店名称"
@@ -282,7 +291,7 @@ function handleActionSelect(key: string, row: any) {
           />
         </NSpace>
         <NSpace align="center" :size="6">
-          <NText depth="3" style="white-space: nowrap;">品牌</NText>
+          <NText depth="3" style="white-space: nowrap">品牌</NText>
           <NInput
             :value="searchParams.brand || ''"
             placeholder="搜索品牌"
@@ -293,12 +302,17 @@ function handleActionSelect(key: string, row: any) {
           />
         </NSpace>
         <NButton type="primary" @click="getDataByPage()">搜索</NButton>
-        <NButton @click="resetSearchParams(); getDataByPage()">重置</NButton>
+        <NButton
+          @click="
+            resetSearchParams();
+            getDataByPage();
+          "
+        >
+          重置
+        </NButton>
       </NSpace>
 
-      <NAlert type="info" class="mb-12px">
-        未关联模板的门店可直接点击"关联"按钮一键选择模板，无需进入编辑页面。
-      </NAlert>
+      <NAlert type="info" class="mb-12px">未关联模板的门店可直接点击"关联"按钮一键选择模板，无需进入编辑页面。</NAlert>
 
       <NDataTable
         v-model:checked-row-keys="checkedRowKeys"
@@ -312,14 +326,12 @@ function handleActionSelect(key: string, row: any) {
         remote
         :row-key="(row: any) => row.id"
         :pagination="mobilePagination"
-        class="sm:h-full paint-table"
+        class="paint-table sm:h-full"
       >
         <template #empty>
           <EmptyState description="暂无门店数据">
             <template #action>
-              <NButton v-if="allowManageShop" text type="primary" size="small" @click="handleAdd">
-                点击新增门店
-              </NButton>
+              <NButton v-if="allowManageShop" text type="primary" size="small" @click="handleAdd">点击新增门店</NButton>
             </template>
           </EmptyState>
         </template>

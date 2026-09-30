@@ -7,6 +7,10 @@ import {
   logout as userLogout,
 } from '@/api/user'
 import useDictStore from './dict'
+import useRouteCacheStore from './routeCache'
+import { resetScopeCache } from '@/utils/tenure'
+import { resetPermsCache } from '@/utils/permission'
+import { clearLoginCredential } from '@/utils/auth'
 
 const InitUserInfo: UserState = {
   uid: 0,
@@ -65,8 +69,7 @@ export const useUserStore = defineStore('user', () => {
     finally {
       clearToken()
       setInfo({ ...InitUserInfo })
-      // 切换账号后门店等字典缓存必须失效：不同账号可见门店（数据权限）不同
-      useDictStore().invalidateShops()
+      clearLocalSession()
     }
   }
 
@@ -79,5 +82,22 @@ export const useUserStore = defineStore('user', () => {
 }, {
   persist: true,
 })
+
+/**
+ * 清除本地会话遗留数据（退出登录 / token 失效强制登出共用）：
+ * - 模块级缓存：my-scope（数据权限/在岗期）、权限点
+ * - 门店字典缓存：不同账号可见门店不同，必须失效重拉
+ * - keep-alive 页面实例：上一账号的列表/筛选/滚动位置不能带给新账号
+ * - 临时会话数据：列表筛选状态、来源标记等
+ * - 记住的账号密码：属于上一账号
+ */
+export function clearLocalSession() {
+  resetScopeCache()
+  resetPermsCache()
+  useDictStore().invalidateShops()
+  useRouteCacheStore().resetRouteCaches()
+  sessionStorage.clear()
+  clearLoginCredential()
+}
 
 export default useUserStore

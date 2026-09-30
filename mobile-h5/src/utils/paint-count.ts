@@ -63,3 +63,12 @@ export function normalizeOverridePaintCount(item: CreateWorkOrderItemDto): void 
     item.overridePaintCount = Number(Number(item.overridePaintCount).toFixed(2))
   }
 }
+
+/**
+ * 自动幅数显示格式：未选特殊漆保持 1 位小数；
+ * 选择特殊漆后系数可能产生 2 位小数（如 0.8 × 1.6 = 1.28），按 2 位精确显示（去尾零）
+ */
+export function formatAutoPaintCount(value: number, hasSpecialPaint?: boolean): string {
+  const text = hasSpecialPaint ? value.toFixed(2) : value.toFixed(1)
+  return text.includes('.') ? text.replace(/0+$/, '').replace(/\.$/, '') : text
+}

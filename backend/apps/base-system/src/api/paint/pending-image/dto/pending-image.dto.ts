@@ -1,6 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
-import { IsBoolean, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsBoolean, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
 import { PendingImageStatus } from '@prisma/client';
 
 /** 图片池分页查询 */
@@ -19,6 +19,8 @@ export class PagePendingImageDto {
 
 /** 人工指派到工单 */
 export class ManualMatchDto {
+  @IsString()
+  @IsNotEmpty({ message: '工单ID不能为空' })
   orderId: string;
 }
 

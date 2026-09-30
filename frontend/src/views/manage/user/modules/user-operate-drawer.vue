@@ -47,17 +47,34 @@ function createDefaultModel(): UserModel {
     username: '',
     password: '',
     domain: '',
-    nickName: '',
+    realName: '',
     phoneNumber: '',
     email: '',
     status: 'ENABLED'
   };
 }
 
-type RuleKey = Extract<keyof UserModel, 'username' | 'status'>;
+type RuleKey = Extract<keyof UserModel, 'username' | 'password' | 'status'>;
 
-const rules: Record<RuleKey, App.Global.FormRule> = {
-  username: defaultRequiredRule,
+const rules: Record<RuleKey, App.Global.FormRule | App.Global.FormRule[]> = {
+  username: [
+    { required: true, message: '请输入用户名' },
+    { min: 4, message: '用户名长度不能少于 4 个字符' }
+  ],
+  password: [
+    {
+      trigger: ['input', 'blur'],
+      validator: (_rule, value) => {
+        if (props.operateType === 'add' && !value) {
+          return new Error('请输入密码');
+        }
+        if (value && value.length < 6) {
+          return new Error('密码长度不能少于 6 个字符');
+        }
+        return true;
+      }
+    }
+  ],
   status: defaultRequiredRule
 };
 
@@ -89,7 +106,16 @@ function handleInitModel() {
   Object.assign(model, createDefaultModel());
 
   if (props.operateType === 'edit' && props.rowData) {
-    Object.assign(model, props.rowData);
+    const { id, username, realName, domain, phoneNumber, email, status } = props.rowData;
+    Object.assign(model, {
+      id,
+      username,
+      realName: realName ?? '',
+      domain: domain ?? '',
+      phoneNumber: phoneNumber ?? '',
+      email: email ?? '',
+      status
+    });
   }
 }
 
@@ -99,13 +125,20 @@ function closeDrawer() {
 
 async function handleSubmit() {
   await validate();
+  // 空字符串转 null：email/phone 有唯一索引，写空串会与其他空串用户冲突（NULL 不参与唯一比较）
+  const payload: UserModel = {
+    ...model,
+    realName: model.realName?.trim() || null,
+    phoneNumber: model.phoneNumber?.trim() || null,
+    email: model.email?.trim() || null
+  };
   // request
   if (props.operateType === 'add') {
-    const { error } = await createUser(model);
+    const { error } = await createUser(payload);
     if (error) return;
     window.$message?.success($t('common.addSuccess'));
   } else {
-    const { error } = await updateUser(model);
+    const { error } = await updateUser(payload);
     if (error) return;
     window.$message?.success($t('common.updateSuccess'));
   }
@@ -126,19 +159,28 @@ watch(visible, () => {
   <NDrawer v-model:show="visible" display-directive="show" :width="360">
     <NDrawerContent :title="title" :native-scrollbar="false" closable>
       <NForm ref="formRef" :model="model" :rules="rules">
-        <NFormItem :label="$t('page.manage.user.userName')" path="userName">
+        <NFormItem :label="$t('page.manage.user.userName')" path="username">
           <NInput v-model:value="model.username" :placeholder="$t('page.manage.user.form.userName')" />
         </NFormItem>
-        <NFormItem v-if="props.operateType === 'add'" :label="$t('page.manage.user.password')" path="password">
-          <NInput v-model:value="model.password" :placeholder="$t('page.manage.user.form.password')" />
+        <NFormItem
+          :label="$t('page.manage.user.password')"
+          path="password"
+          :rule="rules.password"
+        >
+          <NInput
+            v-model:value="model.password"
+            type="password"
+            show-password-on="click"
+            :placeholder="props.operateType === 'add' ? $t('page.manage.user.form.password') : '留空则不修改密码'"
+          />
         </NFormItem>
         <NFormItem v-if="props.operateType === 'add'" :label="$t('page.manage.user.domain')" path="domain">
           <NInput v-model:value="model.domain" :placeholder="$t('page.manage.user.form.domain')" />
         </NFormItem>
-        <NFormItem :label="$t('page.manage.user.nickName')" path="nickName">
-          <NInput v-model:value="model.nickName" :placeholder="$t('page.manage.user.form.nickName')" />
+        <NFormItem :label="$t('page.manage.user.realName')" path="realName">
+          <NInput v-model:value="model.realName" :placeholder="$t('page.manage.user.form.realName')" />
         </NFormItem>
-        <NFormItem :label="$t('page.manage.user.userPhone')" path="userPhone">
+        <NFormItem :label="$t('page.manage.user.userPhone')" path="phoneNumber">
           <NInput v-model:value="model.phoneNumber" :placeholder="$t('page.manage.user.form.userPhone')" />
         </NFormItem>
         <NFormItem :label="$t('page.manage.user.userEmail')" path="email">

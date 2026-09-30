@@ -26,7 +26,7 @@ export class AuthenticationController {
   constructor(private readonly authenticationService: AuthenticationService) {}
 
   @Public()
-  @Throttle({ default: { limit: 5, ttl: 60000 } }) // 每 IP 每分钟 5 次：防口令爆破
+  @Throttle({ default: { limit: 10, ttl: 60000 } }) // 每 IP 每分钟 10 次：防口令爆破
   @Post('login')
   @ApiOperation({
     summary: 'Password-based User Authentication',
@@ -50,7 +50,8 @@ export class AuthenticationController {
         dto.password,
         ip,
         region,
-        request.headers[USER_AGENT] ?? '',
+        // 微信等内置浏览器 UA 超长（380+），超列宽会导致 token 记录落库失败 → 半小时后续期 401 被登出
+        String(request.headers[USER_AGENT] ?? '').slice(0, 500),
         String(request.id),
         'PC',
         port,
@@ -78,7 +79,7 @@ export class AuthenticationController {
         refreshToken,
         ip,
         region,
-        request.headers[USER_AGENT] ?? '',
+        String(request.headers[USER_AGENT] ?? '').slice(0, 500),
         String(request.id),
         'PC',
         port,

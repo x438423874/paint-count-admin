@@ -33,6 +33,8 @@ export class Menu extends AggregateRoot implements IMenu {
   keepAlive?: boolean;
   href?: string;
   multiTab?: boolean;
+  /** 按钮型菜单的权限标识（resource:action） */
+  permission?: string;
   createdAt: Date;
   createdBy: string;
 

@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { getStatisticsOverview, getWorkOrderPage, getLatestSettlementMonth } from '@/api/paint'
 import type { StatisticsOverview, PaintWorkOrder, PageResult } from '@/api/types/paint'
-import { canEdit as canEditRole } from '@/utils/permission'
+import { canEdit as canEditRole, canManageVehicle } from '@/utils/permission'
 import { monthInTenure, latestTenureMonth, getMyScopeCached } from '@/utils/tenure'
 import type { MyScope } from '@/api/paint'
 import { useShopOptions } from '@/composables/useShopOptions'
 
 const allowEdit = canEditRole()
+const allowVehicle = canManageVehicle()
 
 const currentMonth = computed(() => {
   const now = new Date()
@@ -224,7 +225,7 @@ onMounted(async () => {
           </div>
           <span class="func-label">工单列表</span>
         </div>
-        <div class="func-item" @click="goToVehicle">
+        <div v-if="allowVehicle" class="func-item" @click="goToVehicle">
           <div class="func-icon func-success">
             <van-icon name="logistics" size="22" color="#fff" />
           </div>

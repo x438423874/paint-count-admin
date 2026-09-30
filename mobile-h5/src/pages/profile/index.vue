@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useUserStore } from '@/stores'
-import { canEdit as canEditRole } from '@/utils/permission'
+import { canEdit as canEditRole, canManageVehicle } from '@/utils/permission'
 import { confirmAction } from '@/composables/useConfirm'
 import { changePassword, getUserProfile, updateUserProfile } from '@/api/user'
 
@@ -9,18 +9,19 @@ const userStore = useUserStore()
 const userInfo = computed(() => userStore.userInfo)
 
 const allowCreate = canEditRole()
+const allowVehicle = canManageVehicle()
 
 const appVersion = ref('1.0.0')
 
 // ==================== 个人资料 ====================
-const profile = ref<{ nickName?: string, phoneNumber?: string, email?: string } | null>(null)
+const profile = ref<{ realName?: string, phoneNumber?: string, email?: string } | null>(null)
 const profileLoading = ref(false)
 
 async function loadProfile() {
   profileLoading.value = true
   try {
     const res: any = await getUserProfile()
-    profile.value = { nickName: res?.nickName || '', phoneNumber: res?.phoneNumber || '', email: res?.email || '' }
+    profile.value = { realName: res?.realName || '', phoneNumber: res?.phoneNumber || '', email: res?.email || '' }
   }
   catch {
     profile.value = null
@@ -32,20 +33,16 @@ async function loadProfile() {
 
 // ==================== 编辑资料 ====================
 const editPopup = reactive({ show: false, submitting: false })
-const editForm = reactive({ nickName: '', phoneNumber: '', email: '' })
+const editForm = reactive({ realName: '', phoneNumber: '', email: '' })
 
 function openEditProfile() {
-  editForm.nickName = profile.value?.nickName || ''
+  editForm.realName = profile.value?.realName || ''
   editForm.phoneNumber = profile.value?.phoneNumber || ''
   editForm.email = profile.value?.email || ''
   editPopup.show = true
 }
 
 async function submitProfile() {
-  if (!editForm.nickName.trim()) {
-    showNotify({ type: 'warning', message: '请输入昵称' })
-    return
-  }
   if (editForm.phoneNumber && !/^1[3-9]\d{9}$/.test(editForm.phoneNumber)) {
     showNotify({ type: 'warning', message: '手机号格式不正确' })
     return
@@ -53,11 +50,11 @@ async function submitProfile() {
   editPopup.submitting = true
   try {
     const res: any = await updateUserProfile({
-      nickName: editForm.nickName.trim(),
+      realName: editForm.realName.trim(),
       phoneNumber: editForm.phoneNumber || undefined,
       email: editForm.email || undefined,
     })
-    profile.value = { nickName: res?.nickName || '', phoneNumber: res?.phoneNumber || '', email: res?.email || '' }
+    profile.value = { realName: res?.realName || '', phoneNumber: res?.phoneNumber || '', email: res?.email || '' }
     editPopup.show = false
     showNotify({ type: 'success', message: '资料已更新' })
   }
@@ -140,7 +137,7 @@ function clearCache() {
         </div>
         <div class="user-detail">
           <div class="user-name">
-            {{ profile?.nickName || userInfo.nickname || userInfo.username || '未登录' }}
+            {{ userInfo.username || '未登录' }}
           </div>
           <div class="user-role">
             {{ userInfo.roles?.join('、') || '普通用户' }}
@@ -169,7 +166,7 @@ function clearCache() {
         </div>
         <span class="quick-text">数据统计</span>
       </div>
-      <div class="quick-item" @click="router.push({ name: 'Vehicle' })">
+      <div v-if="allowVehicle" class="quick-item" @click="router.push({ name: 'Vehicle' })">
         <div class="quick-icon purple">
           <van-icon name="logistics" size="22" color="#fff" />
         </div>
@@ -203,7 +200,7 @@ function clearCache() {
       <div class="popup-title">编辑资料</div>
       <van-form @submit="submitProfile">
         <van-cell-group inset>
-          <van-field v-model="editForm.nickName" label="昵称" placeholder="请输入昵称" required :maxlength="30" />
+          <van-field v-model="editForm.realName" label="姓名" placeholder="请输入姓名" :maxlength="30" />
           <van-field v-model="editForm.phoneNumber" label="手机号" placeholder="请输入手机号" type="tel" :maxlength="11" />
           <van-field v-model="editForm.email" label="邮箱" placeholder="请输入邮箱" />
         </van-cell-group>

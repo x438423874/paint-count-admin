@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { computed, reactive, watch, ref } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
 import {
+  createSpecialPaint,
   createStandardTemplate,
-  updateStandardTemplate,
+  deleteSpecialPaint,
   fetchPaintCategoryList,
   fetchSpecialPaintList,
-  createSpecialPaint,
-  deleteSpecialPaint
+  updateStandardTemplate
 } from '@/service/api';
 import { useFormRules, useNaiveForm } from '@/hooks/common/form';
 
@@ -43,7 +43,7 @@ const title = computed(() => {
 
 // 标准项目行：支持多选部位
 interface TemplateItem {
-  categoryIds: string[];  // 多选部位
+  categoryIds: string[]; // 多选部位
   coefficient: number;
   newPartAddition: number;
   alias: string;
@@ -107,9 +107,7 @@ async function loadSpecialPaints() {
 }
 
 // 部位多选选项
-const categoryOptions = computed(() =>
-  categories.value.map(c => ({ label: c.name, value: c.id }))
-);
+const categoryOptions = computed(() => categories.value.map(c => ({ label: c.name, value: c.id })));
 
 // 已被选中的部位ID集合（用于禁用已选项）
 const allSelectedCategoryIds = computed(() => {
@@ -134,9 +132,7 @@ function getCategoryOptions(currentCategoryIds: string[]) {
 
 // 显示部位名称，用/连接
 function getCategoryDisplayLabel(categoryIds: string[]): string {
-  return categoryIds
-    .map(id => categories.value.find(c => c.id === id)?.name || id)
-    .join(' / ');
+  return categoryIds.map(id => categories.value.find(c => c.id === id)?.name || id).join(' / ');
 }
 
 function addItem() {
@@ -311,7 +307,9 @@ watch(visible, () => {
         <!-- ==================== 标准项目 ==================== -->
         <NDivider title-placement="left">
           标准项目
-          <NTag type="info" size="small" round style="margin-left: 8px;">{{ model.items.filter(i => i.categoryIds.length > 0 && i.coefficient > 0).length }} 组</NTag>
+          <NTag type="info" size="small" round style="margin-left: 8px">
+            {{ model.items.filter(i => i.categoryIds.length > 0 && i.coefficient > 0).length }} 组
+          </NTag>
         </NDivider>
 
         <NButton type="primary" dashed block class="mb-12px" @click="addItem">
@@ -322,7 +320,7 @@ watch(visible, () => {
         <NCard v-for="(item, index) in model.items" :key="index" size="small" :bordered="true" class="mb-8px">
           <NGrid :cols="2" :x-gap="16" :y-gap="8">
             <NGridItem :span="2">
-              <div class="text-12px mb-4px" style="color: var(--n-text-color-3);">部位名称（可多选，自动用 / 连接）</div>
+              <div class="mb-4px text-12px" style="color: var(--n-text-color-3)">部位名称（可多选，自动用 / 连接）</div>
               <NSelect
                 v-model:value="item.categoryIds"
                 :options="getCategoryOptions(item.categoryIds)"
@@ -332,19 +330,35 @@ watch(visible, () => {
               />
             </NGridItem>
             <NGridItem>
-              <div class="text-12px mb-4px" style="color: var(--n-text-color-3);">幅数系数</div>
-              <NInputNumber v-model:value="item.coefficient" :min="0" :max="99.99" :step="0.1" size="small" placeholder="如：1.0" style="width: 100%;" />
+              <div class="mb-4px text-12px" style="color: var(--n-text-color-3)">幅数系数</div>
+              <NInputNumber
+                v-model:value="item.coefficient"
+                :min="0"
+                :max="99.99"
+                :step="0.1"
+                size="small"
+                placeholder="如：1.0"
+                style="width: 100%"
+              />
             </NGridItem>
             <NGridItem>
-              <div class="text-12px mb-4px" style="color: var(--n-text-color-3);">新件加幅</div>
-              <NInputNumber v-model:value="item.newPartAddition" :min="0" :max="9.99" :step="0.1" size="small" placeholder="如：0.5" style="width: 100%;" />
+              <div class="mb-4px text-12px" style="color: var(--n-text-color-3)">新件加幅</div>
+              <NInputNumber
+                v-model:value="item.newPartAddition"
+                :min="0"
+                :max="9.99"
+                :step="0.1"
+                size="small"
+                placeholder="如：0.5"
+                style="width: 100%"
+              />
             </NGridItem>
             <NGridItem>
-              <div class="text-12px mb-4px" style="color: var(--n-text-color-3);">别名</div>
+              <div class="mb-4px text-12px" style="color: var(--n-text-color-3)">别名</div>
               <NInput v-model:value="item.alias" size="small" placeholder="可选，门店特有名称" clearable />
             </NGridItem>
             <NGridItem>
-              <div class="flex items-center justify-end" style="height: 100%; padding-top: 18px;">
+              <div class="flex items-center justify-end" style="height: 100%; padding-top: 18px">
                 <NButton type="error" quaternary size="small" @click="removeItem(index)">
                   <template #icon><icon-ic-round-delete /></template>
                   删除
@@ -359,11 +373,12 @@ watch(visible, () => {
         <!-- ==================== 特殊车漆 ==================== -->
         <NDivider title-placement="left">
           特殊车漆
-          <NTag type="warning" size="small" round style="margin-left: 8px;">{{ model.specialPaints.length }} 种</NTag>
+          <NTag type="warning" size="small" round style="margin-left: 8px">{{ model.specialPaints.length }} 种</NTag>
         </NDivider>
 
         <NAlert type="info" :bordered="false" class="mb-8px">
-          特殊车漆作为倍数应用到工单明细，计算幅数时会乘以对应倍数。例如：水晶珍珠漆 x1.3，则该项目的幅数 = 基础幅数 x 1.3。
+          特殊车漆作为倍数应用到工单明细，计算幅数时会乘以对应倍数。例如：水晶珍珠漆 x1.3，则该项目的幅数 = 基础幅数 x
+          1.3。
         </NAlert>
 
         <NButton type="warning" dashed block class="mb-12px" @click="addSpecialPaint">
@@ -374,29 +389,44 @@ watch(visible, () => {
         <NCard v-for="(sp, spIndex) in model.specialPaints" :key="spIndex" size="small" :bordered="true" class="mb-8px">
           <NGrid :cols="2" :x-gap="16" :y-gap="8">
             <NGridItem>
-              <div class="text-12px mb-4px" style="color: var(--n-text-color-3);">车漆名称</div>
+              <div class="mb-4px text-12px" style="color: var(--n-text-color-3)">车漆名称</div>
               <NInput v-model:value="sp.name" size="small" placeholder="如：水晶珍珠漆" />
             </NGridItem>
             <NGridItem>
-              <div class="text-12px mb-4px" style="color: var(--n-text-color-3);">倍数</div>
-              <NInputNumber v-model:value="sp.multiplier" :min="1" :max="9.99" :step="0.1" :precision="2" size="small" style="width: 100%;">
+              <div class="mb-4px text-12px" style="color: var(--n-text-color-3)">倍数</div>
+              <NInputNumber
+                v-model:value="sp.multiplier"
+                :min="1"
+                :max="9.99"
+                :step="0.1"
+                :precision="2"
+                size="small"
+                style="width: 100%"
+              >
                 <template #prefix>x</template>
               </NInputNumber>
             </NGridItem>
             <NGridItem>
-              <div class="text-12px mb-4px" style="color: var(--n-text-color-3);">描述</div>
+              <div class="mb-4px text-12px" style="color: var(--n-text-color-3)">描述</div>
               <NInput v-model:value="sp.description" size="small" placeholder="如：水晶珍珠漆，幅数乘以1.3倍" />
             </NGridItem>
             <NGridItem>
               <div class="flex items-center justify-between">
-                <div style="flex: 1;">
-                  <div class="text-12px mb-4px" style="color: var(--n-text-color-3);">状态</div>
+                <div style="flex: 1">
+                  <div class="mb-4px text-12px" style="color: var(--n-text-color-3)">状态</div>
                   <NSwitch v-model:value="sp.isActive">
                     <template #checked>启用</template>
                     <template #unchecked>禁用</template>
                   </NSwitch>
                 </div>
-                <NButton type="error" quaternary size="small" class="ml-8px" style="margin-top: 18px;" @click="removeSpecialPaint(spIndex)">
+                <NButton
+                  type="error"
+                  quaternary
+                  size="small"
+                  class="ml-8px"
+                  style="margin-top: 18px"
+                  @click="removeSpecialPaint(spIndex)"
+                >
                   <template #icon><icon-ic-round-delete /></template>
                 </NButton>
               </div>

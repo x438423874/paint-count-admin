@@ -40,7 +40,7 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
   private async validateSessionAlive(payload: IAuthentication) {
     if (!payload.jti) {
       // 无会话标识的令牌视为非法（旧版本签发，随密钥轮换已全部失效）
-      throw new UnauthorizedException('Invalid session');
+      throw new UnauthorizedException('登录状态已失效，请重新登录');
     }
     try {
       const alive = await RedisUtility.instance.exists(
@@ -58,13 +58,13 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
   //TODO 此处可用class-validator验证处理
   assertIsIAuthentication(payload: any): asserts payload is IAuthentication {
     if (typeof payload.uid !== 'string') {
-      throw new UnauthorizedException('Invalid UID');
+      throw new UnauthorizedException('登录状态异常，请重新登录');
     }
     if (typeof payload.username !== 'string') {
-      throw new UnauthorizedException('Invalid username');
+      throw new UnauthorizedException('登录状态异常，请重新登录');
     }
     if (typeof payload.domain !== 'string') {
-      throw new UnauthorizedException('Invalid domain');
+      throw new UnauthorizedException('登录状态异常，请重新登录');
     }
   }
 

@@ -24,7 +24,8 @@ import { phoneRegex, plateNumberRegex, vinRegex } from '@/utils/validators'
 import { computeItemPaintCount, computeTotalPaintCount, formatAutoPaintCount, getPaintDecimalLength, normalizeOverridePaintCount } from '@/utils/paint-count'
 import { applyOcrFields } from '@/utils/ocr-fields'
 import { fetchImageAsFile, uploadCompressed } from '@/composables/useImageUpload'
-import { canAudit, canDelete, canEdit } from '@/utils/permission'
+import { canAbnormal, canAudit, canDelete, canEdit, canSettle } from '@/utils/permission'
+import { getMyScopeCached, earliestTenureDate } from '@/utils/tenure'
 import { analyzeOrderNoErrors } from '@/utils/order-no-rule'
 import { useShopOptions } from '@/composables/useShopOptions'
 import { orderStatusClass, orderStatusIcon, orderStatusLabel } from '@/constants/order-status'
@@ -32,6 +33,8 @@ import { confirmAction } from '@/composables/useConfirm'
 
 // 权限标志
 const allowAudit = canAudit()
+const allowSettle = canSettle()
+const allowAbnormal = canAbnormal()
 const allowDelete = canDelete()
 const allowEdit = canEdit()
 
@@ -50,16 +53,28 @@ const ocrCorrectionMode = ref(false)
 
 // 详情页操作栏：核心操作随状态常驻，次要操作收进「更多」面板
 const showMoreActions = ref(false)
+// 封单月份的工单只读：后端会拒绝修改，前端直接隐藏操作入口
+const sealed = computed(() => !!(order.value as any)?._isSealed)
+// 跨月结算关联的在岗期外工单：允许只读查看，但不可操作
+const viewOnly = computed(() => !!(order.value as any)?._viewOnly)
+// 客户信息脱敏：无查看客户权限者后端返回脱敏值，编辑表单隐藏客户字段
+const customerMasked = computed(() => !!(order.value as any)?._customerMasked)
+const readOnly = computed(() => sealed.value || viewOnly.value)
+const readOnlyNotice = computed(() =>
+  sealed.value ? '该结算月份已封单，工单不可审核、结算或修改' : '该工单不在您的在岗期间内，仅可查看'
+)
+
 const moreActions = computed(() => {
+  if (readOnly.value) return []
   const o = order.value
   const s = o?.status
   const list: { name: string, color?: string }[] = []
-  if (s && !isUnauditedStatus(s) && allowEdit && o.images && o.images.length) {
+  if (s && !isUnauditedStatus(s) && s !== 'SETTLED' && allowEdit && o.images && o.images.length) {
     list.push({ name: '修正OCR', color: 'var(--color-warning)' })
   }
   if (s && isAuditedStatus(s) && allowAudit) {
     list.push({ name: '取消审核', color: 'var(--color-warning)' })
-    list.push({ name: '标记异常', color: 'var(--color-warning)' })
+    if (allowAbnormal) list.push({ name: '标记异常', color: 'var(--color-warning)' })
   }
   if (s && isUnauditedStatus(s) && allowDelete) {
     list.push({ name: '删除', color: 'var(--color-danger)' })
@@ -116,13 +131,20 @@ const editForm = reactive({
 const editOrderNoError = ref('')
 const editPlateNumberError = ref('')
 const editVinError = ref('')
+// 车架号即时校验：非必填，填了就实时校验格式；错误保持显示直到修正或清空
+watch(() => editForm.vin, (v) => {
+  const val = (v || '').trim()
+  editVinError.value = val && !vinRegex.test(val.toUpperCase()) ? '车架号应为17位字母数字（不含I、O、Q）' : ''
+})
+
 const editPhoneError = ref('')
 const editOrderNoRules = ref<OrderNoRule[]>([])
 const ocrVinCorrectionMsg = ref('')
 
 // 校验正则统一维护在 utils/validators（车牌/手机号/车架号）
 
-// 日期选择器
+// 日期选择器（最早可选日期 = 员工入职时间；未加载/超管降级为 2020）
+const tenureMinDate = ref(new Date(2020, 0, 1))
 const showEditDatePicker = ref(false)
 const editDatePickerValues = ref<string[]>(['2024', '01', '01'])
 
@@ -213,9 +235,11 @@ async function loadDetail() {
       viewModeVehicle.value = null
     }
   }
-  catch {
+  catch (e: any) {
     order.value = null
     reworkRemarkInput.value = ''
+    // 加载失败不再静默：给出明确提示（含后端返回的原因）
+    showNotify({ type: 'danger', message: e?.message || '工单加载失败，请返回重试' })
   }
   finally {
     loading.value = false
@@ -578,7 +602,7 @@ async function saveEdit() {
     }
   }
 
-  // 校验车架号（非必填，填了则校验格式）
+  // 校验车架号（非必填，填了则校验格式；错误信息在字段下方保持显示）
   if (editForm.vin && editForm.vin.trim() && !vinRegex.test(editForm.vin.trim().toUpperCase())) {
     editVinError.value = '车架号应为17位字母数字（不含I、O、Q）'
     showNotify({ type: 'warning', message: editVinError.value })
@@ -756,6 +780,11 @@ function getEditItemName(index: number) {
   return std?.category?.name || std?.alias || item.categoryId || `项目${index + 1}`
 }
 
+/** 详情页发生删除/审核/结算/异常/返工等影响列表行的操作后标记，列表返回时据此静默刷新 */
+function markListDirty() {
+  sessionStorage.setItem('work-order-list-dirty', '1')
+}
+
 async function handleAudit() {
   if (!order.value)
     return
@@ -765,6 +794,7 @@ async function handleAudit() {
   }).then(async () => {
     try {
       await auditWorkOrder(order.value!.id)
+      markListDirty()
       showNotify({ type: 'success', message: '审核成功' })
       loadDetail()
     }
@@ -783,6 +813,7 @@ async function handleUnaudit() {
   }).then(async () => {
     try {
       await unauditWorkOrder(order.value!.id)
+      markListDirty()
       showNotify({ type: 'success', message: '已取消审核' })
       loadDetail()
     }
@@ -803,6 +834,7 @@ async function handleDelete() {
   }).then(async () => {
     try {
       await deleteWorkOrder(order.value!.id)
+      markListDirty()
       showNotify({ type: 'success', message: '已删除' })
       setTimeout(() => router.back(), 1000)
     }
@@ -823,6 +855,7 @@ async function handleSettle() {
   }).then(async () => {
     try {
       await settleWorkOrder(order.value!.id)
+      markListDirty()
       showNotify({ type: 'success', message: '结算成功' })
       await loadDetail()
     }
@@ -850,6 +883,7 @@ async function confirmAbnormal() {
     return
   try {
     await setAbnormal(order.value.id, abnormalFlag.value, abnormalRemarkInput.value || undefined)
+    markListDirty()
     showNotify({ type: 'success', message: abnormalFlag.value ? '已标记异常' : '已取消异常' })
     showAbnormalPopup.value = false
     await loadDetail()
@@ -872,6 +906,7 @@ async function toggleRework(isRework: boolean) {
       isRework,
       reworkRemark: isRework ? (reworkRemarkInput.value || undefined) : undefined,
     })
+    markListDirty()
     showNotify({ type: 'success', message: isRework ? '已标记返工' : '已取消返工' })
     await loadDetail()
   }
@@ -892,6 +927,7 @@ async function handleUnsettle() {
   }).then(async () => {
     try {
       await unsettleWorkOrder(order.value!.id)
+      markListDirty()
       showNotify({ type: 'success', message: '已取消结算' })
       await loadDetail()
     }
@@ -1021,16 +1057,25 @@ const viewPartCount = computed(() => {
   return order.value.items.reduce((sum, item) => sum + (item.quantity || 0), 0)
 })
 
-onMounted(() => {
+onMounted(async () => {
   orderId.value = (route.query.id as string) || ''
   window.scrollTo(0, 0)
   ensureShops()
   loadDetail()
+  const hire = earliestTenureDate(await getMyScopeCached())
+  if (hire) tenureMinDate.value = hire
 })
 </script>
 
 <template>
   <div class="detail-page">
+    <van-notice-bar
+      v-if="!loading && readOnly"
+      wrapable
+      :scrollable="false"
+      left-icon="info-o"
+      :text="readOnlyNotice"
+    />
     <div v-if="loading" class="loading-wrap">
       <div class="skeleton-card">
         <van-skeleton title avatar :row="2" />
@@ -1160,13 +1205,19 @@ onMounted(() => {
             style="margin: 0 16px 8px;"
           />
           <van-field v-model="editForm.carModel" label="车型" placeholder="请输入车型" />
-          <van-field v-model="editForm.vin" label="车架号" placeholder="请输入车架号(VIN)" :error-message="editVinError || ocrVinCorrectionMsg" @update:model-value="editVinError = ''; ocrVinCorrectionMsg = ''" />
+          <van-field
+              v-model="editForm.vin"
+              label="车架号"
+              placeholder="请输入车架号(VIN)"
+              :error-message="editVinError || ocrVinCorrectionMsg"
+              @update:model-value="ocrVinCorrectionMsg = ''"
+            />
           <van-notice-bar v-if="ocrVinCorrectionMsg" left-icon="warning-o" :text="ocrVinCorrectionMsg" background="var(--color-warning-bg)" color="var(--color-warning)" style="margin: 0 16px 8px;" />
           <van-field v-model="editForm.brand" label="品牌" placeholder="请输入品牌" />
           <van-cell title="工单日期" :value="editForm.orderDate || '请选择日期'" is-link @click="showEditDatePicker = true" />
           <van-cell title="结算月份" :value="editForm.settlementMonth || '请选择月份'" is-link @click="showEditSettlementMonthPicker = true" />
-          <van-field v-model="editForm.customerName" label="客户名称" placeholder="请输入客户名称" />
-          <van-field v-model="editForm.phone" label="联系电话" placeholder="请输入电话" type="tel" :error-message="editPhoneError" @update:model-value="editPhoneError = ''" />
+          <van-field v-if="!customerMasked" v-model="editForm.customerName" label="客户名称" placeholder="请输入客户名称" />
+          <van-field v-if="!customerMasked" v-model="editForm.phone" label="联系电话" placeholder="请输入电话" type="tel" :error-message="editPhoneError" @update:model-value="editPhoneError = ''" />
           <van-field v-model="editForm.remark" label="备注" type="textarea" placeholder="请输入备注" rows="2" />
         </div>
       </div>
@@ -1367,19 +1418,19 @@ onMounted(() => {
         <template v-else>
           <!-- 核心操作：随状态常驻 -->
           <div class="primary-actions">
-            <van-button v-if="isUnauditedStatus(order.status) && allowEdit" plain type="primary" @click="enterEdit">
+            <van-button v-if="isUnauditedStatus(order.status) && allowEdit && !readOnly" plain type="primary" @click="enterEdit">
               编辑
             </van-button>
-            <van-button v-if="isUnauditedStatus(order.status) && allowAudit" type="primary" @click="handleAudit">
+            <van-button v-if="isUnauditedStatus(order.status) && allowAudit && !readOnly" type="primary" @click="handleAudit">
               审核
             </van-button>
-            <van-button v-if="isAuditedStatus(order.status) && allowAudit" type="success" @click="handleSettle">
+            <van-button v-if="isAuditedStatus(order.status) && allowSettle && !readOnly" type="success" @click="handleSettle">
               结算
             </van-button>
-            <van-button v-if="order.status === 'SETTLED' && allowAudit" type="warning" @click="handleUnsettle">
+            <van-button v-if="order.status === 'SETTLED' && allowSettle && !readOnly" type="warning" @click="handleUnsettle">
               取消结算
             </van-button>
-            <van-button v-if="isAbnormalStatus(order.status) && allowAudit" type="danger" plain @click="openAbnormalPopup">
+            <van-button v-if="isAbnormalStatus(order.status) && allowAbnormal && !readOnly" type="danger" plain @click="openAbnormalPopup">
               取消异常
             </van-button>
           </div>
@@ -1433,7 +1484,7 @@ onMounted(() => {
       <van-date-picker
         v-model="editDatePickerValues"
         title="选择工单日期"
-        :min-date="new Date(2020, 0, 1)"
+        :min-date="tenureMinDate"
         :max-date="new Date()"
         @confirm="onEditDateConfirm"
         @cancel="showEditDatePicker = false"
@@ -1446,7 +1497,7 @@ onMounted(() => {
         v-model="editSettlementMonthPickerValue"
         title="选择结算月份"
         :columns-type="['year', 'month']"
-        :min-date="new Date(2020, 0, 1)"
+        :min-date="tenureMinDate"
         :max-date="new Date()"
         @confirm="onEditSettlementMonthConfirm"
         @cancel="showEditSettlementMonthPicker = false"

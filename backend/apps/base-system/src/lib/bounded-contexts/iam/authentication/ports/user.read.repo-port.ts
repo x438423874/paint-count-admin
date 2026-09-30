@@ -1,6 +1,6 @@
 import { PaginationResult } from '@lib/shared/prisma/pagination';
 
-import { UserProperties } from '../domain/user.read.model';
+import { UserPageItem, UserProperties } from '../domain/user.read.model';
 import { PageUsersQuery } from '../queries/page-users.query';
 
 export interface UserReadRepoPort {
@@ -12,7 +12,7 @@ export interface UserReadRepoPort {
 
   findUserByIdentifier(identifier: string): Promise<UserProperties | null>;
 
-  pageUsers(query: PageUsersQuery): Promise<PaginationResult<UserProperties>>;
+  pageUsers(query: PageUsersQuery): Promise<PaginationResult<UserPageItem>>;
 
   getUserByUsername(username: string): Promise<Readonly<UserProperties> | null>;
 

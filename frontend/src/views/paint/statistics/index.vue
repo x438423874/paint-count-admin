@@ -22,6 +22,7 @@ import {
   fetchLatestSettlementMonth,
   fetchStatisticsDashboard
 } from '@/service/api';
+import { canExportStatistics } from '@/utils/permission';
 import { useEcharts } from '@/hooks/common/echarts';
 import type { ECOption } from '@/hooks/common/echarts';
 import { useShopOptions } from '@/hooks/business/use-shop-options';
@@ -493,6 +494,7 @@ function updateCategoryChart() {
 // ===== 导出 =====
 
 const exporting = ref(false);
+const allowExport = canExportStatistics();
 
 async function handleExportCsv() {
   if (!selectedSettlementMonth.value) {
@@ -595,15 +597,15 @@ async function handleExportPdf() {
           @update:formatted-value="(val: string | undefined) => { selectedSettlementMonth = val || null; loadAllData(); }"
         />
         <NButton type="primary" :loading="loading" @click="loadAllData">查询</NButton>
-        <NButton type="info" :loading="exporting" @click="handleExportCsv">
+        <NButton v-if="allowExport" type="info" :loading="exporting" @click="handleExportCsv">
           <template #icon><icon-ic-outline-file-download /></template>
           导出CSV
         </NButton>
-        <NButton type="success" :loading="exporting" @click="handleExportExcel">
+        <NButton v-if="allowExport" type="success" :loading="exporting" @click="handleExportExcel">
           <template #icon><icon-ic-outline-file-download /></template>
           导出Excel
         </NButton>
-        <NButton type="warning" :loading="exporting" @click="handleExportPdf">
+        <NButton v-if="allowExport" type="warning" :loading="exporting" @click="handleExportPdf">
           <template #icon><icon-ic-outline-picture-as-pdf /></template>
           导出PDF
         </NButton>

@@ -340,7 +340,7 @@ async function confirmMatch(orderId: string) {
     matchModal.show = false;
     loadList();
   } catch (e: any) {
-    message.error(e?.message || '操作失败');
+    message.error(e?.response?.data?.message || e?.message || '操作失败');
   }
 }
 
@@ -523,13 +523,15 @@ onUnmounted(() => stopPolling());
             <NGridItem v-for="item in records" :key="item.id">
               <NCard size="small" :bordered="true" hoverable>
                 <template #cover>
-                  <NImage
-                    :src="getImageUrl(item.thumbnailUrl || item.url)"
-                    :preview-src="getImageUrl(item.url)"
-                    object-fit="cover"
-                    height="160"
-                    width="100%"
-                  />
+                  <div class="img-cover">
+                    <NImage
+                      :src="getImageUrl(item.thumbnailUrl || item.url)"
+                      :preview-src="getImageUrl(item.url)"
+                      object-fit="cover"
+                      height="160"
+                      width="100%"
+                    />
+                  </div>
                 </template>
                 <div class="mt-2">
                   <NSpace justify="space-between" align="center">
@@ -549,7 +551,7 @@ onUnmounted(() => stopPolling());
                     </NSpace>
                     <span class="text-xs text-gray-400">{{ item.settlementMonth || '未指定月份' }}</span>
                   </NSpace>
-                  <NDescriptions :column="1" size="small" label-placement="left" class="mt-1">
+                  <NDescriptions :column="1" size="small" label-placement="left" class="mt-1 desc-wrap">
                     <NDescriptionsItem label="工单号">{{ item.ocrOrderNo || '-' }}</NDescriptionsItem>
                     <NDescriptionsItem label="车牌">{{ item.ocrPlateNumber || '-' }}</NDescriptionsItem>
                     <NDescriptionsItem v-if="item.ocrVin" label="VIN">{{ item.ocrVin }}</NDescriptionsItem>
@@ -563,7 +565,7 @@ onUnmounted(() => stopPolling());
                   </div>
                 </div>
                 <template #action>
-                  <NSpace size="small" :wrap="false">
+                  <NSpace size="small" :wrap="true" class="card-action">
                     <NButton v-if="canCorrect(item)" size="tiny" @click="openCorrectModal(item)">修正</NButton>
                     <NButton v-if="allowEdit && ocrState(item) !== 'processing'" size="tiny" @click="onAutoMatch(item)">
                       匹配
@@ -729,5 +731,32 @@ onUnmounted(() => stopPolling());
 }
 .hover\:bg-gray-50:hover {
   background: #f9fafb;
+}
+
+/* 封面图裁剪，防止溢出卡片 */
+.img-cover {
+  height: 160px;
+  overflow: hidden;
+  background: #f5f5f5;
+}
+.img-cover :deep(.n-image),
+.img-cover :deep(.n-image img) {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* 操作按钮区允许换行，避免窄卡片下超出父级 */
+.card-action {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+
+/* 描述长文本（VIN/工单号）自动换行，避免溢出 */
+.desc-wrap :deep(.n-descriptions-table-content__content),
+.desc-wrap :deep(.n-descriptions-table-content),
+.desc-wrap :deep(.n-descriptions-table) {
+  word-break: break-all;
+  overflow-wrap: anywhere;
 }
 </style>

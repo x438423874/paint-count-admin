@@ -61,22 +61,22 @@ export class ComplexApiKeyService implements OnModuleInit, IApiKeyService {
 
     if (!algorithm) {
       throw new BadRequestException(
-        'Algorithm is required for signature verification.',
+        '缺少签名校验所需的算法参数',
       );
     }
 
     if (!Object.values(SignatureAlgorithm).includes(algorithm)) {
-      throw new BadRequestException(`Unsupported algorithm: ${algorithm}`);
+      throw new BadRequestException(`不支持的签名算法: ${algorithm}`);
     }
 
     if (!timestamp || !nonce || !signature) {
       throw new BadRequestException(
-        'Missing required fields for signature verification.',
+        '缺少签名校验所需参数',
       );
     }
 
     if (!this.isValidTimestamp(timestamp)) {
-      throw new BadRequestException('Invalid or expired timestamp.');
+      throw new BadRequestException('时间戳无效或已过期');
     }
 
     if (!(await this.isValidNonce(nonce))) {

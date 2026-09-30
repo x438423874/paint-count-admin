@@ -33,6 +33,8 @@ export type MenuOptionalProperties = Readonly<
     keepAlive: boolean | null;
     href: string | null;
     multiTab: boolean | null;
+    /** 按钮型菜单的权限标识（resource:action），目录/菜单为 null */
+    permission: string | null;
   }>
 >;
 

@@ -106,6 +106,7 @@ export class MenuController {
         dto.href,
         dto.multiTab,
         req.user.uid,
+        dto.permission ?? null,
       ),
     );
     return ApiRes.ok();
@@ -144,6 +145,7 @@ export class MenuController {
         dto.href,
         dto.multiTab,
         req.user.uid,
+        dto.permission ?? null,
       ),
     );
     return ApiRes.ok();

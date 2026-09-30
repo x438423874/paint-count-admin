@@ -517,11 +517,12 @@ export class WorkOrderExcelService {
         const finalRemark = remark && extraRemark ? `${remark}；${extraRemark}` : remark || extraRemark;
 
         if (orderNo) {
+          // 查重口径：orderNo + shopId + settlementMonth（同一结算月内不允许重复，跨结算月可重复）
           const existing = await this.prisma.paintWorkOrder.findFirst({
-            where: { orderNo, shopId },
+            where: { orderNo, shopId, settlementMonth: settlementMonth || null },
           });
           if (existing) {
-            results.errors.push(`行${r + 1}: 工单号${orderNo}已存在，跳过`);
+            results.errors.push(`行${r + 1}: 工单号${orderNo}在${settlementMonth || '未结算'}已存在，跳过`);
             results.failed++;
             continue;
           }
@@ -661,6 +662,10 @@ export class WorkOrderExcelService {
     const lastDataRow = firstDataRow + totalOrders - 1;
 
     let index = 0;
+    // 公式缓存值累计器：写公式时必须同时写 result（缓存值），
+    // 否则微信预览等不重算公式的查看器会把这些单元格显示为空白
+    let grandFormulaTotal = 0;
+    const itemTotals: number[] = new Array(config.items.length).fill(0);
     // 分批游标拉取工单，逐行写出：避免一次性把所有工单及 items 载入内存导致 OOM。
     // 每批仅保留 BATCH_SIZE 条工单在内存，写出后即释放。
     const BATCH_SIZE = 500;
@@ -753,15 +758,25 @@ export class WorkOrderExcelService {
           remark,
         ];
 
+        // 副数公式值 = 各部位幅数 + 备注列中的未匹配部位幅数（公式范围含备注列）
+        const rowFormulaValue = orderTotal + unmatchedTotal;
+        grandFormulaTotal += rowFormulaValue;
+        for (let i = 0; i < config.items.length; i++) {
+          itemTotals[i] += Number(itemValues[i]) || 0;
+        }
+
         const row = ws.addRow(rowValues);
         row.alignment = { vertical: 'middle' };
 
         if (!isSummary) {
-          // 每个工单幅数合计使用 SUM 公式（横向汇总部位列到备注列）
+          // 每个工单幅数合计使用 SUM 公式（横向汇总部位列到备注列），result 为缓存值供不重算公式的查看器显示
           const firstItemCol = ws.getColumn(7).letter;
           const remarkCol = ws.getColumn(remarkColNumber).letter;
           const currentRow = firstDataRow + index;
-          row.getCell(6).value = { formula: `SUM(${firstItemCol}${currentRow}:${remarkCol}${currentRow})` };
+          row.getCell(6).value = {
+            formula: `SUM(${firstItemCol}${currentRow}:${remarkCol}${currentRow})`,
+            result: rowFormulaValue,
+          };
         }
 
         // 备注列批注：未匹配项目明细 + 手动修改过的部位 + 原始备注
@@ -787,22 +802,33 @@ export class WorkOrderExcelService {
       cell.font = { bold: true };
     });
 
-    // 总幅数合计：纵向汇总每个工单的总幅数
+    // 总幅数合计：纵向汇总每个工单的总幅数（result 为缓存值，微信预览可直接显示）
     const totalCol = ws.getColumn(6).letter;
-    totalRow.getCell(6).value = { formula: `SUM(${totalCol}${firstDataRow}:${totalCol}${lastDataRow})` };
+    totalRow.getCell(6).value = {
+      formula: `SUM(${totalCol}${firstDataRow}:${totalCol}${lastDataRow})`,
+      result: grandFormulaTotal,
+    };
 
     // 各部位列合计（明细模式）
     if (!isSummary) {
       for (let i = 0; i < config.items.length; i++) {
         const itemCol = ws.getColumn(7 + i).letter;
-        totalRow.getCell(7 + i).value = { formula: `SUM(${itemCol}${firstDataRow}:${itemCol}${lastDataRow})` };
+        totalRow.getCell(7 + i).value = {
+          formula: `SUM(${itemCol}${firstDataRow}:${itemCol}${lastDataRow})`,
+          result: itemTotals[i] ?? 0,
+        };
       }
     }
 
     // 备注列合计（未匹配部位总幅数，明细模式）
     if (!isSummary) {
       const remarkCol = ws.getColumn(remarkColNumber).letter;
-      totalRow.getCell(remarkColNumber).value = { formula: `SUM(${remarkCol}${firstDataRow}:${remarkCol}${lastDataRow})` };
+      // 未匹配幅数合计 = 总幅数合计 - 各部位列合计
+      const remarkTotal = grandFormulaTotal - itemTotals.reduce((a, b) => a + b, 0);
+      totalRow.getCell(remarkColNumber).value = {
+        formula: `SUM(${remarkCol}${firstDataRow}:${remarkCol}${lastDataRow})`,
+        result: remarkTotal,
+      };
     }
 
     // 列宽

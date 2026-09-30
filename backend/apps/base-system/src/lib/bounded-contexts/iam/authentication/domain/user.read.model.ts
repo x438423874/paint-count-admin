@@ -9,7 +9,7 @@ export type UserEssentialProperties = Readonly<
     id: string;
     username: string;
     domain: string;
-    nickName: string;
+    realName: string | null;
     status: Status;
   }>
 >;
@@ -30,9 +30,34 @@ export type UserCreateProperties = UserProperties & CreationAuditInfoProperties;
 
 export type UserUpdateProperties = Omit<
   UserProperties,
-  'username' | 'password' | 'domain'
+  'password' | 'domain'
 > &
   CreationAuditInfoProperties;
+
+/** 用户分页列表项：用户字段 + 绑定角色名 + 绑定门店（含在岗期） */
+export type UserPageItem = UserProperties & {
+  roles: string[];
+  shops: {
+    shopId: string;
+    shopName: string;
+    startAt: Date;
+    endAt: Date | null;
+  }[];
+};
+
+export class UserShopBindingReadModel {
+  @ApiProperty({ description: 'Shop id' })
+  shopId: string;
+
+  @ApiProperty({ description: 'Shop name' })
+  shopName: string;
+
+  @ApiProperty({ description: 'Tenure start time' })
+  startAt: Date;
+
+  @ApiProperty({ description: 'Tenure end time, null means on duty', nullable: true })
+  endAt: Date | null;
+}
 
 export class UserReadModel extends UpdateAuditInfo {
   @ApiProperty({ description: 'The unique identifier of the user' })
@@ -44,8 +69,8 @@ export class UserReadModel extends UpdateAuditInfo {
   @ApiProperty({ description: 'Domain associated with the user' })
   domain: string;
 
-  @ApiProperty({ description: 'Nickname of the user' })
-  nickName: string;
+  @ApiProperty({ description: 'Real name of the user', nullable: true })
+  realName: string | null;
 
   @ApiProperty({
     description: 'Current status of the user',
@@ -61,4 +86,13 @@ export class UserReadModel extends UpdateAuditInfo {
 
   @ApiProperty({ description: 'Phone number of the user', nullable: true })
   phoneNumber: string | null;
+
+  @ApiProperty({ description: 'Role names bound to the user', type: [String] })
+  roles: string[];
+
+  @ApiProperty({
+    description: 'Shop bindings with tenure period',
+    type: [UserShopBindingReadModel],
+  })
+  shops: UserShopBindingReadModel[];
 }

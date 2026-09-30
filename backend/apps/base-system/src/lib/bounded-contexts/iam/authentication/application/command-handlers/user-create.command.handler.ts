@@ -38,13 +38,14 @@ export class UserCreateHandler
     const userCreateProperties: UserCreateProperties = {
       id: UlidGenerator.generate(),
       username: command.username,
-      nickName: command.nickName?.trim() || command.username,
+      realName: command.realName?.trim() || null,
       password: hashedPassword.getValue(),
       domain: command.domain?.trim() || 'built-in',
       status: Status.ENABLED,
       avatar: command.avatar,
-      email: command.email,
-      phoneNumber: command.phoneNumber,
+      // 唯一索引列：空串转 null，避免与其它空串用户撞唯一约束（NULL 不参与唯一比较）
+      email: command.email?.trim() || null,
+      phoneNumber: command.phoneNumber?.trim() || null,
       createdAt: new Date(),
       createdBy: command.uid,
     };

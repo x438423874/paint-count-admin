@@ -2,7 +2,24 @@ import type { AxiosError, AxiosInstance, AxiosRequestConfig, AxiosResponse, Inte
 import axios from 'axios'
 import { showNotify } from 'vant'
 import router from '@/router'
-import { clearToken, getRefreshToken, getToken, setRefreshToken, setToken } from '@/utils/auth'
+import { clearToken, getRefreshToken, getToken, setRefreshToken, setToken, clearLoginCredential } from '@/utils/auth'
+import { resetScopeCache } from '@/utils/tenure'
+import { resetPermsCache } from '@/utils/permission'
+
+/** token 失效强制登出时的本地清理（不经 user store，避免循环依赖） */
+function forcedLogoutCleanup() {
+  resetScopeCache()
+  resetPermsCache()
+  sessionStorage.clear()
+  clearLoginCredential()
+  // pinia 相关缓存：门店字典（随账号数据权限变化）、keep-alive 页面实例，异步清理防模块循环
+  import('@/stores')
+    .then(({ useDictStore, useRouteCacheStore }) => {
+      useDictStore().invalidateShops()
+      useRouteCacheStore().resetRouteCaches()
+    })
+    .catch(() => {})
+}
 
 export const REQUEST_TOKEN_KEY = 'Authorization'
 
@@ -160,8 +177,14 @@ async function tryProactiveRefresh(): Promise<boolean> {
 function errorHandler(error: RequestError): Promise<any> {
   if (error.response) {
     const { data = {}, status } = error.response
+    // 把后端返回的业务错误信息直接写到 error.message 上：
+    // 页面里统一的 e?.message 提示将显示后端的中文文案，
+    // 而不是 axios 默认的 "Request failed with status code xxx"
+    const backendMessage: string = (data as any)?.message || (data as any)?.msg || ''
+    if (backendMessage)
+      error.message = backendMessage
     if (status === 403) {
-      showNotify({ type: 'danger', message: (data && data.message) || '无权限' })
+      showNotify({ type: 'danger', message: backendMessage || '无权限' })
     }
     if (status === 401) {
       // 排除登录接口的 401，避免登录失败时重定向循环
@@ -182,9 +205,16 @@ function errorHandler(error: RequestError): Promise<any> {
       }
       else {
         clearToken()
+        forcedLogoutCleanup()
         router.replace({ name: 'Login', query: { redirect: router.currentRoute.value.fullPath } })
       }
     }
+  }
+  else {
+    // 无响应：断网或请求超时，替换 axios 的英文默认文案（Network Error / timeout of ...）
+    error.message = /timeout/i.test(String(error?.message || ''))
+      ? '请求超时，请稍后重试'
+      : '网络异常，请检查网络连接'
   }
   return Promise.reject(error)
 }
@@ -226,6 +256,7 @@ async function doRefreshToken() {
     }
     rejectQueue(new Error('token刷新失败'))
     notifyLeaderFail()
+    forcedLogoutCleanup()
     router.replace({ name: 'Login', query: { redirect: router.currentRoute.value.fullPath } })
   }
 }

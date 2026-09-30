@@ -68,6 +68,7 @@ const model: Model = reactive(createDefaultModel());
 function createDefaultModel(): Model {
   return {
     menuType: 'directory',
+    permission: null,
     menuName: '',
     routeName: '',
     routePath: '',
@@ -93,14 +94,19 @@ function createDefaultModel(): Model {
   };
 }
 
-type RuleKey = Extract<keyof Model, 'menuName' | 'status' | 'routeName' | 'routePath'>;
+type RuleKey = Extract<keyof Model, 'menuName' | 'status' | 'routeName' | 'routePath' | 'permission'>;
 
-const rules: Record<RuleKey, App.Global.FormRule> = {
+const rules = computed<Record<RuleKey, App.Global.FormRule>>(() => ({
   menuName: defaultRequiredRule,
   status: defaultRequiredRule,
-  routeName: defaultRequiredRule,
-  routePath: defaultRequiredRule
-};
+  // 按钮型菜单：routeName 自动生成、无路由路径，permission 必填
+  routeName: model.menuType === 'button' ? { required: false } : defaultRequiredRule,
+  routePath: model.menuType === 'button' ? { required: false } : defaultRequiredRule,
+  permission:
+    model.menuType === 'button'
+      ? defaultRequiredRule
+      : { required: false }
+}));
 
 const disabledMenuType = computed(() => props.operateType === 'edit');
 
@@ -115,9 +121,11 @@ const localIconOptions = localIcons.map<SelectOption>(item => ({
   value: item
 }));
 
-const showLayout = computed(() => model.pid === 0);
+const showLayout = computed(() => model.pid === 0 && model.menuType !== 'button');
 
 const showPage = computed(() => model.menuType === 'menu');
+
+const showPermission = computed(() => model.menuType === 'button');
 
 const pageOptions = computed(() => {
   const allPages = [...props.allPages];
@@ -175,6 +183,8 @@ function handleInitModel() {
   if (props.operateType === 'edit') {
     const { component, ...rest } = props.rowData;
 
+    Object.assign(model, { permission: props.rowData.permission ?? null });
+
     const { layout, page } = getLayoutAndPage(component);
     const { path, param } = getPathParamFromRoutePath(rest.routePath);
 
@@ -227,7 +237,26 @@ function getSubmitParams() {
   params.component = component;
   params.routePath = routePath;
 
+  // 按钮型菜单：无路由语义，权限标识必填，routeName 自动生成保证唯一
+  if (params.menuType === 'button') {
+    params.component = '';
+    params.routePath = '';
+    params.permission = params.permission?.trim() || null;
+    if (!params.routeName) {
+      const slug = params.permission?.replace(/[^a-zA-Z0-9]/g, '_') || 'btn';
+      params.routeName = `btn_${slug}_${Math.abs(hashCode(params.permission || '')) % 10000}`;
+    }
+  }
+
   return params;
+}
+
+function hashCode(str: string) {
+  let h = 0;
+  for (let i = 0; i < str.length; i += 1) {
+    h = (Math.imul(31, h) + str.charCodeAt(i)) | 0;
+  }
+  return h;
 }
 
 async function handleSubmit() {
@@ -302,7 +331,13 @@ watch(
               :placeholder="$t('page.manage.menu.form.page')"
             />
           </NFormItemGi>
-          <NFormItemGi span="24 m:12" :label="$t('page.manage.menu.i18nKey')" path="i18nKey">
+          <NFormItemGi v-if="showPermission" span="24 m:12" :label="$t('page.manage.menu.permission')" path="permission">
+            <NInput
+              v-model:value="model.permission"
+              placeholder="如 paint:work-order:create"
+            />
+          </NFormItemGi>
+          <NFormItemGi v-if="model.menuType !== 'button'" span="24 m:12" :label="$t('page.manage.menu.i18nKey')" path="i18nKey">
             <NInput v-model:value="model.i18nKey" :placeholder="$t('page.manage.menu.form.i18nKey')" />
           </NFormItemGi>
           <NFormItemGi span="24 m:12" :label="$t('page.manage.menu.order')" path="order">

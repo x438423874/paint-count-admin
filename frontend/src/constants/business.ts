@@ -16,7 +16,8 @@ export const userGenderOptions = transformRecordToOption(userGenderRecord);
 
 export const menuTypeRecord: Record<Api.SystemManage.MenuType, App.I18n.I18nKey> = {
   directory: 'page.manage.menu.type.directory',
-  menu: 'page.manage.menu.type.menu'
+  menu: 'page.manage.menu.type.menu',
+  button: 'page.manage.menu.type.button'
 };
 
 export const menuTypeOptions = transformRecordToOption(menuTypeRecord);

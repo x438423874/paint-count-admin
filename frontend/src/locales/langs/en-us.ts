@@ -290,7 +290,9 @@ const local: App.I18n.Schema = {
         title: 'User List',
         userName: 'User Name',
         userGender: 'Gender',
-        nickName: 'Nick Name',
+        realName: 'Real Name',
+        shopBinding: 'Bound Shops',
+        onDuty: 'On duty',
         userPhone: 'Phone Number',
         userEmail: 'Email',
         userStatus: 'User Status',
@@ -302,7 +304,7 @@ const local: App.I18n.Schema = {
           password: 'Please enter password',
           domain: 'Please enter domain',
           userGender: 'Please select gender',
-          nickName: 'Please enter nick name',
+          realName: 'Please enter real name',
           userPhone: 'Please enter phone number',
           userEmail: 'Please enter email',
           userStatus: 'Please select user status',
@@ -323,6 +325,7 @@ const local: App.I18n.Schema = {
         menuType: 'Menu Type',
         menuName: 'Menu Name',
         routeName: 'Route Name',
+        permission: 'Permission',
         routePath: 'Route Path',
         pathParam: 'Path Param',
         layout: 'Layout Component',
@@ -376,7 +379,8 @@ const local: App.I18n.Schema = {
         addChildMenu: 'Add Child Menu',
         type: {
           directory: 'Directory',
-          menu: 'Menu'
+          menu: 'Menu',
+          button: 'Button'
         },
         iconType: {
           iconify: 'Iconify Icon',

@@ -56,6 +56,7 @@ export class MenuUpdateHandler
       keepAlive: command.keepAlive,
       href: command.href,
       multiTab: command.multiTab,
+      permission: command.permission,
       updatedAt: new Date(),
       updatedBy: command.uid,
     };

@@ -1,5 +1,5 @@
 import type { MyScope } from '@/api/paint'
-import { monthInTenure } from '@/utils/tenure'
+import { monthInTenure, earliestTenureMonth } from '@/utils/tenure'
 
 export interface MonthOption {
   text: string
@@ -30,7 +30,17 @@ export function recentMonthOptions(opts: {
   if (includeAll)
     list.push({ text: allText, value: '' })
   const now = new Date()
-  for (let i = 0; i < months; i++) {
+  const nowMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+  // 回溯窗口：默认 months 个月；有入职时间且更早时，从入职月份开始显示（上限 120 个月）
+  let back = months
+  const earliest = earliestTenureMonth(scope)
+  if (earliest && earliest < nowMonth) {
+    const [ey, em] = earliest.split('-').map(Number)
+    const [cy, cm] = nowMonth.split('-').map(Number)
+    const diff = (cy - ey) * 12 + (cm - em) + 1
+    back = Math.max(back, Math.min(diff, 120))
+  }
+  for (let i = 0; i < back; i++) {
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
     const value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
     if (scope && !monthInTenure(value, scope))

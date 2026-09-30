@@ -13,7 +13,6 @@ import { ApiOperation, ApiTags } from '@nestjs/swagger';
 
 
 import { AuthorizationService } from '@app/base-system/lib/bounded-contexts/iam/authentication/application/service/authorization.service';
-import { RoleAssignPermissionCommand } from '@app/base-system/lib/bounded-contexts/iam/authentication/commands/role-assign-permission.command';
 import { RoleAssignRouteCommand } from '@app/base-system/lib/bounded-contexts/iam/authentication/commands/role-assign-route.command';
 import { RoleAssignUserCommand } from '@app/base-system/lib/bounded-contexts/iam/authentication/commands/role-assign-user.command';
 import { UserRoute } from '@app/base-system/lib/bounded-contexts/iam/menu/application/dto/route.dto';
@@ -27,7 +26,6 @@ import { ApiRes } from '@lib/infra/rest/res.response';
 import { RedisUtility } from '@lib/shared/redis/redis.util';
 import { IAuthentication } from '@lib/typings/global';
 
-import { AssignPermissionDto } from '../dto/assign-permission.dto';
 import { AssignRouteDto } from '../dto/assign-route.dto';
 import { AssignUserRolesDto } from '../dto/assign-user-roles.dto';
 import { AssignUserDto } from '../dto/assign-user.dto';
@@ -41,22 +39,6 @@ export class AuthorizationController {
     private readonly authorizationService: AuthorizationService,
     private readonly menuService: MenuService,
   ) {}
-
-  @Post('assign-permission')
-  @UsePermissions({ resource: 'authorization', action: 'assign-permission' })
-  @ApiOperation({
-    summary: 'Assign Permissions to Role',
-    description:
-      'Assigns a set of permissions to a specified role within a domain.',
-  })
-  async assignPermission(
-    @Body() dto: AssignPermissionDto,
-  ): Promise<ApiRes<null>> {
-    await this.authorizationService.assignPermission(
-      new RoleAssignPermissionCommand(dto.domain, dto.roleId, dto.permissions),
-    );
-    return ApiRes.ok();
-  }
 
   @Post('assign-routes')
   @UsePermissions({ resource: 'authorization', action: 'assign-routes' })

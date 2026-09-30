@@ -7,7 +7,7 @@ import {
   updatePaintVehicle,
 } from '@/api/paint'
 import type { PaintVehicle } from '@/api/types/paint'
-import { canEdit } from '@/utils/permission'
+import { canVehicleDelete } from '@/utils/permission'
 import { phoneRegex, plateNumberRegex, vinRegex } from '@/utils/validators'
 import { showNotify } from 'vant'
 import { confirmDeleteVehicle } from '@/composables/useConfirm'
@@ -15,7 +15,7 @@ import { confirmDeleteVehicle } from '@/composables/useConfirm'
 const route = useRoute()
 const router = useRouter()
 
-const allowEdit = canEdit()
+const allowDelete = canVehicleDelete()
 const mode = computed(() => route.query.mode === 'edit' ? 'edit' : 'add')
 const vehicleId = computed(() => (route.query.id as string) || '')
 const loading = ref(false)
@@ -317,7 +317,7 @@ onMounted(() => {
     <!-- 底部操作栏 -->
     <div v-if="!loading" class="action-bar">
       <van-button
-        v-if="mode === 'edit' && allowEdit"
+        v-if="mode === 'edit' && allowDelete"
         type="danger"
         round
         block

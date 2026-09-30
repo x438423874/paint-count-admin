@@ -1,8 +1,8 @@
 <script setup lang="tsx">
-import { NButton, NPopconfirm, NTag, NSpace } from 'naive-ui';
-import EmptyState from '@/components/common/EmptyState.vue';
 import { ref } from 'vue';
-import { fetchPaintCategoryList, deletePaintCategory } from '@/service/api';
+import { NButton, NPopconfirm, NSpace, NTag } from 'naive-ui';
+import { deletePaintCategory, fetchPaintCategoryList } from '@/service/api';
+import EmptyState from '@/components/common/EmptyState.vue';
 import CategoryOperateDrawer from './modules/category-operate-drawer.vue';
 
 const loading = ref(false);
@@ -67,9 +67,16 @@ const columns = [
     title: '类型',
     width: 80,
     align: 'center' as const,
-    render: (row: any) => row.isSpecial
-      ? <NTag type="warning" size="small">特殊</NTag>
-      : <NTag type="info" size="small">普通</NTag>
+    render: (row: any) =>
+      row.isSpecial ? (
+        <NTag type="warning" size="small">
+          特殊
+        </NTag>
+      ) : (
+        <NTag type="info" size="small">
+          普通
+        </NTag>
+      )
   },
   {
     key: 'operate',
@@ -131,7 +138,6 @@ const columns = [
           <EmptyState description="暂无漆面类目数据" />
         </template>
       </NDataTable>
-
     </NCard>
 
     <CategoryOperateDrawer

@@ -46,6 +46,55 @@ const validationPipeOptions: ValidationPipeOptions = {
   },
 };
 
+/**
+ * class-validator 约束消息转用户可读中文（按约束类型映射，未识别的保留原文）。
+ * constraints 的 value 是英文默认消息，数字阈值从消息中提取。
+ */
+function translateConstraint(rule: string, rawMessage: string): string {
+  const num = (): string => {
+    const m = rawMessage.match(/(\d+(?:\.\d+)?)/)
+    return m ? m[1] : '?'
+  }
+  const afterColon = (): string => {
+    const idx = rawMessage.indexOf(':')
+    return idx >= 0 ? rawMessage.slice(idx + 1).trim() : ''
+  }
+  switch (rule) {
+    case 'isNotEmpty':
+      return '不能为空'
+    case 'isString':
+      return '必须为字符串'
+    case 'isNumber':
+      return '必须为数字'
+    case 'isInt':
+      return '必须为整数'
+    case 'isArray':
+      return '必须为数组'
+    case 'isBoolean':
+      return '必须为布尔值'
+    case 'isEnum':
+    case 'isIn':
+      return `必须是以下之一: ${afterColon()}`
+    case 'isEmail':
+      return '必须是合法的邮箱'
+    case 'isDateString':
+    case 'isISO8601':
+      return '必须是合法的日期'
+    case 'matches':
+      return '格式不正确'
+    case 'minLength':
+      return `长度不能少于 ${num()} 个字符`
+    case 'maxLength':
+      return `长度不能超过 ${num()} 个字符`
+    case 'min':
+      return `不能小于 ${num()}`
+    case 'max':
+      return `不能大于 ${num()}`
+    default:
+      return rawMessage
+  }
+}
+
 function formatErrors(
   errors: ValidationError[],
   parentPath: string = '',
@@ -56,7 +105,9 @@ function formatErrors(
       : error.property;
 
     if (error.constraints) {
-      acc[property] = Object.values(error.constraints);
+      acc[property] = Object.entries(error.constraints).map(([rule, msg]) =>
+        translateConstraint(rule, msg),
+      );
     }
 
     if (error.children && error.children.length > 0) {

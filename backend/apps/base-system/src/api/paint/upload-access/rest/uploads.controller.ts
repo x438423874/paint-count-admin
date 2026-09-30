@@ -53,15 +53,15 @@ export class UploadsController {
     // 防目录穿越：解析后的绝对路径必须落在 uploads 目录内
     const absolute = path.resolve(BACKEND_ROOT, relative);
     if (!absolute.startsWith(path.resolve(UPLOAD_DIR) + path.sep)) {
-      throw new NotFoundException('out of uploads dir');
+      throw new NotFoundException('图片路径不合法');
     }
     if (!existsSync(absolute) || !statSync(absolute).isFile()) {
-      throw new NotFoundException('file missing');
+      throw new NotFoundException('图片不存在或已被删除');
     }
 
     const shopId = await this.resolveShopId(shopCode);
     if (!shopId) {
-      throw new NotFoundException('shop unknown');
+      throw new NotFoundException('图片所属门店不存在');
     }
     const user = (request as any).user;
     await this.userShopService.assertShopAccess(user.uid, shopId);

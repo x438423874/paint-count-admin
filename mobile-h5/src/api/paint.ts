@@ -77,6 +77,22 @@ export function exportWorkOrderExcel(shopId: string, settlementMonth?: string, m
   })
 }
 
+/** 同单号各结算月工单摘要（跨月结算明细弹层） */
+export interface WorkOrderSettlementSummary {
+  id: string
+  orderNo: string
+  settlementMonth: string | null
+  totalPaintCount: string
+  status: string
+  orderDate?: string | null
+  shop?: { id: string, name: string }
+}
+
+/** 按工单号查询各结算月工单摘要 */
+export function getWorkOrderSettlements(orderNo: string, shopId?: string) {
+  return request.get<WorkOrderSettlementSummary[]>('/paint/work-order/by-order-no', { params: { orderNo, shopId } })
+}
+
 export function getWorkOrderDetail(id: string) {
   return request.get<PaintWorkOrder>(`/paint/work-order/${id}`)
 }

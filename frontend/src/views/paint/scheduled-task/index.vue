@@ -1,8 +1,8 @@
 <script setup lang="tsx">
-import { NButton, NTag, NSpace } from 'naive-ui';
-import EmptyState from '@/components/common/EmptyState.vue';
-import { ref, onMounted } from 'vue';
+import { onMounted, ref } from 'vue';
+import { NButton, NSpace, NTag } from 'naive-ui';
 import { fetchScheduledTasks, toggleScheduledTask } from '@/service/api';
+import EmptyState from '@/components/common/EmptyState.vue';
 
 interface TaskInfo {
   name: string;
@@ -66,9 +66,7 @@ const columns = [
     width: 100,
     align: 'center' as const,
     render: (row: TaskInfo) => (
-      <NTag type={row.enabled ? 'success' : 'default'}>
-        {row.enabled ? '运行中' : '已停止'}
-      </NTag>
+      <NTag type={row.enabled ? 'success' : 'default'}>{row.enabled ? '运行中' : '已停止'}</NTag>
     )
   },
   {
@@ -95,7 +93,9 @@ const columns = [
     ellipsis: { tooltip: true },
     render: (row: TaskInfo) =>
       row.lastError ? (
-        <NTag type="error" size="small">{row.lastError}</NTag>
+        <NTag type="error" size="small">
+          {row.lastError}
+        </NTag>
       ) : (
         <span style="color: #999">-</span>
       )
@@ -106,12 +106,7 @@ const columns = [
     width: 120,
     align: 'center' as const,
     render: (row: TaskInfo) => (
-      <NButton
-        type={row.enabled ? 'warning' : 'success'}
-        ghost
-        size="small"
-        onClick={() => handleToggle(row)}
-      >
+      <NButton type={row.enabled ? 'warning' : 'success'} ghost size="small" onClick={() => handleToggle(row)}>
         {row.enabled ? '停止' : '启动'}
       </NButton>
     )
@@ -128,9 +123,7 @@ onMounted(() => {
     <NCard title="定时任务管理" :bordered="false" size="small" class="sm:flex-1-hidden card-wrapper">
       <template #header-extra>
         <NSpace>
-          <NButton size="small" @click="loadTasks" :loading="loading">
-            刷新
-          </NButton>
+          <NButton size="small" :loading="loading" @click="loadTasks">刷新</NButton>
         </NSpace>
       </template>
 

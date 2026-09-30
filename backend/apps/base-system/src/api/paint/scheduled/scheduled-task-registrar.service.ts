@@ -2,6 +2,10 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ScheduledTaskManager, ScheduledTaskDefinition } from './scheduled-task-manager.service';
 import { PaintImageService } from '../service/paint-image.service';
 import { PaintVehicleService } from '../service/paint-vehicle.service';
+import { PrismaService } from '@lib/shared/prisma/prisma.service';
+
+/** 日志保留天数，可通过环境变量 LOG_RETENTION_DAYS 覆盖 */
+const LOG_RETENTION_DAYS = Number(process.env.LOG_RETENTION_DAYS) || 90;
 
 /**
  * 定时任务注册中心
@@ -30,6 +34,12 @@ export class ScheduledTaskRegistrar implements OnModuleInit {
       description: '车辆统计对账：以工单为事实来源重算车辆工单数/幅数，并归一化历史车牌（每天凌晨4点）',
       enabled: true,
     },
+    {
+      name: 'cleanExpiredLogs',
+      cron: '0 2 * * *',
+      description: `清理过期日志：删除 ${LOG_RETENTION_DAYS} 天前的操作日志与登录日志（每天凌晨2点）`,
+      enabled: true,
+    },
     // 新增任务在这里添加，例如：
     // {
     //   name: 'syncShopData',
@@ -43,6 +53,7 @@ export class ScheduledTaskRegistrar implements OnModuleInit {
     private readonly taskManager: ScheduledTaskManager,
     private readonly imageService: PaintImageService,
     private readonly vehicleService: PaintVehicleService,
+    private readonly prisma: PrismaService,
   ) {}
 
   async onModuleInit() {
@@ -89,6 +100,24 @@ export class ScheduledTaskRegistrar implements OnModuleInit {
           const result = await this.vehicleService.reconcileStats();
           this.logger.log(
             `车辆统计对账完成：检查 ${result.checked} 台，修复 ${result.fixed} 台，归一化车牌 ${result.fixedPlates} 条`,
+          );
+        };
+
+      case 'cleanExpiredLogs':
+        return async () => {
+          const cutoff = new Date(
+            Date.now() - LOG_RETENTION_DAYS * 24 * 60 * 60 * 1000,
+          );
+          const [opResult, loginResult] = await Promise.all([
+            this.prisma.sysOperationLog.deleteMany({
+              where: { createdAt: { lt: cutoff } },
+            }),
+            this.prisma.sysLoginLog.deleteMany({
+              where: { loginTime: { lt: cutoff } },
+            }),
+          ]);
+          this.logger.log(
+            `过期日志清理完成：操作日志 ${opResult.count} 条，登录日志 ${loginResult.count} 条（阈值 ${LOG_RETENTION_DAYS} 天）`,
           );
         };
 

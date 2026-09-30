@@ -302,6 +302,26 @@ export function analyzeOrderNoRules(shopId: string) {
   });
 }
 
+/** 同单号各结算月工单摘要（跨月结算明细） */
+export interface WorkOrderSettlementSummary {
+  id: string;
+  orderNo: string;
+  settlementMonth: string | null;
+  totalPaintCount: string;
+  status: string;
+  orderDate?: string | null;
+  shop?: { id: string; name: string };
+}
+
+/** 按工单号查询各结算月工单摘要 */
+export function fetchWorkOrderSettlements(orderNo: string, shopId?: string) {
+  return request({
+    url: '/paint/work-order/by-order-no',
+    method: 'get',
+    params: { orderNo, shopId }
+  });
+}
+
 export function downloadWorkOrderTemplate(shopId: string) {
   return request({
     url: '/paint/work-order/template',

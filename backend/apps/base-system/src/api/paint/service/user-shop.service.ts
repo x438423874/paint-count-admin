@@ -73,24 +73,37 @@ export class UserShopService {
   }
 
   /**
+   * 是否可查看客户明文信息（权限点 paint:work-order:view-customer，门店管理员/超管默认有）
+   */
+  async canViewCustomerInfo(userId: string): Promise<boolean> {
+    const perms = await this.getMyPerms(userId);
+    return perms.includes('paint:work-order:view-customer');
+  }
+
+  /**
    * 获取当前用户拥有的权限点集合（前端按钮显隐用）
-   * 来源：Casbin 策略（casbin_rule），与 AuthZGuard 同一数据源；
+   * 来源：sys_menu.permission 权限标识串（芋道式），与 AuthZGuard 同一数据源；
    * 标识格式 `${resource}:${action}`（如 paint:work-order:audit）
    */
   async getMyPerms(userId: string): Promise<string[]> {
-    const codes = await this.getUserRoleCodes(userId);
-    if (codes.length === 0) return [];
-    const rules = await this.prisma.casbinRule.findMany({
-      where: { ptype: 'p', v0: { in: codes }, v1: { startsWith: 'paint:' } },
-      select: { v1: true, v2: true },
+    // 芋道式：权限点 = 用户角色绑定的菜单行上的 permission 标识串（sys_menu）
+    const roleIds = await this.prisma.sysUserRole
+      .findMany({ where: { userId }, select: { roleId: true } })
+      .then((rows) => rows.map((r) => r.roleId));
+    if (roleIds.length === 0) return [];
+
+    const roleMenus = await this.prisma.sysRoleMenu.findMany({
+      where: { roleId: { in: roleIds } },
+      select: { menuId: true },
     });
-    return [
-      ...new Set(
-        rules
-          .filter((r) => r.v1 && r.v2)
-          .map((r) => `${r.v1}:${r.v2}`),
-      ),
-    ];
+    const menuIds = [...new Set(roleMenus.map((rm) => rm.menuId))];
+    if (menuIds.length === 0) return [];
+
+    const menus = await this.prisma.sysMenu.findMany({
+      where: { id: { in: menuIds }, permission: { not: null } },
+      select: { permission: true },
+    });
+    return [...new Set(menus.map((m) => m.permission!).filter(Boolean))];
   }
 
   /**
@@ -389,6 +402,41 @@ export class UserShopService {
   }
 
   /**
+   * 工单「只读查看」权限（详情页专用，比操作权限宽松）：
+   * 同门店同单号的跨月结算关联工单，只要组内任一工单落在查看人在岗期内，
+   * 整组允许只读查看——否则跨月结算明细点进去都是「无权查看」，幅数核对无从谈起。
+   * @returns true = 在岗期内完全权限；false = 依赖跨月组关联的只读查看（调用方应标记 _viewOnly）
+   */
+  async assertWorkOrderViewAccess(userId: string, orderId: string): Promise<boolean> {
+    if (await this.isBypassUser(userId)) return true;
+    const order = await this.prisma.paintWorkOrder.findUnique({
+      where: { id: orderId },
+      select: { shopId: true, orderNo: true, settlementMonth: true, createdAt: true },
+    });
+    if (!order) return true; // 工单不存在时交给业务层抛 NotFoundException
+    const tenures = (await this.getBoundShopRows(userId)).filter(
+      (r) => r.shopId === order.shopId,
+    );
+    if (tenures.length === 0) {
+      throw new ForbiddenException('无权访问该门店数据');
+    }
+    if (tenures.some((t) => tenureCoversOrder(t, order))) return true;
+
+    // 在岗期外：同门店同单号存在在岗期内的关联工单（跨月结算组）时放行只读查看
+    if (order.orderNo) {
+      const siblings = await this.prisma.paintWorkOrder.findMany({
+        where: { shopId: order.shopId, orderNo: order.orderNo },
+        select: { settlementMonth: true, createdAt: true },
+      });
+      const linkedCovered = siblings.some((sibling) =>
+        tenures.some((t) => tenureCoversOrder(t, sibling)),
+      );
+      if (linkedCovered) return false;
+    }
+    throw new ForbiddenException('该工单不在您的在岗期间内，无权查看');
+  }
+
+  /**
    * 批量校验用户是否有权操作多个工单（一次性查询，避免 N+1）
    * 超管/财务自动通过
    */
@@ -416,7 +464,7 @@ export class UserShopService {
    * 校验用户的任一期是否覆盖指定结算月（yyyy-MM，用于导出/对账等整月操作）
    * 超管/财务自动通过
    */
-  async assertShopMonthAccess(userId: string, shopId: string, month: string): Promise<void> {
+  async assertShopMonthAccess(userId: string, shopId: string, month?: string): Promise<void> {
     if (await this.isBypassUser(userId)) return;
     const tenures = (await this.getBoundShopRows(userId)).filter(
       (r) => r.shopId === shopId,
@@ -424,6 +472,8 @@ export class UserShopService {
     if (tenures.length === 0) {
       throw new ForbiddenException('无权访问该门店数据');
     }
+    // 未指定结算月（导出全部月份）：仅要求已绑定门店；指定了结算月才做在岗期覆盖校验
+    if (!month) return;
     const covered = tenures.some((t) => tenureCoversMonth(t, month));
     if (!covered) {
       throw new ForbiddenException('该结算月份不在您的在岗期间内，无权操作');

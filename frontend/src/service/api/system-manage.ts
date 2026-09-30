@@ -37,7 +37,7 @@ export const fetchGetMenuList = () =>
     method: 'get'
   })
     .then(response => {
-      const menus = response.data || [];
+      const menus = sortMenusLikeTree(response.data || []);
       return {
         data: {
           records: menus,
@@ -54,6 +54,43 @@ export const fetchGetMenuList = () =>
         error: error.message
       };
     });
+
+/**
+ * 菜单列表按树形顺序排列（与角色授权树一致）：父行后紧跟其按钮/子菜单叶子。
+ */
+function sortMenusLikeTree(menus: Api.SystemManage.Menu[]): Api.SystemManage.Menu[] {
+  const childrenMap = new Map<number, Api.SystemManage.Menu[]>();
+  const roots: Api.SystemManage.Menu[] = [];
+
+  for (const menu of menus) {
+    if (menu.pid === 0) {
+      roots.push(menu);
+    } else {
+      const list = childrenMap.get(menu.pid) || [];
+      list.push(menu);
+      childrenMap.set(menu.pid, list);
+    }
+  }
+
+  const byOrder = (a: Api.SystemManage.Menu, b: Api.SystemManage.Menu) =>
+    (a.order ?? 0) - (b.order ?? 0) || a.id - b.id;
+
+  roots.sort(byOrder);
+  for (const list of childrenMap.values()) {
+    list.sort(byOrder);
+  }
+
+  const result: Api.SystemManage.Menu[] = [];
+  const walk = (list: Api.SystemManage.Menu[]) => {
+    for (const menu of list) {
+      result.push(menu);
+      const children = childrenMap.get(menu.id);
+      if (children && children.length > 0) walk(children);
+    }
+  };
+  walk(roots);
+  return result;
+}
 
 /** get all pages */
 export function fetchGetAllPages() {
@@ -149,29 +186,12 @@ export function fetchAssignRoutes(req: Api.SystemManage.RoleMenu) {
   });
 }
 
-/**
- * 角色授权API
- *
- * @param req 授权角色API实体
- * @returns nothing
- */
-export function fetchAssignPermission(req: Api.SystemManage.RolePermission) {
-  return request<boolean>({
-    url: '/authorization/assign-permission',
-    method: 'post',
-    data: {
-      ...req,
-      // eslint-disable-next-line no-warning-comments
-      // TODO 超级管理员主动选择 domain管理员默认自身
-      domain: 'built-in'
-    }
-  });
-}
 
 export type RouteModel = Pick<
   Api.SystemManage.Menu,
   | 'menuType'
   | 'menuName'
+  | 'permission'
   | 'routeName'
   | 'routePath'
   | 'component'
@@ -233,7 +253,7 @@ export function deleteRoute(id: number) {
 
 export type UserModel = Pick<
   Api.SystemManage.User,
-  'username' | 'password' | 'domain' | 'nickName' | 'phoneNumber' | 'email' | 'status'
+  'username' | 'password' | 'domain' | 'realName' | 'phoneNumber' | 'email' | 'status'
 >;
 
 /**
@@ -319,25 +339,3 @@ export function fetchGetAssignableRoles(size = 100) {
   });
 }
 
-/** get api-endpoint tree */
-export function fetchGetApiEndpointTree() {
-  return request<Api.SystemManage.ApiEndpoint[]>({
-    url: '/api-endpoint/tree',
-    method: 'get'
-  });
-}
-
-/**
- * 获取角色对应API数组集合
- *
- * @param roleCode 角色code
- * @returns API数组集合
- */
-export async function fetchGetRoleApiEndpoints(roleCode: string) {
-  const response = await request<any[]>({
-    url: `/api-endpoint/auth-api-endpoint/${roleCode}`,
-    method: 'get'
-  });
-  const casbinRules = response.data || [];
-  return casbinRules.map(item => `${item.v1}:${item.v2}`);
-}

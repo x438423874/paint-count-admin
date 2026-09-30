@@ -49,8 +49,8 @@ async function search() {
         <NFormItemGi span="24 s:12 m:6" :label="$t('page.manage.user.userName')" path="username" class="pr-24px">
           <NInput v-model:value="model.username" :placeholder="$t('page.manage.user.form.userName')" />
         </NFormItemGi>
-        <NFormItemGi span="24 s:12 m:6" :label="$t('page.manage.user.nickName')" path="nickName" class="pr-24px">
-          <NInput v-model:value="model.nickName" :placeholder="$t('page.manage.user.form.nickName')" />
+        <NFormItemGi span="24 s:12 m:6" :label="$t('page.manage.user.realName')" path="realName" class="pr-24px">
+          <NInput v-model:value="model.realName" :placeholder="$t('page.manage.user.form.realName')" />
         </NFormItemGi>
         <NFormItemGi span="24 s:12 m:6" :label="$t('page.manage.user.userPhone')" path="phoneNumber" class="pr-24px">
           <NInput v-model:value="model.phoneNumber" :placeholder="$t('page.manage.user.form.userPhone')" />

@@ -117,11 +117,13 @@ watch(visible, () => {
           <NInput v-model:value="model.code" placeholder="如：front-bumper" :disabled="operateType === 'edit'" />
         </NFormItem>
         <NFormItem label="排序">
-          <NInputNumber v-model:value="model.sortOrder" :min="0" :step="1" style="width: 100%;" />
+          <NInputNumber v-model:value="model.sortOrder" :min="0" :step="1" style="width: 100%" />
         </NFormItem>
         <NFormItem label="特殊部位">
           <NSwitch v-model:value="model.isSpecial" />
-          <span class="ml-8px" style="color: var(--n-text-color-3); font-size: 12px;">标记为特殊部位（如特殊工艺项）</span>
+          <span class="ml-8px" style="color: var(--n-text-color-3); font-size: 12px">
+            标记为特殊部位（如特殊工艺项）
+          </span>
         </NFormItem>
       </NForm>
 

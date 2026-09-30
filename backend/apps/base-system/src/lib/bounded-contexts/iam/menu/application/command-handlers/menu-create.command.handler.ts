@@ -55,6 +55,7 @@ export class MenuCreateHandler
       keepAlive: command.keepAlive,
       href: command.href,
       multiTab: command.multiTab,
+      permission: command.permission,
     };
 
     const menu = Menu.fromCreate(menuCreateProperties);

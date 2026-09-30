@@ -3,6 +3,7 @@ declare namespace Log {
     username: string;
     domain: string;
     loginTime: string;
+    ip: string;
     port: number | null;
     address: string;
     userAgent: string;

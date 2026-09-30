@@ -7,6 +7,7 @@ import { Logger as WinstonLogger } from 'winston';
 import { PaintImageService } from './paint-image.service';
 import { OcrService } from './ocr.service';
 import { PaintVehicleService } from './paint-vehicle.service';
+import { SealService } from '../seal/seal.service';
 import { CorrectPendingImageOcrDto, PagePendingImageDto } from '../pending-image/dto/pending-image.dto';
 import { BACKEND_ROOT } from './upload-root';
 import crypto from 'crypto';
@@ -27,6 +28,7 @@ export class PendingImageService implements OnApplicationBootstrap {
     private readonly imageService: PaintImageService,
     private readonly ocrService: OcrService,
     private readonly vehicleService: PaintVehicleService,
+    private readonly sealService: SealService,
     @Inject(WINSTON_MODULE_PROVIDER) private readonly winston: WinstonLogger,
   ) {}
 
@@ -51,6 +53,11 @@ export class PendingImageService implements OnApplicationBootstrap {
     source?: 'POOL' | 'CREATE';
   }) {
     const { shopId, settlementMonth, buffer, filename, mimetype, thumbnailBuffer, uploadedBy, source } = params;
+
+    // 封单防线：指定结算月已封单时不允许再上传图片
+    if (settlementMonth) {
+      await this.sealService.assertNotSealed(shopId, settlementMonth);
+    }
 
     // 1. 保存图片物理文件（与工单图片同目录结构，便于归类后直接复用 URL）
     const url = await this.imageService.saveImageFile(buffer, filename, shopId, settlementMonth);
@@ -144,6 +151,7 @@ export class PendingImageService implements OnApplicationBootstrap {
     if (!order) {
       throw new BadRequestException('工单不存在或不属于当前门店')
     }
+    await this.sealService.assertOrderNotSealed(order.id)
 
     const key = `${Date.now()}-${crypto.randomUUID()}-${fileName}`
     const url = await this.imageService.saveImageFile(imageBuffer, key, shopId, undefined)
@@ -254,7 +262,24 @@ export class PendingImageService implements OnApplicationBootstrap {
     status: PendingImageStatus = PendingImageStatus.MATCHED,
   ) {
     const fullOrder = await this.prisma.paintWorkOrder.findUnique({ where: { id: order.id } });
+    // 封单防线：目标工单所属结算月已封单时不允许归类
+    await this.sealService.assertOrderNotSealed(order.id);
     if (!fullOrder) throw new NotFoundException('目标工单不存在');
+
+    // 已审核/已结算/异常/作废的工单不可再修改：直接拒绝归类，避免触发后续写操作异常（500）
+    const LOCKED_STATUSES = ['AUDITED', 'SETTLED', 'ABNORMAL', 'VOID'];
+    const STATUS_LABEL: Record<string, string> = {
+      AUDITED: '已审核',
+      SETTLED: '已结算',
+      ABNORMAL: '异常',
+      VOID: '已作废',
+    };
+    if (LOCKED_STATUSES.includes(fullOrder.status)) {
+      const orderNo = fullOrder.orderNo || fullOrder.id;
+      throw new BadRequestException(
+        `工单「${orderNo}」当前状态为「${STATUS_LABEL[fullOrder.status] || fullOrder.status}」，已审核/已结算/异常/作废的工单不允许再归类图片。请改选其他未审核的工单进行归类。`,
+      );
+    }
 
     // 只填空字段
     const fillEmpty = (cur: string | null | undefined, ocrVal: string | null | undefined): string | undefined => {
@@ -365,6 +390,10 @@ export class PendingImageService implements OnApplicationBootstrap {
     // 防重复建单：工单可能已通过 Excel 导入存在（先录台账后补图片的场景）。
     // 业务规则：同一结算月内同工单号不允许重复（幅数会重复计入结算）；跨结算月允许。
     const settlementMonth = settlementMonthOverride || pending.settlementMonth || undefined;
+    // 封单防线：补建目标结算月已封单时不允许操作
+    if (settlementMonth) {
+      await this.sealService.assertNotSealed(pending.shopId, settlementMonth);
+    }
     const ocrOrderNo = (pending.ocrOrderNo || '').trim();
     if (ocrOrderNo) {
       const duplicated = await this.prisma.paintWorkOrder.findFirst({
@@ -470,6 +499,10 @@ export class PendingImageService implements OnApplicationBootstrap {
     if (pending.status === PendingImageStatus.MATCHED || pending.status === PendingImageStatus.MANUAL) {
       throw new BadRequestException('该图片已归类，不能修改识别结果');
     }
+    // 封单防线：图片所属结算月已封单时不允许操作
+    if (pending.settlementMonth) {
+      await this.sealService.assertNotSealed(pending.shopId, pending.settlementMonth);
+    }
     // 后台识别任务仍在进行时禁止修正，避免异步回调覆盖人工结果
     if (pending.ocrStatus === OcrStatus.PROCESSING) {
       throw new BadRequestException('图片正在识别中，请稍候再修正');
@@ -541,6 +574,12 @@ export class PendingImageService implements OnApplicationBootstrap {
     if (!pending) throw new NotFoundException('图片池记录不存在');
 
     const isMatched = pending.status === PendingImageStatus.MATCHED || pending.status === PendingImageStatus.MANUAL;
+    // 封单防线：已封单月份的图片不允许删除（已归类的按目标工单校验）
+    if (pending.matchedOrderId) {
+      await this.sealService.assertOrderNotSealed(pending.matchedOrderId);
+    } else if (pending.settlementMonth) {
+      await this.sealService.assertNotSealed(pending.shopId, pending.settlementMonth);
+    }
     if (!isMatched) {
       // 未归类：删物理文件
       await this.imageService.deletePhysicalFiles(pending.url, pending.thumbnailUrl).catch(() => void 0);
@@ -597,6 +636,31 @@ export class PendingImageService implements OnApplicationBootstrap {
       this.prisma.paintPendingImage.count({ where }),
     ]);
 
+    // 附带封单标记：已封单(门店,结算月)的图片前端隐藏归类/修改类操作
+    const sealPairs = new Set<string>();
+    for (const record of records) {
+      const month = record.settlementMonth || record.order?.settlementMonth || null;
+      if (record.shopId && month) sealPairs.add(`${record.shopId}|${month}`);
+    }
+    let sealedSet = new Set<string>();
+    if (sealPairs.size > 0) {
+      const sealedRows = await this.prisma.paintSettlementMonth.findMany({
+        where: {
+          isSealed: true,
+          OR: Array.from(sealPairs).map((pair) => {
+            const [shopId, month] = pair.split('|');
+            return { shopId, month };
+          }),
+        },
+        select: { shopId: true, month: true },
+      });
+      sealedSet = new Set(sealedRows.map((r) => `${r.shopId}|${r.month}`));
+    }
+    for (const record of records) {
+      const month = record.settlementMonth || record.order?.settlementMonth || null;
+      (record as any)._sealed = !!(record.shopId && month && sealedSet.has(`${record.shopId}|${month}`));
+    }
+
     // 状态统计（仅按当前筛选范围外的全局统计更实用，这里返回当前门店范围的统计）
     return { current, size, total, records };
   }
@@ -635,6 +699,10 @@ export class PendingImageService implements OnApplicationBootstrap {
     if (!pending) throw new NotFoundException('图片池记录不存在');
     if (pending.status === PendingImageStatus.MATCHED || pending.status === PendingImageStatus.MANUAL) {
       throw new BadRequestException('该图片已归类，无需重试');
+    }
+    // 封单防线：图片所属结算月已封单时不允许操作
+    if (pending.settlementMonth) {
+      await this.sealService.assertNotSealed(pending.shopId, pending.settlementMonth);
     }
 
     let buffer: Buffer;
@@ -696,7 +764,12 @@ export class PendingImageService implements OnApplicationBootstrap {
     const orderNo = (pending.ocrOrderNo || '').trim();
     const plate = (pending.ocrPlateNumber || '').trim();
 
-    const where: Prisma.PaintWorkOrderWhereInput = { shopId: pending.shopId, ...(month ? { settlementMonth: month } : {}) };
+    // 已审核/已结算/异常/作废的工单不可再归类，候选列表直接排除，避免用户点错触发拦截报错
+    const where: Prisma.PaintWorkOrderWhereInput = {
+      shopId: pending.shopId,
+      status: { notIn: ['AUDITED', 'SETTLED', 'ABNORMAL', 'VOID'] },
+      ...(month ? { settlementMonth: month } : {}),
+    };
     if (orderNo) {
       where.OR = [{ orderNo: orderNo }, ...(plate ? [{ plateNumber: plate }] : [])];
     } else if (plate) {

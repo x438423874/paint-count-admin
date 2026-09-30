@@ -134,6 +134,14 @@ declare namespace Api {
      */
     type UserGender = '1' | '2';
 
+    /** 用户绑定门店（含在岗期，endAt 为空表示在岗中） */
+    type UserShopBinding = {
+      shopId: string;
+      shopName: string;
+      startAt: string;
+      endAt: string | null;
+    };
+
     /** user */
     type User = Common.CommonRecord<{
       /** user name */
@@ -144,17 +152,21 @@ declare namespace Api {
       domain: string;
       /** avatar */
       avatar: string;
-      /** user nick name */
-      nickName: string;
+      /** real name */
+      realName: string | null;
       /** user phone */
-      phoneNumber: string;
+      phoneNumber: string | null;
       /** user email */
-      email: string;
+      email: string | null;
+      /** role names bound to the user */
+      roles: string[];
+      /** shop bindings with tenure period */
+      shops: UserShopBinding[];
     }>;
 
     /** user search params */
     type UserSearchParams = CommonType.RecordNullable<
-      Pick<Api.SystemManage.User, 'username' | 'nickName' | 'phoneNumber' | 'email' | 'status'> & CommonSearchParams
+      Pick<Api.SystemManage.User, 'username' | 'realName' | 'phoneNumber' | 'email' | 'status'> & CommonSearchParams
     >;
 
     /** user list */
@@ -166,7 +178,7 @@ declare namespace Api {
      * - "DIRECTORY": directory
      * - "MENU": menu
      */
-    type MenuType = 'directory' | 'menu';
+    type MenuType = 'directory' | 'menu' | 'button';
 
     type MenuButton = {
       /**
@@ -206,6 +218,8 @@ declare namespace Api {
       pid: number;
       /** menu type */
       menuType: MenuType;
+      /** 按钮型菜单的权限标识（resource:action） */
+      permission: string | null;
       /** menu name */
       menuName: string;
       /** route name */

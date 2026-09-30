@@ -32,17 +32,17 @@ async function search() {
   <NCard :title="$t('common.search')" :bordered="false" size="small" class="card-wrapper">
     <NForm ref="formRef" :model="model" label-placement="left" :label-width="80">
       <NGrid responsive="screen" item-responsive>
-        <NFormItemGi span="24 s:12 m:6" label="username" path="username" class="pr-24px">
+        <NFormItemGi span="24 s:12 m:6" label="操作人" path="username" class="pr-24px">
           <NInput v-model:value="model.username" />
         </NFormItemGi>
-        <NFormItemGi span="24 s:12 m:6" label="domain" path="domain" class="pr-24px">
+        <NFormItemGi span="24 s:12 m:6" label="域" path="domain" class="pr-24px">
           <NInput v-model:value="model.domain" />
         </NFormItemGi>
-        <NFormItemGi span="24 s:12 m:6" label="moduleName" path="moduleName" class="pr-24px">
+        <NFormItemGi span="24 s:12 m:6" label="模块" path="moduleName" class="pr-24px">
           <NInput v-model:value="model.moduleName" />
         </NFormItemGi>
-        <NFormItemGi span="24 s:12 m:6" label="method" path="method" class="pr-24px">
-          <NInput v-model:value="model.method" />
+        <NFormItemGi span="24 s:12 m:6" label="请求方法" path="method" class="pr-24px">
+          <NInput v-model:value="model.method" placeholder="POST / PUT / DELETE" />
         </NFormItemGi>
         <NFormItemGi span="24 m:12" class="pr-24px">
           <NSpace class="w-full" justify="end">

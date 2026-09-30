@@ -20,6 +20,7 @@ import {
 import { PaintStatsCache } from './paint-stats-cache';
 import { CreateWorkOrderDto, UpdateWorkOrderDto, PageWorkOrderDto, WorkOrderItemDto } from '../work-order/dto/work-order.dto';
 import { SealService } from '../seal/seal.service';
+import { maskCustomerName, maskPhone, maskVin } from './customer-masking.util';
 import { PaintVehicleService, type VehicleFieldKey } from './paint-vehicle.service';
 import { Jimp } from 'jimp';
 
@@ -377,6 +378,11 @@ export class WorkOrderService {
     const isOcrCorrection = safeOcrFields.some(field => dto[field] !== undefined);
     const isReworkUpdate = dto.isRework !== undefined || dto.reworkRemark !== undefined;
 
+    // 已结算的工单不允许修正OCR（含仅基础字段的请求），需先取消结算
+    if (existing.status === 'SETTLED' && (isOcrCorrection || hasUnsafeField)) {
+      throw new BadRequestException('已结算的工单不允许修正OCR，如需修改请先取消结算');
+    }
+
     if (audited && hasUnsafeField) {
       throw new BadRequestException('已审核的工单只允许修正车牌号、工单号等基础信息');
     }
@@ -682,7 +688,7 @@ export class WorkOrderService {
     return record;
   }
 
-  async findById(id: string) {
+  async findById(id: string, viewCustomer = true) {
     const record = await this.prisma.paintWorkOrder.findUnique({
       where: { id },
       include: {
@@ -691,12 +697,55 @@ export class WorkOrderService {
         shop: true,
       },
     });
-    return this.applyDerivedStatus(record);
+    const normalized = this.applyDerivedStatus(record);
+    if (!record) return normalized;
+
+    // 附带封单状态：详情页据此隐藏审核/结算/取消结算等修改入口（与列表口径一致）
+    const month = record.settlementMonth || this.getMonthFromDate(record.orderDate);
+    const seal = month
+      ? await this.prisma.paintSettlementMonth.findUnique({
+          where: { shopId_month: { shopId: record.shopId, month } },
+          select: { isSealed: true },
+        })
+      : null;
+    const finalized =
+      record.status === 'SETTLED' || record.status === 'VOID' || !!seal?.isSealed;
+    const customerMasked = !viewCustomer && finalized;
+    let result: any = { ...normalized, _isSealed: !!seal?.isSealed, _customerMasked: customerMasked };
+    if (customerMasked) {
+      result.customerName = maskCustomerName(result.customerName);
+      result.phone = maskPhone(result.phone);
+      result.vin = maskVin(result.vin);
+    }
+    return result;
+  }
+
+  /**
+   * 同单号在各结算月的工单摘要（列表「跨月结算」标签点击后的明细弹层）。
+   * 只读汇总且不受查看人在岗期限制：跨月标签本身就是门店维度的事实，
+   * 否则后入职员工看不到入职前月份的已结记录，标签幅数也就无从展示。
+   */
+  async findSettlementsByOrderNo(orderNo: string, shopId?: string) {
+    if (!orderNo) throw new BadRequestException('orderNo 不能为空');
+    return this.prisma.paintWorkOrder.findMany({
+      where: { orderNo, ...(shopId ? { shopId } : {}) },
+      select: {
+        id: true,
+        orderNo: true,
+        settlementMonth: true,
+        totalPaintCount: true,
+        status: true,
+        orderDate: true,
+        shop: { select: { id: true, name: true } },
+      },
+      orderBy: [{ settlementMonth: 'asc' }, { createdAt: 'asc' }],
+    });
   }
 
   async page(
     dto: PageWorkOrderDto,
     orderScope?: OrderAccessScope,
+    viewCustomer = true,
   ): Promise<PaginationResult<any>> {
     const current = dto.current ?? 1;
     const size = dto.size ?? 10;
@@ -822,21 +871,27 @@ export class WorkOrderService {
     const pageOrderNos = Array.from(
       new Set(pageRecords.map(r => r.orderNo).filter((n): n is string => !!n)),
     );
+    // 跨月识别必须按门店维度统计，不能叠加查看人的数据权限（accessWhere/在岗期）——
+    // 否则在岗期之前的历史月份结算会被权限过滤掉，跨月标签对后入职的员工不可见。
+    const pageShopIds = Array.from(new Set(pageRecords.map(r => r.shopId).filter((v): v is string => !!v)));
     const crossMonthGroups = pageOrderNos.length
       ? await this.prisma.paintWorkOrder.groupBy({
           by: ['orderNo', 'settlementMonth'],
           where: {
             orderNo: { in: pageOrderNos },
-            ...(dto.shopId && { shopId: dto.shopId }),
-            ...(accessWhere && { AND: [accessWhere] }),
+            ...(dto.shopId ? { shopId: dto.shopId } : (pageShopIds.length > 0 && { shopId: { in: pageShopIds } })),
           },
+          _sum: { totalPaintCount: true },
         })
       : [];
-    const monthsByOrderNo = new Map<string, Set<string>>();
+    // orderNo -> (结算月 -> 该月结算幅数合计)
+    const monthsByOrderNo = new Map<string, Map<string, number>>();
     for (const g of crossMonthGroups) {
       if (!g.orderNo) continue;
-      if (!monthsByOrderNo.has(g.orderNo)) monthsByOrderNo.set(g.orderNo, new Set());
-      monthsByOrderNo.get(g.orderNo)!.add(g.settlementMonth || '');
+      const byMonth = monthsByOrderNo.get(g.orderNo) ?? new Map<string, number>();
+      const monthKey = g.settlementMonth || '';
+      byMonth.set(monthKey, (byMonth.get(monthKey) ?? 0) + Number(g._sum.totalPaintCount ?? 0));
+      monthsByOrderNo.set(g.orderNo, byMonth);
     }
     const enrichedRecords = pageIds
       .map(id => recordById.get(id))
@@ -845,13 +900,19 @@ export class WorkOrderService {
         const normalized = this.applyDerivedStatus(record);
         const monthKey = `${record.orderNo || ''}|${record.settlementMonth || ''}`;
         const dupCount = duplicateCountMap.get(monthKey) || 1;
-        const hasOtherMonthSettlement =
-          (monthsByOrderNo.get(record.orderNo || '')?.size || 1) > 1;
+        const byMonth = monthsByOrderNo.get(record.orderNo || '');
+        const hasOtherMonthSettlement = (byMonth?.size || 1) > 1;
+        const currentMonthKey = record.settlementMonth || '';
+        let otherMonthPaintCount = 0;
+        for (const [monthKey, monthSum] of byMonth ?? []) {
+          if (monthKey !== currentMonthKey) otherMonthPaintCount += monthSum;
+        }
         return {
           ...normalized,
           _duplicateCount: dupCount,
           _isDuplicate: dupCount > 1,
           _hasOtherMonthSettlement: hasOtherMonthSettlement,
+          _otherMonthPaintCount: Number(otherMonthPaintCount.toFixed(2)),
         };
       });
 
@@ -887,6 +948,20 @@ export class WorkOrderService {
     // 使用数据库聚合结果，避免内存 reduce
     const totalPaintCount = Number(totalPaintCountAgg._sum.totalPaintCount || 0);
 
+    // 客户信息脱敏（按状态分级）：无 paint:work-order:view-customer 权限者，
+    // 仅对完结数据脱敏（已结算/作废/封单月）；进行中的工单（草稿/待审核/已审核/异常）保持明文
+    if (!viewCustomer) {
+      for (const record of enrichedRecords) {
+        const finalized =
+          record.status === 'SETTLED' || record.status === 'VOID' || record._isSealed;
+        if (finalized) {
+          record.customerName = maskCustomerName(record.customerName) as any;
+          record.phone = maskPhone(record.phone) as any;
+          record.vin = maskVin(record.vin) as any;
+          (record as any)._customerMasked = true;
+        }
+      }
+    }
     return { current, size, total, totalPaintCount, records: enrichedRecords };
   }
 

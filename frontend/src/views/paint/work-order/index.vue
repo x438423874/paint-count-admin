@@ -25,7 +25,8 @@ import {
   NSpin,
   NStatistic,
   NTag,
-  NText
+  NText,
+  NPopover,
 } from 'naive-ui';
 import { PAINT_ORDER_STATUS_LABEL, getPaintOrderStatusTagType } from '@/constants/paint';
 import {
@@ -39,6 +40,7 @@ import {
   fetchPaintCategoryList,
   fetchWorkOrderById,
   fetchWorkOrderPage,
+  fetchWorkOrderSettlements,
   findDuplicateOrders,
   importWorkOrderExcel,
   mergeWorkOrders,
@@ -56,7 +58,7 @@ import { useTable, useTableOperate } from '@/hooks/common/table';
 import { useShopOptions } from '@/hooks/business/use-shop-options';
 import { compressDualImage } from '@/utils/image-compress';
 import { formatPaintCount } from '@/utils/paint-count';
-import { canAudit, canBatchOcr, canDelete, canEdit, canMerge, canSettle } from '@/utils/permission';
+import { canAbnormal, canAudit, canBatchOcr, canDelete, canEdit, canExportWorkOrder, canMerge, canSettle } from '@/utils/permission';
 import { resolveUploadUrl } from '@/utils/upload-url';
 import EmptyState from '@/components/common/EmptyState.vue';
 import { $t } from '@/locales';
@@ -71,6 +73,8 @@ const allowDelete = computed(() => canDelete());
 const allowBatchOcr = canBatchOcr();
 const allowMerge = computed(() => canMerge());
 const allowSettle = computed(() => canSettle());
+const allowAbnormal = computed(() => canAbnormal());
+const allowExport = computed(() => canExportWorkOrder());
 const allowEdit = computed(() => canEdit());
 
 // 门店走 paint store 共享缓存，全应用只请求一次（原为每页各自 fetchPaintShopList）
@@ -78,6 +82,53 @@ const { shops, ensureShops } = useShopOptions();
 const showDetail = ref(false);
 const currentOrder = ref<any>(null);
 const selectedShopId = ref<string | null>(null);
+
+// 跨月结算明细：按 orderNo 缓存各结算月工单摘要，标签点击时懒加载
+type SettlementSummary = {
+  id: string;
+  settlementMonth: string | null;
+  totalPaintCount: string;
+  status: string;
+};
+const settlementDetailMap = ref<Record<string, SettlementSummary[]>>({});
+
+async function loadSettlementDetail(row: any) {
+  const orderNo = row.orderNo || '';
+  if (!orderNo || settlementDetailMap.value[orderNo]) return;
+  settlementDetailMap.value[orderNo] = [];
+  const { data, error } = await fetchWorkOrderSettlements(orderNo, row.shopId);
+  if (!error) {
+    settlementDetailMap.value[orderNo] = (data as any) || [];
+  }
+}
+
+function renderSettlementDetail(row: any) {
+  const orderNo = row.orderNo || '';
+  const list = settlementDetailMap.value[orderNo];
+  if (!list) return '加载中…';
+  if (list.length === 0) return '暂无结算记录';
+  return h('div', { style: 'min-width: 240px' }, [
+    h('div', { style: 'font-weight: 600; margin-bottom: 6px' }, `跨月结算明细（${orderNo}）`),
+    ...list.map(item =>
+      h('div', {
+        key: item.id,
+        style: 'display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; border-bottom: 1px solid #f0f0f0; font-size: 13px; cursor: pointer',
+        onClick: () => {
+          void viewDetail(item.id);
+        }
+      }, [
+        h('span', [
+          item.settlementMonth || '未结算',
+          (item.settlementMonth || '') === (row.settlementMonth || '')
+            ? h('span', { style: 'margin-left: 6px; color: #1677ff; font-size: 12px' }, '当前')
+            : null
+        ]),
+        h('span', { style: 'color: #52c41a; font-weight: 600' }, `${Number(item.totalPaintCount || 0)} 幅`),
+        h('span', { style: 'color: #999' }, PAINT_ORDER_STATUS_LABEL[item.status] || item.status)
+      ])
+    )
+  ]);
+}
 
 const route = useRoute();
 const router = useRouter();
@@ -557,9 +608,23 @@ const {
             </NTag>
           )}
           {row._hasOtherMonthSettlement && (
-            <NTag type="success" size="small" round>
-              跨月结算
-            </NTag>
+            <NPopover
+              trigger="click"
+              placement="top"
+              style="max-width: 340px"
+              onUpdateShow={(show: boolean) => {
+                if (show) void loadSettlementDetail(row);
+              }}
+            >
+              {{
+                trigger: () => (
+                  <NTag type="success" size="small" round style="cursor: pointer">
+                    跨月结算·另结{row._otherMonthPaintCount ?? 0}幅
+                  </NTag>
+                ),
+                default: () => renderSettlementDetail(row)
+              }}
+            </NPopover>
           )}
         </NSpace>
       )
@@ -696,7 +761,7 @@ const {
             <NButton type="info" text size="small" onClick={() => viewDetail(row.id)}>
               查看
             </NButton>
-            {row.images?.length > 0 && allowEdit && !sealed && (
+            {row.images?.length > 0 && allowEdit && !isSettled && !sealed && (
               <NButton type="warning" text size="small" onClick={() => openOcrCorrect(row)}>
                 修正OCR
               </NButton>
@@ -747,12 +812,12 @@ const {
                 }}
               </NPopconfirm>
             )}
-            {allowSettle.value && isAudited && !sealed && (
+            {allowAbnormal.value && isAudited && !sealed && (
               <NButton type="warning" text size="small" onClick={() => handleAbnormal(row.id, false)}>
                 标记异常
               </NButton>
             )}
-            {allowSettle.value && isAbnormal && !sealed && (
+            {allowAbnormal.value && isAbnormal && !sealed && (
               <NButton
                 type="success"
                 text
@@ -1240,6 +1305,7 @@ async function handleBatchQuickUpload({ file }: { file: File }) {
         <NButton type="info" :disabled="!selectedShopId" @click="handleDownloadTemplate">下载模板</NButton>
         <NButton v-if="allowEdit" type="success" :disabled="!selectedShopId" @click="triggerImport">导入</NButton>
         <NDropdown
+          v-if="allowExport"
           trigger="click"
           :options="[
             { label: '导出明细台账', key: 'detail' },

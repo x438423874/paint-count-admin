@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
 import { useUserStore } from '@/stores'
+import { LOGIN_CREDENTIAL_KEY } from '@/utils/auth'
 
 const router = useRouter()
 const userStore = useUserStore()
@@ -13,7 +14,6 @@ const form = reactive({
 
 // 记住密码：勾选后在本地保存账号与密码，下次进入自动回填
 const rememberPwd = ref(false)
-const CREDENTIAL_KEY = 'paint-h5-login-credential'
 
 // 轻量可逆加密：XOR 混淆后再 base64，避免密码以明文存于 localStorage
 const PWD_SECRET = 'paint-count-h5@2026'
@@ -50,7 +50,7 @@ function safeDecrypt(cipher: string): string {
 
 function loadCredential() {
   try {
-    const raw = localStorage.getItem(CREDENTIAL_KEY)
+    const raw = localStorage.getItem(LOGIN_CREDENTIAL_KEY)
     if (raw) {
       const cred = JSON.parse(raw)
       form.identifier = cred.identifier ?? form.identifier
@@ -64,9 +64,9 @@ function loadCredential() {
 
 function saveCredential() {
   if (rememberPwd.value) {
-    localStorage.setItem(CREDENTIAL_KEY, JSON.stringify({ identifier: form.identifier, password: encryptPwd(form.password) }))
+    localStorage.setItem(LOGIN_CREDENTIAL_KEY, JSON.stringify({ identifier: form.identifier, password: encryptPwd(form.password) }))
   } else {
-    localStorage.removeItem(CREDENTIAL_KEY)
+    localStorage.removeItem(LOGIN_CREDENTIAL_KEY)
   }
 }
 
@@ -77,8 +77,8 @@ async function handleLogin() {
     showNotify({ type: 'warning', message: '请输入用户名' })
     return
   }
-  if (form.identifier.trim().length < 6) {
-    showNotify({ type: 'warning', message: '用户名不能少于6位' })
+  if (form.identifier.trim().length < 4) {
+    showNotify({ type: 'warning', message: '用户名不能少于4位' })
     return
   }
   if (!form.password.trim()) {
@@ -103,7 +103,8 @@ async function handleLogin() {
     }
   }
   catch (error: any) {
-    const message = error?.message || error?.response?.data?.message || error?.response?.data?.error?.message || '登录失败'
+    // 优先取后端返回的业务文案；axios HTTP 错误的 error.message 是英文默认值，放最后
+    const message = error?.response?.data?.message || error?.response?.data?.error?.message || error?.message || '登录失败'
     showNotify({ type: 'danger', message })
   }
   finally {

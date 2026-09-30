@@ -8,8 +8,15 @@ import { getMyPerms } from '@/service/api/paint';
  */
 const permsCache = ref<string[] | null>(null);
 
+/** 退出登录/切换账号后调用：清除权限点缓存，避免新账号沿用上一账号的按钮显隐 */
+export function resetPermsCache(): void {
+  permsCache.value = null;
+}
+
 /** 拉取当前用户权限点集合（登录/刷新后用户信息就绪时调用） */
 export async function fetchMyPerms(): Promise<void> {
+  // 已有权限数据时跳过（登录与刷新初始化可能各调一次），减少无效请求
+  if (permsCache.value !== null) return;
   try {
     const res: any = await getMyPerms();
     const list = res?.data ?? res;
@@ -82,10 +89,50 @@ export function canMerge(): boolean {
   return hasRole('ROLE_SUPER', 'R_SUPER', 'ROLE_SHOP_ADMIN');
 }
 
-/** 是否可结算/标记异常（权限点优先，角色码回退） */
+/** 是否可结算/取消结算/批量结算（权限点优先）：结算口径仅超级管理员操作 */
 export function canSettle(): boolean {
   if (permReady()) return hasPerm('paint:work-order:settle');
+  return isSuperAdmin();
+}
+
+/** 是否可标记/取消异常（权限点优先）：门店管理员默认未授权，仅超管回退 */
+export function canAbnormal(): boolean {
+  if (permReady()) return hasPerm('paint:work-order:abnormal');
+  return isSuperAdmin();
+}
+
+/** 是否可导出工单 Excel（权限点优先，角色码回退） */
+export function canExportWorkOrder(): boolean {
+  if (permReady()) return hasPerm('paint:work-order:export');
   return hasRole('ROLE_SUPER', 'R_SUPER', 'ROLE_SHOP_ADMIN');
+}
+
+/** 是否可执行封单/解封（权限点优先）：超管专属敏感操作 */
+export function canSealOperate(): boolean {
+  if (permReady()) return hasPerm('paint:seal:seal');
+  return isSuperAdmin();
+}
+
+/** 是否可导出统计数据（权限点优先，角色码回退） */
+export function canExportStatistics(): boolean {
+  if (permReady()) return hasPerm('paint:statistics:export');
+  return hasRole('ROLE_SUPER', 'R_SUPER', 'ROLE_FINANCE');
+}
+
+/** 车辆档案：新增/编辑/删除（权限点优先，未就绪时仅超管） */
+export function canManageVehicle(): boolean {
+  if (permReady()) return hasPerm('paint:vehicle:create');
+  return isSuperAdmin();
+}
+
+export function canVehicleUpdate(): boolean {
+  if (permReady()) return hasPerm('paint:vehicle:update');
+  return isSuperAdmin();
+}
+
+export function canVehicleDelete(): boolean {
+  if (permReady()) return hasPerm('paint:vehicle:delete');
+  return isSuperAdmin();
 }
 
 /** 是否可编辑工单（权限点优先，角色码回退） */

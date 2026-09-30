@@ -29,6 +29,7 @@ import {
   sealSettlementMonth,
   unsealSettlementMonth
 } from '@/service/api/paint';
+import { canSealOperate } from '@/utils/permission';
 import { useShopOptions } from '@/hooks/business/use-shop-options';
 
 const message = useMessage();
@@ -245,6 +246,8 @@ function handleDetailPageChange(p: number) {
   loadDetail();
 }
 
+const allowSealOperate = canSealOperate();
+
 const columns: DataTableColumns<SealOverviewItem> = [
   { title: '门店', key: 'shopName', minWidth: 140 },
   { title: '月份', key: 'month', width: 100 },
@@ -302,7 +305,8 @@ const columns: DataTableColumns<SealOverviewItem> = [
               { size: 'small', onClick: () => openDetail(row), disabled: !row.hasData },
               { default: () => '查看明细' }
             ),
-            row.isSealed
+            // 封单/解封为超管专属操作：无权限时不渲染按钮
+            allowSealOperate && row.isSealed
               ? h(
                   NPopconfirm,
                   { onPositiveClick: () => doUnseal(row) },
@@ -311,11 +315,13 @@ const columns: DataTableColumns<SealOverviewItem> = [
                     trigger: () => h(NButton, { size: 'small', type: 'warning' }, { default: () => '解封' })
                   }
                 )
-              : h(
-                  NButton,
-                  { size: 'small', type: 'primary', onClick: () => confirmSeal(row) },
-                  { default: () => '封单' }
-                )
+              : allowSealOperate
+                ? h(
+                    NButton,
+                    { size: 'small', type: 'primary', onClick: () => confirmSeal(row) },
+                    { default: () => '封单' }
+                  )
+                : null
           ]
         }
       )

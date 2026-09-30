@@ -71,6 +71,9 @@ export const useAuthStore = defineStore(SetupStoreId.Auth, () => {
     // 切换账号后 paint 字典缓存（门店等按数据权限过滤）必须失效：动态 import 避免循环依赖
     import('../paint').then(m => m.usePaintStore().invalidateShops());
 
+    // 权限点缓存必须失效：新账号按钮显隐不得沿用上一账号（动态 import 避免循环依赖）
+    import('@/utils/permission').then(m => m.resetPermsCache());
+
     // 仅在非路由守卫初始化流程中自行跳转登录页；首屏 initUserInfo 失败由守卫的
     // !isLogin 分支统一重定向（避免守卫内嵌套 router.push 造成 "No match" 异常）。
     if (!inGuardInit) {
@@ -123,6 +126,10 @@ export const useAuthStore = defineStore(SetupStoreId.Auth, () => {
     if (pass) {
       token.value = loginToken.token;
 
+      // 3. 拉取权限点集合（按钮显隐用；动态 import 避免循环依赖）
+      const { fetchMyPerms } = await import('@/utils/permission');
+      await fetchMyPerms();
+
       return true;
     }
 
@@ -153,6 +160,10 @@ export const useAuthStore = defineStore(SetupStoreId.Auth, () => {
 
       if (!pass) {
         resetStore();
+      } else {
+        // 刷新页面后恢复权限点缓存（动态 import 避免循环依赖）
+        const { fetchMyPerms } = await import('@/utils/permission');
+        await fetchMyPerms();
       }
     }
   }

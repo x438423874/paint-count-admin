@@ -2,7 +2,6 @@ import { DynamicModule, Module, Provider } from '@nestjs/common';
 
 import { EventHandlers } from './application/event-handlers';
 import { QueryHandlers } from './application/query-handlers';
-import { Services } from './application/service';
 
 @Module({})
 export class ApiEndpointModule {
@@ -16,10 +15,9 @@ export class ApiEndpointModule {
       providers: [
         ...EventHandlers,
         ...QueryHandlers,
-        ...Services,
         ...options.inject,
       ],
-      exports: [...QueryHandlers, ...Services],
+      exports: [...QueryHandlers],
     };
   }
 }

@@ -1,6 +1,6 @@
 <script setup lang="tsx">
 import { ref } from 'vue';
-import { NAvatar, NButton, NPopconfirm, NTag } from 'naive-ui';
+import { NAvatar, NButton, NPopconfirm, NTag, NTooltip } from 'naive-ui';
 import EmptyState from '@/components/common/EmptyState.vue';
 import { enableStatusRecord } from '@/constants/business';
 import { deleteUser, fetchGetUserList } from '@/service/api';
@@ -17,6 +17,14 @@ const appStore = useAppStore();
 
 // 是否为超级管理员（用于显示"绑定门店"按钮）
 const isSuperAdmin = ref(checkIsSuperAdmin());
+
+/** 格式化在岗期时间显示（YYYY-MM-DD） */
+function formatTenureDate(value: string | null) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString().slice(0, 10);
+}
 
 // 用户-门店绑定抽屉
 const bindDrawerVisible = ref(false);
@@ -58,7 +66,7 @@ const {
     // the value can not be undefined, otherwise the property in Form will not be reactive
     status: null,
     username: null,
-    nickName: null,
+    realName: null,
     phoneNumber: null,
     email: null
   },
@@ -81,6 +89,13 @@ const {
       minWidth: 100
     },
     {
+      key: 'realName',
+      title: $t('page.manage.user.realName'),
+      align: 'center',
+      minWidth: 90,
+      render: row => row.realName || '-'
+    },
+    {
       key: 'domain',
       title: 'domain',
       align: 'center',
@@ -96,10 +111,54 @@ const {
       }
     },
     {
-      key: 'nickName',
-      title: $t('page.manage.user.nickName'),
+      key: 'roles',
+      title: $t('page.manage.user.userRole'),
       align: 'center',
-      minWidth: 100
+      minWidth: 120,
+      render: row => {
+        const roles = row.roles ?? [];
+        if (!roles.length) return '-';
+        return (
+          <div class="flex flex-wrap justify-center gap-4px">
+            {roles.map(role => (
+              <NTag size="small" type="info">
+                {role}
+              </NTag>
+            ))}
+          </div>
+        );
+      }
+    },
+    {
+      key: 'shops',
+      title: $t('page.manage.user.shopBinding'),
+      align: 'center',
+      minWidth: 200,
+      render: row => {
+        const shops = row.shops ?? [];
+        if (!shops.length) return '-';
+        return (
+          <div class="flex flex-wrap justify-center gap-4px">
+            {shops.map(shop => {
+              const start = formatTenureDate(shop.startAt);
+              const end = formatTenureDate(shop.endAt);
+              const period = `${start ?? ''} ~ ${end ?? $t('page.manage.user.onDuty')}`;
+              return (
+                <NTooltip>
+                  {{
+                    trigger: () => (
+                      <NTag size="small" type={shop.endAt ? 'default' : 'success'}>
+                        {shop.shopName}
+                      </NTag>
+                    ),
+                    default: () => period
+                  }}
+                </NTooltip>
+              );
+            })}
+          </div>
+        );
+      }
     },
     {
       key: 'phoneNumber',
@@ -225,7 +284,7 @@ function edit(id: string) {
         :data="data"
         size="small"
         :flex-height="!appStore.isMobile"
-        :scroll-x="1042"
+        :scroll-x="1500"
         :loading="loading"
         remote
         :row-key="row => row.id"

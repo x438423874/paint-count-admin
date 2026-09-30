@@ -4,8 +4,8 @@ export enum ErrorCode {
 }
 
 export const ErrorMessages = {
-  [ErrorCode.INTERNAL_SERVER_ERROR]: 'Internal server error',
-  [ErrorCode.UNPROCESSABLE_ENTITY]: 'Validation failed',
+  [ErrorCode.INTERNAL_SERVER_ERROR]: '系统异常，请稍后重试',
+  [ErrorCode.UNPROCESSABLE_ENTITY]: '参数校验失败',
 };
 
 export class BizException extends Error {

@@ -517,7 +517,9 @@ declare namespace App {
             title: string;
             userName: string;
             userGender: string;
-            nickName: string;
+            realName: string;
+            shopBinding: string;
+            onDuty: string;
             userPhone: string;
             userEmail: string;
             userStatus: string;
@@ -531,7 +533,7 @@ declare namespace App {
               password: string;
               domain: string;
               userGender: string;
-              nickName: string;
+              realName: string;
               userPhone: string;
               userEmail: string;
               userStatus: string;
@@ -551,6 +553,7 @@ declare namespace App {
             parentId: string;
             menuType: string;
             menuName: string;
+            permission: string;
             routeName: string;
             routePath: string;
             pathParam: string;
@@ -606,6 +609,7 @@ declare namespace App {
             type: {
               directory: string;
               menu: string;
+              button: string;
             };
             iconType: {
               iconify: string;

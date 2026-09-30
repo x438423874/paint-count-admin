@@ -1,14 +1,11 @@
 <script setup lang="tsx">
 import dayjs from 'dayjs';
-import utc from 'dayjs/plugin/utc';
 import { fetchGetLoginLogList } from '@/service/api';
 import { useAppStore } from '@/store/modules/app';
 import { useTable } from '@/hooks/common/table';
 import { $t } from '@/locales';
 import EmptyState from '@/components/common/EmptyState.vue';
 import LoginLogSearch from './modules/login-log-search.vue';
-
-dayjs.extend(utc);
 
 const appStore = useAppStore();
 
@@ -34,54 +31,55 @@ const { columns, data, getData, getDataByPage, loading, mobilePagination, search
     },
     {
       key: 'username',
-      title: 'username',
+      title: '用户名',
       align: 'center',
       minWidth: 100
     },
     {
       key: 'domain',
-      title: 'domain',
+      title: '域',
       align: 'center',
       width: 80
     },
     {
       key: 'loginTime',
-      title: 'loginTime',
+      title: '登录时间',
       align: 'center',
-      minWidth: 100,
+      minWidth: 140,
       render(row) {
-        return dayjs(row.loginTime).utc().add(8, 'hour').format('YYYY-MM-DD HH:mm:ss');
+        return dayjs(row.loginTime).format('YYYY-MM-DD HH:mm:ss');
       }
     },
     {
+      key: 'ip',
+      title: 'IP',
+      align: 'center',
+      width: 110
+    },
+    {
       key: 'port',
-      title: 'port',
+      title: '端口',
       align: 'center',
       width: 80
     },
     {
       key: 'address',
-      title: 'address',
+      title: '登录地点',
       align: 'center',
       minWidth: 100
     },
     {
       key: 'userAgent',
-      title: 'userAgent',
+      title: '浏览器标识',
       align: 'center',
+      minWidth: 150,
       ellipsis: {
         tooltip: true
       }
     },
     {
-      key: 'requestId',
-      title: 'requestId',
-      align: 'center',
-      width: 80
-    },
-    {
       key: 'type',
-      title: 'type',
+      title: '登录方式',
       align: 'center',
       width: 80
     }
@@ -92,7 +90,7 @@ const { columns, data, getData, getDataByPage, loading, mobilePagination, search
 <template>
   <div class="min-h-500px flex-col-stretch gap-16px overflow-hidden lt-sm:overflow-auto">
     <LoginLogSearch v-model:model="searchParams" @reset="resetSearchParams" @search="getDataByPage" />
-    <NCard title="login log" :bordered="false" size="small" class="sm:flex-1-hidden card-wrapper">
+    <NCard title="登录日志" :bordered="false" size="small" class="sm:flex-1-hidden card-wrapper">
       <template #header-extra>
         <TableHeaderOperation :loading="loading" @refresh="getData" />
       </template>

@@ -18,12 +18,15 @@ import { confirmAction } from '@/composables/useConfirm'
 import { describeUploadError, uploadCompressed } from '@/composables/useImageUpload'
 import { recentMonthOptions } from '@/utils/month-options'
 import { resolveImageUrl } from '@/utils/image-url'
-import { canEdit as canEditRole } from '@/utils/permission'
+import { canEdit as canEditRole, canPending } from '@/utils/permission'
 import { computed, onActivated, onDeactivated, onMounted, onUnmounted } from 'vue'
 import { useShopOptions } from '@/composables/useShopOptions'
 
 const router = useRouter()
 const allowEdit = canEditRole()
+
+// 上传门槛：需已选门店 + 已选结算月（封单校验由后端兜底）
+const canUpload = computed(() => canPending('upload') && !!selectedShopId.value && !!selectedMonth.value)
 
 // 门店走 dict store 共享缓存，全应用只请求一次（原为每页各自 getShopList）
 const { ensureShops, getShopName } = useShopOptions()
@@ -249,6 +252,10 @@ async function onAfterRead(fileItem: any) {
     showNotify({ type: 'warning', message: '请先选择门店' })
     return
   }
+  if (!selectedMonth.value) {
+    showNotify({ type: 'warning', message: '请先选择结算月份' })
+    return
+  }
   uploading.value = true
   uploadTotal.value = files.length
   uploadDone.value = 0
@@ -378,7 +385,7 @@ function onDelete(item: PaintPendingImage) {
 // ==================== 修正识别结果 ====================
 // 待匹配(PENDING)/待确认(NEEDS_REVIEW)/失败(FAILED) 均可修正后重新匹配
 function canCorrect(item: PaintPendingImage) {
-  return allowEdit && ocrState(item) !== 'processing' && item.status !== 'MATCHED' && item.status !== 'MANUAL'
+  return canPending('correct') && !item._sealed && ocrState(item) !== 'processing' && item.status !== 'MATCHED' && item.status !== 'MANUAL'
 }
 
 const correctPopup = reactive({
@@ -480,6 +487,25 @@ const matchPopup = reactive({
 })
 const searchResults = ref<any[]>([])
 
+const WORK_ORDER_STATUS_TEXT: Record<string, string> = {
+  DRAFT: '草稿',
+  PENDING: '待审核',
+  AUDITED: '已审核',
+  SETTLED: '已结算',
+  ABNORMAL: '异常',
+  VOID: '已作废',
+}
+function statusText(s: string) {
+  return WORK_ORDER_STATUS_TEXT[s] || s
+}
+function statusTagType(s: string): 'default' | 'warning' | 'success' | 'primary' | 'danger' {
+  if (s === 'AUDITED') return 'success'
+  if (s === 'SETTLED') return 'primary'
+  if (s === 'ABNORMAL' || s === 'VOID') return 'danger'
+  if (s === 'PENDING') return 'warning'
+  return 'default'
+}
+
 function openMatchPopup(item: PaintPendingImage) {
   matchPopup.pendingId = item.id
   matchPopup.searchKeyword = ''
@@ -511,7 +537,9 @@ async function searchOrders() {
       current: 1,
       size: 20,
     } as any)
-    searchResults.value = res?.records || []
+    // 已审核/已结算/异常/作废的工单不可再归类，过滤掉避免误点触发拦截
+    const LOCKED = new Set(['AUDITED', 'SETTLED', 'ABNORMAL', 'VOID'])
+    searchResults.value = (res?.records || []).filter((o: any) => !LOCKED.has(o.status))
   }
   catch {
     searchResults.value = []
@@ -575,14 +603,21 @@ onUnmounted(() => stopPolling())
           <van-icon name="arrow-down" size="12" color="var(--text-tertiary)" />
         </div>
         <van-uploader
-          v-if="allowEdit"
+          v-if="canPending('upload')"
           :after-read="onAfterRead"
           multiple
           accept="image/jpeg,image/png,image/webp"
           :preview-image="false"
+          :disabled="!canUpload"
         >
-          <van-button size="small" type="primary" icon="photo-o" :loading="uploading">
-            {{ uploading ? `上传 ${uploadDone}/${uploadTotal}` : '上传图片' }}
+          <van-button
+            size="small"
+            type="primary"
+            icon="photo-o"
+            :loading="uploading"
+            :disabled="!canUpload"
+          >
+            {{ uploading ? `上传 ${uploadDone}/${uploadTotal}` : !selectedShopId ? '先选门店' : !selectedMonth ? '先选月份' : '上传图片' }}
           </van-button>
         </van-uploader>
       </div>
@@ -633,6 +668,9 @@ onUnmounted(() => stopPolling())
                   <van-tag v-if="item.source" :color="sourceColor[item.source]" plain size="medium">
                     {{ sourceLabel[item.source] }}
                   </van-tag>
+                  <van-tag v-if="item._sealed" type="danger" size="medium">
+                    已封单
+                  </van-tag>
                   <span class="month-tag">{{ item.settlementMonth || '未指定月份' }}</span>
                 </div>
               </template>
@@ -658,28 +696,30 @@ onUnmounted(() => stopPolling())
                     <van-button v-if="canCorrect(item)" size="mini" @click="openCorrectPopup(item)">
                       修正
                     </van-button>
-                    <van-button size="mini" @click="onAutoMatch(item)">
+                    <template v-if="!item._sealed">
+                    <van-button v-if="canPending('match')" size="mini" @click="onAutoMatch(item)">
                       匹配
                     </van-button>
                     <van-button
-                      v-if="item.status === 'NEEDS_REVIEW' || item.status === 'PENDING'"
+                      v-if="canPending('assign') && (item.status === 'NEEDS_REVIEW' || item.status === 'PENDING')"
                       size="mini" type="primary" @click="openMatchPopup(item)"
                     >
                       指派
                     </van-button>
                     <van-button
-                      v-if="item.status !== 'MATCHED' && item.status !== 'MANUAL'"
+                      v-if="canPending('create-order') && item.status !== 'MATCHED' && item.status !== 'MANUAL'"
                       size="mini" type="warning" @click="onCreateOrder(item)"
                     >
                       补建
                     </van-button>
-                    <van-button v-if="item.status === 'FAILED'" size="mini" @click="onRetryOcr(item)">
+                    <van-button v-if="canPending('retry') && item.status === 'FAILED'" size="mini" @click="onRetryOcr(item)">
                       重试
                     </van-button>
                   </template>
-                  <van-button size="mini" type="danger" plain @click="onDelete(item)">
+                  <van-button v-if="canPending('delete') && !item._sealed" size="mini" type="danger" plain @click="onDelete(item)">
                     删除
                   </van-button>
+                  </template>
                 </div>
               </template>
             </van-card>
@@ -751,52 +791,65 @@ onUnmounted(() => stopPolling())
     </van-popup>
 
     <!-- 人工指派弹窗 -->
-    <van-popup v-model:show="matchPopup.show" position="bottom" round :style="{ height: '70%' }">
+    <van-popup v-model:show="matchPopup.show" position="bottom" round :style="{ height: '78%' }">
       <div class="match-popup">
         <van-nav-bar title="人工指派到工单" />
-        <div class="match-section-title">
-          候选工单（按 OCR 工单号/车牌匹配）
-        </div>
-        <div v-if="matchPopup.candidates.length" class="match-list">
-          <van-cell v-for="o in matchPopup.candidates" :key="o.id" @click="confirmMatch(o.id)">
-            <template #title>
-              <div class="match-cell">
-                <van-tag size="medium" :type="o.status === 'SETTLED' ? 'primary' : o.status === 'AUDITED' ? 'success' : 'warning'">
-                  {{ o.status }}
-                </van-tag>
-                <span class="match-no">{{ o.orderNo || '(无工单号)' }}</span>
-                <span class="match-plate">{{ o.plateNumber || '-' }}</span>
-                <span class="match-extra">{{ o.carModel || '' }} {{ o.settlementMonth || '' }}</span>
+        <div class="match-body">
+          <div class="match-section-title">
+            候选工单<span class="match-sub">（按 OCR 工单号 / 车牌匹配）</span>
+          </div>
+          <div v-if="matchPopup.candidates.length" class="match-list">
+            <div
+              v-for="o in matchPopup.candidates"
+              :key="o.id"
+              class="match-item"
+              @click="confirmMatch(o.id)"
+            >
+              <div class="match-item-main">
+                <div class="match-row1">
+                  <van-tag size="medium" :type="statusTagType(o.status)">{{ statusText(o.status) }}</van-tag>
+                  <span class="match-no">{{ o.orderNo || '(无工单号)' }}</span>
+                </div>
+                <div class="match-row2">
+                  <span class="match-plate">{{ o.plateNumber || '无车牌' }}</span>
+                  <span v-if="o.carModel" class="match-extra">{{ o.carModel }}</span>
+                  <span v-if="o.settlementMonth" class="match-extra">{{ o.settlementMonth }}</span>
+                </div>
               </div>
-            </template>
-            <template #value>
-              <van-button size="mini" type="primary">
-                归类
-              </van-button>
-            </template>
-          </van-cell>
-        </div>
-        <AppEmpty v-else description="无候选工单" />
+              <van-button size="small" type="primary" class="match-btn">归类</van-button>
+            </div>
+          </div>
+          <AppEmpty v-else description="无候选工单，可手动搜索" />
 
-        <div class="match-section-title">
-          手动搜索工单
-        </div>
-        <van-search v-model="matchPopup.searchKeyword" placeholder="工单号 / 车牌" @search="searchOrders" />
-        <div v-if="searchResults.length" class="match-list">
-          <van-cell v-for="o in searchResults" :key="o.id" @click="confirmMatch(o.id)">
-            <template #title>
-              <div class="match-cell">
-                <span class="match-no">{{ o.orderNo || '(无工单号)' }}</span>
-                <span class="match-plate">{{ o.plateNumber || '-' }}</span>
-                <span class="match-extra">{{ o.carModel || '' }} {{ o.settlementMonth || '' }}</span>
+          <div class="match-section-title">手动搜索工单</div>
+          <van-search
+            v-model="matchPopup.searchKeyword"
+            placeholder="工单号 / 车牌"
+            shape="round"
+            :loading="matchPopup.searching"
+            @search="searchOrders"
+          />
+          <div v-if="searchResults.length" class="match-list">
+            <div
+              v-for="o in searchResults"
+              :key="o.id"
+              class="match-item"
+              @click="confirmMatch(o.id)"
+            >
+              <div class="match-item-main">
+                <div class="match-row1">
+                  <van-tag size="medium" :type="statusTagType(o.status)">{{ statusText(o.status) }}</van-tag>
+                  <span class="match-no">{{ o.orderNo || '(无工单号)' }}</span>
+                </div>
+                <div class="match-row2">
+                  <span class="match-plate">{{ o.plateNumber || '无车牌' }}</span>
+                  <span v-if="o.carModel" class="match-extra">{{ o.carModel }}</span>
+                  <span v-if="o.settlementMonth" class="match-extra">{{ o.settlementMonth }}</span>
+                </div>
               </div>
-            </template>
-            <template #value>
-              <van-button size="mini" type="primary">
-                归类
-              </van-button>
-            </template>
-          </van-cell>
+              <van-button size="small" type="primary" class="match-btn">归类</van-button>
+            </div>
+          </div>
         </div>
       </div>
     </van-popup>
@@ -882,11 +935,19 @@ onUnmounted(() => stopPolling())
 .card-title {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
+}
+.card-title :deep(.van-tag) {
+  flex-shrink: 0;
 }
 .month-tag {
   font-size: 12px;
   color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 .card-desc {
   font-size: 13px;
@@ -924,30 +985,81 @@ onUnmounted(() => stopPolling())
   flex-direction: column;
   overflow: hidden;
 }
+.match-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 12px;
+}
 .match-section-title {
-  padding: 10px 12px 4px;
+  padding: 12px 12px 6px;
   font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.match-sub {
+  font-weight: 400;
   color: var(--text-tertiary);
 }
 .match-list {
-  flex: 1;
-  overflow-y: auto;
+  padding: 0 12px;
 }
-.match-cell {
+.match-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  min-width: 0;
+}
+.match-item-main {
+  flex: 1;
+  min-width: 0;
+}
+.match-row1 {
   display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
+}
+.match-row2 {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+  min-width: 0;
+}
+.match-no {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
+}
+.match-plate {
+  color: var(--color-primary);
   font-size: 13px;
-  .match-no {
-    font-weight: 600;
-  }
-  .match-plate {
-    color: var(--color-primary);
-  }
-  .match-extra {
-    color: var(--text-tertiary);
-    font-size: 12px;
-  }
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.match-extra {
+  color: var(--text-tertiary);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.match-btn {
+  flex-shrink: 0;
 }
 .correct-popup {
   height: 100%;

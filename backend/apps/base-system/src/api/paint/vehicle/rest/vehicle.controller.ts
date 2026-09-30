@@ -2,6 +2,7 @@ import { Controller, Get, Post, Put, Delete, Body, Query, Param, Request, UseGua
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 
 import { AuthZGuard, UsePermissions } from '@lib/infra/casbin';
+import { maskCustomerName, maskPhone, maskVin } from '../../service/customer-masking.util';
 import { Log } from '@lib/infra/decorators/log.decorator';
 import { AuthenticatedRequest } from '@lib/infra/guard/auth-request.type';
 import { ApiRes } from '@lib/infra/rest/res.response';
@@ -51,14 +52,23 @@ export class PaintVehicleController {
   @Get('page')
   @ApiOperation({ summary: '分页查询车辆（按数据权限过滤）' })
   async page(@Query() dto: PageVehicleDto, @Request() req: AuthenticatedRequest) {
+    const viewCustomer = await this.userShopService.canViewCustomerInfo(req.user.uid);
     const accessibleShopIds = await this.userShopService.getAccessibleShopIds(req.user.uid);
     const data = await this.vehicleService.page(dto, accessibleShopIds);
+    if (!viewCustomer) {
+      for (const record of data.records) {
+        record.customerName = maskCustomerName(record.customerName);
+        record.phone = maskPhone(record.phone);
+        record.vin = maskVin(record.vin);
+      }
+    }
     return ApiRes.success(data);
   }
 
   @Get('list')
   @ApiOperation({ summary: '车辆列表（精简，用于下拉/联想）' })
   async list(@Query('keyword') keyword: string, @Request() req: AuthenticatedRequest) {
+    const viewCustomer = await this.userShopService.canViewCustomerInfo(req.user.uid);
     const accessibleShopIds = await this.userShopService.getAccessibleShopIds(req.user.uid);
     const data = await this.vehicleService.list(keyword, accessibleShopIds);
     return ApiRes.success(data);
@@ -66,8 +76,13 @@ export class PaintVehicleController {
 
   @Get('by-plate/:plateNumber')
   @ApiOperation({ summary: '按车牌号查询车辆（工单表单自动填充用）' })
-  async findByPlate(@Param('plateNumber') plateNumber: string) {
+  async findByPlate(@Param('plateNumber') plateNumber: string, @Request() req: AuthenticatedRequest) {
+    const viewCustomer = await this.userShopService.canViewCustomerInfo(req.user.uid);
     const data = await this.vehicleService.findByPlateNumber(plateNumber);
+    if (!viewCustomer && data) {
+      (data as Record<string, unknown>).customerName = undefined;
+      (data as Record<string, unknown>).phone = undefined;
+    }
     return ApiRes.success(data);
   }
 
@@ -81,6 +96,7 @@ export class PaintVehicleController {
     @Query('size') size: number = 20,
     @Request() req: AuthenticatedRequest,
   ) {
+    const viewCustomer = await this.userShopService.canViewCustomerInfo(req.user.uid);
     const accessibleShopIds = await this.userShopService.getAccessibleShopIds(req.user.uid);
     const data = await this.vehicleService.getHistoryOrders(id, accessibleShopIds, {
       current,
@@ -88,13 +104,29 @@ export class PaintVehicleController {
       scope,
       shopId,
     });
+    if (!viewCustomer) {
+      for (const record of data.records || []) {
+        // 按状态分级：仅已结算的历史工单脱敏，进行中工单明文
+        if (record.status === 'SETTLED') {
+          record.customerName = maskCustomerName(record.customerName);
+          record.phone = maskPhone(record.phone);
+          record.vin = maskVin(record.vin);
+        }
+      }
+    }
     return ApiRes.success(data);
   }
 
   @Get(':id')
   @ApiOperation({ summary: '车辆详情' })
-  async findById(@Param('id') id: string) {
+  async findById(@Param('id') id: string, @Request() req: AuthenticatedRequest) {
+    const viewCustomer = await this.userShopService.canViewCustomerInfo(req.user.uid);
     const data = await this.vehicleService.findById(id);
+    if (!viewCustomer && data) {
+      data.customerName = maskCustomerName(data.customerName);
+      data.phone = maskPhone(data.phone);
+      data.vin = maskVin(data.vin);
+    }
     return ApiRes.success(data);
   }
 }

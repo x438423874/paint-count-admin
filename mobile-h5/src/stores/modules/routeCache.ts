@@ -13,9 +13,15 @@ const useRouteCacheStore = defineStore('route-cache', () => {
       routeCaches.value.push(route.name)
   }
 
+  /** 清空 keep-alive 缓存名单（退出/切换账号时调用，已缓存的页面实例随之销毁重建） */
+  const resetRouteCaches = () => {
+    routeCaches.value = []
+  }
+
   return {
     routeCaches,
     addRoute,
+    resetRouteCaches,
   }
 })
 

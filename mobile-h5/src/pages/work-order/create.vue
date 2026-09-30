@@ -1,13 +1,15 @@
 <script setup lang="ts">
-import { createWorkOrder, fetchOrderNoRules, fetchVehicleByPlate, getShopCategoriesWithStandard, getSpecialPaintList, ocrRecognizeImage, uploadPendingImage, uploadPendingImageToOrder } from '@/api/paint'
+import { createOrderFromPending, createWorkOrder, fetchOrderNoRules, fetchVehicleByPlate, getShopCategoriesWithStandard, getSpecialPaintList, ocrRecognizeImage, uploadPendingImage } from '@/api/paint'
 import type { OrderNoRule } from '@/api/paint'
 import type { CreateWorkOrderItemDto, PaintSpecialPaint, PaintStandard, PaintVehicle } from '@/api/types/paint'
 import { compressImage } from '@/utils/image-compress'
 import { analyzeOrderNoErrors } from '@/utils/order-no-rule'
 import { phoneRegex, plateNumberRegex, vinRegex } from '@/utils/validators'
-import { computeItemPaintCount, computeTotalPaintCount, getPaintDecimalLength, normalizeOverridePaintCount } from '@/utils/paint-count'
+import { computeItemPaintCount, computeTotalPaintCount, formatAutoPaintCount, getPaintDecimalLength, normalizeOverridePaintCount } from '@/utils/paint-count'
 import { applyOcrFields } from '@/utils/ocr-fields'
 import { recentMonthOptions } from '@/utils/month-options'
+import { getMyScopeCached, earliestTenureDate } from '@/utils/tenure'
+import type { MyScope } from '@/api/paint'
 import { describeUploadError, uploadCompressed } from '@/composables/useImageUpload'
 import { useShopOptions } from '@/composables/useShopOptions'
 
@@ -48,6 +50,13 @@ const form = reactive({
   items: [] as CreateWorkOrderItemDto[],
 })
 
+// 车架号即时校验：非必填，填了就实时校验格式；错误保持显示直到修正或清空
+watch(() => form.vin, (v) => {
+  const val = (v || '').trim()
+  vinError.value = val && !vinRegex.test(val.toUpperCase()) ? '车架号应为17位字母数字（不含I、O、Q）' : ''
+})
+
+
 const shopName = computed(() => {
   const shop = shops.value.find(s => s.id === form.shopId)
   return shop?.name || ''
@@ -67,8 +76,14 @@ const createdOrderNo = ref<string>('')
 // 上传模式选择弹窗
 const showUploadModePicker = ref(false)
 
-// 结算月份选择列统一走 recentMonthOptions（当月及往前共 13 个月）
-const monthColumns = computed(() => recentMonthOptions({ months: 13 }))
+// 在岗期 scope：会话级缓存，与月份/日期选项共用（加载失败宽松降级为近 30 天）
+const scope = ref<MyScope | null>(null)
+onMounted(async () => {
+  scope.value = await getMyScopeCached()
+})
+
+// 结算月份选择列统一走 recentMonthOptions（当月及往前共 13 个月 ∩ 在岗期，最早到入职月）
+const monthColumns = computed(() => recentMonthOptions({ months: 13, scope: scope.value }))
 
 // 本地时区格式化为 yyyy-MM-dd（避免 toISOString 的 UTC 截断出现前一天）
 function formatLocalDate(d: Date) {
@@ -78,8 +93,13 @@ function formatLocalDate(d: Date) {
 const dateColumns = computed(() => {
   const list = []
   const now = new Date()
-  for (let i = 0; i < 30; i++) {
+  // 起始日：默认近 30 天；门店员工有入职时间时，从入职日开始显示
+  const defaultStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 29)
+  const hire = earliestTenureDate(scope.value)
+  const start = hire ?? defaultStart
+  for (let i = 0; ; i++) {
     const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i)
+    if (d < start) break
     const value = formatLocalDate(d)
     const weekDay = ['日', '一', '二', '三', '四', '五', '六'][d.getDay()]
     const label = `${value} 周${weekDay}`
@@ -298,6 +318,8 @@ async function handleSubmit(opts?: { skipStrict?: boolean }) {
     // 记录新建工单，供“直接创建工单”模式上传图片使用
     createdOrderId.value = created?.id || ''
     createdOrderNo.value = created?.orderNo || ''
+    // 新工单不在列表缓存中，标记列表过期（返回列表时静默刷新）
+    sessionStorage.setItem('work-order-list-dirty', '1')
     showNotify({ type: 'success', message: '创建成功，可继续上传该工单图片' })
   }
   catch {
@@ -406,7 +428,7 @@ function handleTakePhoto() {
 
 // 上传模式选择（van-action-sheet，选择后自动关闭并继续）
 const uploadModeActions = [
-  { name: '直接创建工单', subname: '图片作为当前工单的施工前照片，直接归入工单（需先提交创建工单）' },
+  { name: '直接创建工单', subname: '每张图片上传成功后自动创建一个独立工单（一图一单），需先选门店和结算月份' },
   { name: 'OCR 创建工单', subname: '图片存入图片池，系统后台 OCR 识别后按门店/月份自动补建新工单' },
 ]
 
@@ -418,15 +440,11 @@ function onUploadModeSelect(action: { name: string }) {
 // 选择上传模式后进入文件选择
 async function onUploadModeConfirm() {
   showUploadModePicker.value = false
-  if (uploadMode.value === 'create') {
-    // 直接创建工单：若尚未提交表单建单，则先用当前表单自动创建工单，再上传图片作为 BEFORE 图
-    if (!createdOrderId.value) {
-      // 直接创建工单：仅需门店+结算月份即可建单，车牌/喷漆项目等后续可补
-      await handleSubmit({ skipStrict: true })
-    }
-    if (!createdOrderId.value) {
-      // 建单失败（如门店缺失或后端错误），提示后退出
-      showNotify({ type: 'warning', message: '创建工单失败，请选择门店后重试' })
+  if (uploadMode.value === 'create' && !createdOrderId.value) {
+    // 直接创建工单：每张图片上传成功后会自动创建一个独立工单，前置仅需门店+结算月份。
+    // 此处只做前置校验；建单在图片上传成功后进行（batchQuickCreate）。
+    if (!form.shopId || !form.settlementMonth) {
+      showNotify({ type: 'warning', message: '请先选择门店和结算月份，再使用「直接创建工单」上传图片' })
       return
     }
   }
@@ -470,13 +488,33 @@ async function batchQuickCreate(files: File[]) {
   for (const file of files) {
     batchProgress.value.current++
 
-    const doUpload = (compressed: File, thumbnail: File) => {
-      if (uploadMode.value === 'create') {
-        // 直接创建工单：图片作为当前工单的 BEFORE 图，不经图片池
-        return uploadPendingImageToOrder(compressed, form.shopId, createdOrderId.value, thumbnail)
+    // 每张图片独立处理。直接创建工单：先上传图片到图片池（成功即已安全落库），
+    // 再立即为该图片补建独立工单并归档（一图一单）；补建失败图片仍在图片池可补建。
+    let createdOrderNoForImage = ''
+    let pendingCreateWarn = ''
+    const doUpload = async (compressed: File, thumbnail: File) => {
+      if (uploadMode.value !== 'create') {
+        // OCR 创建工单：上传到图片池，后端 OCR 后自动按门店/结算月份 + OCR 资料补建工单
+        return uploadPendingImage(compressed, form.shopId, form.settlementMonth || undefined, 'CREATE', thumbnail)
       }
-      // OCR 创建工单：上传到图片池，后端 OCR 后自动按门店/结算月份 + OCR 资料补建工单
-      return uploadPendingImage(compressed, form.shopId, form.settlementMonth || undefined, 'CREATE', thumbnail)
+      const pending: any = await uploadPendingImage(compressed, form.shopId, form.settlementMonth || undefined, 'CREATE', thumbnail)
+      if (!pending?.id)
+        return pending
+      try {
+        const order: any = await createOrderFromPending(pending.id, form.settlementMonth || undefined)
+        createdOrderNoForImage = order?.orderNo || order?.order?.orderNo || ''
+      }
+      catch (e: any) {
+        const msg: string = e?.message || ''
+        // OCR 已自动归类（图片已有归属工单）：等同成功
+        if (msg.includes('已归类'))
+          return pending
+        // 补建失败：图片已安全在图片池，不算上传失败，提示稍后在图片池补建
+        createdOrderNoForImage = ''
+        pendingCreateWarn = msg || '补建工单失败'
+        return pending
+      }
+      return pending
     }
     const result = await uploadCompressed(file, doUpload)
 
@@ -485,7 +523,9 @@ async function batchQuickCreate(files: File[]) {
       batchResults.value.push({
         fileName: file.name,
         success: true,
-        message: uploadMode.value === 'create' ? `已关联到工单 ${createdOrderNo.value || ''}` : '已加入图片池，OCR 后将自动建单',
+        message: uploadMode.value === 'create'
+          ? (createdOrderNoForImage ? `已创建工单 ${createdOrderNoForImage}，图片已归档` : `图片已上传${pendingCreateWarn ? `（${pendingCreateWarn}，可稍后在图片池补建工单）` : ''}`)
+          : '已加入图片池，OCR 后将自动建单',
       })
     }
     else {
@@ -514,11 +554,8 @@ async function batchQuickCreate(files: File[]) {
 
 // 批量结果确认：OCR 模式有成功则前往图片池；直接创建模式图片已关联工单，留在当前页
 function onBatchResultConfirm() {
-  const hasSuccess = batchProgress.value.success > 0
+  // 仅关闭结果弹窗，留在当前页（图片池/工单列表均可从菜单进入，不再自动跳转）
   showBatchResult.value = false
-  if (hasSuccess && uploadMode.value === 'ocr') {
-    router.replace({ name: 'PendingImage' })
-  }
 }
 
 // 部位数量改变时，收敛超过部位数量的新件数量
@@ -656,7 +693,7 @@ onMounted(() => {
         <van-icon name="arrow" class="mode-arrow" />
       </div>
       <div v-if="uploadMode === 'create'" class="mode-tip">
-        图片将作为工单 {{ createdOrderNo || '（请先提交创建工单）' }} 的施工前照片，直接归入该工单
+        每张图片上传成功后会自动创建一个独立工单（一图一单），图片作为该工单的施工前照片；需先选择门店和结算月份
       </div>
       <div v-else class="mode-tip">
         图片存入图片池，系统后台 OCR 识别后按门店/月份自动补建工单
@@ -704,7 +741,13 @@ onMounted(() => {
         style="margin: 0 16px 8px;"
       />
       <van-field v-model="form.carModel" label="车型" placeholder="请输入车型" />
-      <van-field v-model="form.vin" label="车架号" placeholder="请输入车架号(VIN)" :error-message="vinError || ocrVinCorrectionMsg" @update:model-value="vinError = ''; ocrVinCorrectionMsg = ''" />
+      <van-field
+        v-model="form.vin"
+        label="车架号"
+        placeholder="请输入车架号(VIN)"
+        :error-message="vinError || ocrVinCorrectionMsg"
+        @update:model-value="ocrVinCorrectionMsg = ''"
+      />
       <van-notice-bar v-if="ocrVinCorrectionMsg" left-icon="warning-o" :text="ocrVinCorrectionMsg" background="var(--color-warning-bg)" color="var(--color-warning)" style="margin: 0 16px 8px;" />
       <van-field v-model="form.brand" label="品牌" placeholder="请输入品牌" />
       <van-field v-model="form.customerName" label="客户名称" placeholder="请输入客户名称" />
@@ -716,7 +759,7 @@ onMounted(() => {
     <div v-if="standards.length" class="items-section">
       <div class="section-title">
         喷漆项目
-        <span class="total-count">总幅数: {{ totalPaintCount.toFixed(1) }}</span>
+        <span class="total-count">总幅数: {{ formatAutoPaintCount(totalPaintCount, form.items.some(i => i.specialPaintId)) }}</span>
       </div>
       <div v-if="isAdjustmentOrder" class="adjust-hint">
         <van-icon name="warning-o" size="12" />
@@ -748,8 +791,8 @@ onMounted(() => {
                 @blur="onPaintCountBlur(item)"
                 @update:model-value="(val: number) => { item.overridePaintCount = val }"
               />
-              <span v-else class="paint-count-value" @click="item.overridePaintCount = Number(getItemAutoPaintCount(index).toFixed(1))">
-                {{ getItemAutoPaintCount(index).toFixed(1) }}
+              <span v-else class="paint-count-value" @click="item.overridePaintCount = Number(formatAutoPaintCount(getItemAutoPaintCount(index), Boolean(item.specialPaintId)))">
+                {{ formatAutoPaintCount(getItemAutoPaintCount(index), Boolean(item.specialPaintId)) }}
               </span>
               <van-icon
                 v-if="item.overridePaintCount !== undefined && item.overridePaintCount !== null"
@@ -824,8 +867,8 @@ onMounted(() => {
     <!-- 批量上传结果弹窗 -->
     <van-dialog
       v-model:show="showBatchResult"
-      :title="batchProgress.success > 0 ? (uploadMode === 'create' ? '已关联到工单' : '已加入图片池') : '上传完成'"
-      :confirm-button-text="batchProgress.success > 0 ? (uploadMode === 'create' ? '继续' : '前往图片池') : '完成'"
+      :title="batchProgress.success > 0 ? (uploadMode === 'create' ? '已创建工单' : '已加入图片池') : '上传完成'"
+      confirm-button-text="完成"
       :show-cancel-button="batchProgress.failed > 0"
       cancel-button-text="返回"
       @confirm="onBatchResultConfirm"

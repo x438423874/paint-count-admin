@@ -1,12 +1,12 @@
 import { ApiProperty, OmitType } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import { IsNotEmpty, IsOptional, IsString, MinLength } from 'class-validator';
 
 export class UserCreateDto {
   @ApiProperty({ required: true })
   @IsString({ message: '用户名必须是字符串' })
   @IsNotEmpty({ message: '用户名不能为空' })
-  @MinLength(6, { message: '用户名长度不能少于 6 个字符' })
+  @MinLength(4, { message: '用户名长度不能少于 4 个字符' })
   username: string;
 
   @ApiProperty({ required: true })
@@ -20,10 +20,11 @@ export class UserCreateDto {
   @IsString({ message: '域必须是字符串' })
   domain: string;
 
-  @ApiProperty({ required: false })
+  @ApiProperty({ required: false, nullable: true })
   @IsOptional()
-  @IsString({ message: '昵称必须是字符串' })
-  nickName: string;
+  @IsString({ message: '姓名必须是字符串' })
+  @Type(() => String)
+  realName: string | null;
 
   @ApiProperty({ type: 'string', required: false, nullable: true })
   @IsOptional()
@@ -52,4 +53,11 @@ export class UserUpdateDto extends OmitType(UserCreateDto, [
   @IsString({ message: 'id 必须是字符串' })
   @IsNotEmpty({ message: 'id 不能为空' })
   id: string;
+
+  @ApiProperty({ required: false, nullable: true })
+  @Transform(({ value }) => (typeof value === 'string' && value.trim() === '' ? undefined : value))
+  @IsOptional()
+  @IsString({ message: '密码必须是字符串' })
+  @MinLength(6, { message: '密码长度不能少于 6 个字符' })
+  password?: string;
 }

@@ -1,10 +1,30 @@
 <script setup lang="tsx">
-import { ref, computed } from 'vue';
+import { computed, ref } from 'vue';
 import {
-  NModal, NSpace, NButton, NUpload, NDataTable, NInput,
-  NAlert, NTag, NSpin, NFormItem, NSelect, NImage, NEmpty, NText, NRadioGroup, NRadioButton
+  NAlert,
+  NButton,
+  NDataTable,
+  NEmpty,
+  NFormItem,
+  NImage,
+  NInput,
+  NModal,
+  NRadioButton,
+  NRadioGroup,
+  NSelect,
+  NSpace,
+  NSpin,
+  NTag,
+  NText,
+  NUpload
 } from 'naive-ui';
-import { batchOcrPreview, batchCreateWorkOrder, type BatchOcrPreviewItem, type BatchCreateItem, type OcrMode } from '@/service/api';
+import {
+  type BatchCreateItem,
+  type BatchOcrPreviewItem,
+  type OcrMode,
+  batchCreateWorkOrder,
+  batchOcrPreview
+} from '@/service/api';
 
 function generateId() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -92,7 +112,7 @@ async function handleCreate() {
     settlementMonth: month,
     items: (i.result.items || [])
       .filter(it => it.matched && it.categoryId)
-      .map(it => ({ categoryId: it.categoryId as string, quantity: it.quantity, newPartQuantity: it.newPartQuantity })),
+      .map(it => ({ categoryId: it.categoryId as string, quantity: it.quantity, newPartQuantity: it.newPartQuantity }))
   }));
 
   const files = new Map<string, File>();
@@ -128,55 +148,110 @@ function handleClose() {
 }
 
 const columns = [
-  { key: 'thumbnail', title: '图片', width: 120, render: (row: BatchOcrPreviewItem) => (
-    row.thumbnail ? <NImage src={row.thumbnail} width={100} height={80} style="object-fit:cover" /> : <NEmpty description="无图" size="small" />
-  )},
+  {
+    key: 'thumbnail',
+    title: '图片',
+    width: 120,
+    render: (row: BatchOcrPreviewItem) =>
+      row.thumbnail ? (
+        <NImage src={row.thumbnail} width={100} height={80} style="object-fit:cover" />
+      ) : (
+        <NEmpty description="无图" size="small" />
+      )
+  },
   { key: 'fileName', title: '文件名', width: 150, ellipsis: { tooltip: true } },
-  { key: 'plateNumber', title: '车牌', width: 120, render: (row: BatchOcrPreviewItem, index: number) => (
-    <NInput v-model:value={previewItems.value[index].result.plateNumber} size="small" placeholder="车牌" />
-  )},
-  { key: 'orderNo', title: '工单号', width: 160, render: (row: BatchOcrPreviewItem, index: number) => (
-    <NInput v-model:value={previewItems.value[index].result.orderNo} size="small" placeholder="工单号" />
-  )},
-  { key: 'carModel', title: '车型', width: 140, render: (row: BatchOcrPreviewItem, index: number) => (
-    <NInput v-model:value={previewItems.value[index].result.carModel} size="small" placeholder="车型" />
-  )},
-  { key: 'date', title: '日期', width: 120, render: (row: BatchOcrPreviewItem, index: number) => (
-    <NInput v-model:value={previewItems.value[index].result.date} size="small" placeholder="日期" />
-  )},
-  { key: 'customerName', title: '客户', width: 100, render: (row: BatchOcrPreviewItem, index: number) => (
-    <NInput v-model:value={previewItems.value[index].result.customerName} size="small" placeholder="客户" />
-  )},
-  { key: 'items', title: '部位', width: 220, render: (row: BatchOcrPreviewItem) => {
-    const items = row.result.items || [];
-    if (items.length === 0) {
-      return <NText depth="3" style="font-size:12px">无</NText>;
+  {
+    key: 'plateNumber',
+    title: '车牌',
+    width: 120,
+    render: (row: BatchOcrPreviewItem, index: number) => (
+      <NInput v-model:value={previewItems.value[index].result.plateNumber} size="small" placeholder="车牌" />
+    )
+  },
+  {
+    key: 'orderNo',
+    title: '工单号',
+    width: 160,
+    render: (row: BatchOcrPreviewItem, index: number) => (
+      <NInput v-model:value={previewItems.value[index].result.orderNo} size="small" placeholder="工单号" />
+    )
+  },
+  {
+    key: 'carModel',
+    title: '车型',
+    width: 140,
+    render: (row: BatchOcrPreviewItem, index: number) => (
+      <NInput v-model:value={previewItems.value[index].result.carModel} size="small" placeholder="车型" />
+    )
+  },
+  {
+    key: 'date',
+    title: '日期',
+    width: 120,
+    render: (row: BatchOcrPreviewItem, index: number) => (
+      <NInput v-model:value={previewItems.value[index].result.date} size="small" placeholder="日期" />
+    )
+  },
+  {
+    key: 'customerName',
+    title: '客户',
+    width: 100,
+    render: (row: BatchOcrPreviewItem, index: number) => (
+      <NInput v-model:value={previewItems.value[index].result.customerName} size="small" placeholder="客户" />
+    )
+  },
+  {
+    key: 'items',
+    title: '部位',
+    width: 220,
+    render: (row: BatchOcrPreviewItem) => {
+      const items = row.result.items || [];
+      if (items.length === 0) {
+        return (
+          <NText depth="3" style="font-size:12px">
+            无
+          </NText>
+        );
+      }
+      return (
+        <NSpace vertical size={2} style="padding:2px 0">
+          {items.map((it, idx) => {
+            const label = `${it.matchedName}×${it.quantity}${it.newPartQuantity > 0 ? `(+新${it.newPartQuantity})` : ''}`;
+            return (
+              <span key={idx} title={it.matched ? it.matchedName : `未匹配：${it.rawText}`}>
+                <NTag
+                  size="tiny"
+                  type={it.matched ? 'success' : 'warning'}
+                  style={it.matched ? '' : 'color: var(--color-error)'}
+                >
+                  {it.matched ? label : `${it.rawText}→${label}`}
+                </NTag>
+              </span>
+            );
+          })}
+        </NSpace>
+      );
     }
-    return (
-      <NSpace vertical size={2} style="padding:2px 0">
-        {items.map((it, idx) => {
-          const label = `${it.matchedName}×${it.quantity}${it.newPartQuantity > 0 ? `(+新${it.newPartQuantity})` : ''}`;
-          return (
-            <span key={idx} title={it.matched ? it.matchedName : `未匹配：${it.rawText}`}>
-              <NTag
-                size="tiny"
-                type={it.matched ? 'success' : 'warning'}
-                style={it.matched ? '' : 'color: var(--color-error)'}
-              >
-                {it.matched ? label : `${it.rawText}→${label}`}
-              </NTag>
-            </span>
-          );
-        })}
+  },
+  {
+    key: 'warnings',
+    title: '校验',
+    width: 200,
+    render: (row: BatchOcrPreviewItem) => (
+      <NSpace vertical size={2}>
+        {row.warnings.map(w => (
+          <NTag type={row.valid ? 'warning' : 'error'} size="tiny">
+            {w}
+          </NTag>
+        ))}
+        {row.warnings.length === 0 && (
+          <NTag type="success" size="tiny">
+            通过
+          </NTag>
+        )}
       </NSpace>
-    );
-  }},
-  { key: 'warnings', title: '校验', width: 200, render: (row: BatchOcrPreviewItem) => (
-    <NSpace vertical size={2}>
-      {row.warnings.map(w => <NTag type={row.valid ? 'warning' : 'error'} size="tiny">{w}</NTag>)}
-      {row.warnings.length === 0 && <NTag type="success" size="tiny">通过</NTag>}
-    </NSpace>
-  )},
+    )
+  }
 ];
 </script>
 
@@ -214,7 +289,7 @@ const columns = [
               <NRadioButton value="all">全部识别</NRadioButton>
             </NSpace>
           </NRadioGroup>
-          <NText depth="3" style="margin-left:12px; font-size:12px">
+          <NText depth="3" style="margin-left: 12px; font-size: 12px">
             推荐"仅基础资料"快速填充核心信息；选"仅部位"只识别喷漆项目；选"全部"识别所有内容
           </NText>
         </NFormItem>
@@ -229,24 +304,17 @@ const columns = [
 
       <template v-if="step === 2">
         <NAlert :type="hasInvalid ? 'warning' : 'success'" :bordered="false">
-          共识别 {{ previewItems.length }} 条，{{ validCount }} 条通过校验，{{ previewItems.length - validCount }} 条需要复核。
+          共识别 {{ previewItems.length }} 条，{{ validCount }} 条通过校验，{{ previewItems.length - validCount }}
+          条需要复核。
         </NAlert>
 
         <NSpin :show="loading">
-          <NDataTable
-            :columns="columns"
-            :data="previewItems"
-            :max-height="500"
-            size="small"
-            bordered
-          />
+          <NDataTable :columns="columns" :data="previewItems" :max-height="500" size="small" bordered />
         </NSpin>
 
         <NSpace justify="end">
           <NButton @click="handleBack">返回重选</NButton>
-          <NButton type="primary" :loading="creating" @click="handleCreate">
-            确认导入
-          </NButton>
+          <NButton type="primary" :loading="creating" @click="handleCreate">确认导入</NButton>
         </NSpace>
       </template>
     </NSpace>

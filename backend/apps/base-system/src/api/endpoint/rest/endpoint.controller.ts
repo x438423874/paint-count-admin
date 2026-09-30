@@ -10,7 +10,6 @@ import { QueryBus } from '@nestjs/cqrs';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 
 
-import { CasbinRuleApiEndpointService } from '@app/base-system/lib/bounded-contexts/api-endpoint/api-endpoint/application/service/casbin-rule-api-endpoint.service';
 import {
   EndpointProperties,
   EndpointReadModel,
@@ -33,7 +32,6 @@ import { PageEndpointsQueryDto } from '../dto/page-endpoint.dto';
 export class EndpointController {
   constructor(
     private readonly queryBus: QueryBus,
-    private readonly casbinRuleApiEndpointService: CasbinRuleApiEndpointService,
   ) {}
 
   @Get()
@@ -69,21 +67,6 @@ export class EndpointController {
       EndpointsQuery,
       EndpointTreeProperties[]
     >(new EndpointsQuery());
-    return ApiRes.success(result);
-  }
-
-  @Get('auth-api-endpoint/:roleCode')
-  @ApiOperation({
-    summary: 'Authorized API-Endpoints',
-  })
-  async authApiEndpoint(
-    @Param('roleCode') roleCode: string,
-    @Request() req: AuthenticatedRequest,
-  ) {
-    const result = await this.casbinRuleApiEndpointService.authApiEndpoint(
-      roleCode,
-      req.user.domain,
-    );
     return ApiRes.success(result);
   }
 }

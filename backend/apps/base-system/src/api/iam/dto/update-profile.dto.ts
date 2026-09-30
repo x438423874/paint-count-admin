@@ -2,11 +2,10 @@ import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsEmail, IsNotEmpty, IsOptional, IsString, Matches } from 'class-validator';
 
 export class UpdateProfileDto {
-  @ApiPropertyOptional({ description: '昵称' })
+  @ApiPropertyOptional({ description: '姓名' })
   @IsOptional()
   @IsString()
-  @IsNotEmpty({ message: '昵称不能为空' })
-  nickName?: string;
+  realName?: string;
 
   @ApiPropertyOptional({ description: '手机号' })
   @IsOptional()

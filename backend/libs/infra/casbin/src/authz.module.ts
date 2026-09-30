@@ -1,18 +1,16 @@
 import { Module, DynamicModule, Global } from '@nestjs/common';
-import * as casbin from 'casbin';
 
-import {
-  AUTHZ_MODULE_OPTIONS,
-  AUTHZ_ENFORCER,
-} from './constants/authz.constants';
+import { AUTHZ_MODULE_OPTIONS } from './constants/authz.constants';
 import { AuthZGuard } from './guards/authz.guard';
 import { AuthZModuleOptions } from './interfaces';
-import {
-  AuthZRBACService,
-  AuthZManagementService,
-  AuthZService,
-} from './services';
 
+/**
+ * 授权模块（芋道式菜单权限串鉴权）。
+ *
+ * 历史：原基于 casbin enforcer（sys_endpoint 注册表 + casbin_rule 策略），
+ * 已改为 sys_role_menu + sys_menu.permission 权限串匹配（见 AuthZGuard），
+ * casbin 相关 service 文件保留但不再注册。
+ */
 @Global()
 @Module({})
 export class AuthZModule {
@@ -22,53 +20,11 @@ export class AuthZModule {
       useValue: options || {},
     };
 
-    let enforcerProvider = options.enforcerProvider;
-    const importsModule = options.imports || [];
-
-    if (!enforcerProvider) {
-      if (!options.model || !options.policy) {
-        throw new Error(
-          'must provide either enforcerProvider or both model and policy',
-        );
-      }
-
-      enforcerProvider = {
-        provide: AUTHZ_ENFORCER,
-        useFactory: async () => {
-          const isFile = typeof options.policy === 'string';
-
-          let policyOption;
-
-          if (isFile) {
-            policyOption = options.policy as string;
-          } else {
-            policyOption = await options.policy;
-          }
-
-          return casbin.newEnforcer(options.model, policyOption);
-        },
-      };
-    }
-
     return {
       module: AuthZModule,
-      providers: [
-        moduleOptionsProvider,
-        enforcerProvider,
-        AuthZGuard,
-        AuthZRBACService,
-        AuthZManagementService,
-        AuthZService,
-      ],
-      imports: importsModule,
-      exports: [
-        moduleOptionsProvider,
-        enforcerProvider,
-        AuthZGuard,
-        AuthZRBACService,
-        AuthZManagementService,
-        AuthZService,
-      ],
+      providers: [moduleOptionsProvider, AuthZGuard],
+      imports: options.imports || [],
+      exports: [moduleOptionsProvider, AuthZGuard],
     };
   }
 }

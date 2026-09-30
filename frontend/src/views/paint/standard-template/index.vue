@@ -1,8 +1,8 @@
 <script setup lang="tsx">
-import { NButton, NPopconfirm, NTag, NSpace } from 'naive-ui';
-import EmptyState from '@/components/common/EmptyState.vue';
 import { ref } from 'vue';
-import { fetchStandardTemplateList, fetchStandardTemplateById, deleteStandardTemplate } from '@/service/api';
+import { NButton, NPopconfirm, NSpace, NTag } from 'naive-ui';
+import { deleteStandardTemplate, fetchStandardTemplateById, fetchStandardTemplateList } from '@/service/api';
+import EmptyState from '@/components/common/EmptyState.vue';
 import TemplateOperateDrawer from './modules/template-operate-drawer.vue';
 
 const loading = ref(false);
@@ -80,7 +80,13 @@ const columns = [
     align: 'center' as const,
     render: (row: any) => {
       const count = row._count?.shops ?? 0;
-      return count > 0 ? <NTag type="success" size="small">{count} 家门店</NTag> : <NTag size="small">未关联</NTag>;
+      return count > 0 ? (
+        <NTag type="success" size="small">
+          {count} 家门店
+        </NTag>
+      ) : (
+        <NTag size="small">未关联</NTag>
+      );
     }
   },
   {
@@ -88,9 +94,16 @@ const columns = [
     title: '状态',
     width: 80,
     align: 'center' as const,
-    render: (row: any) => row.isActive
-      ? <NTag type="success" size="small">启用</NTag>
-      : <NTag type="error" size="small">禁用</NTag>
+    render: (row: any) =>
+      row.isActive ? (
+        <NTag type="success" size="small">
+          启用
+        </NTag>
+      ) : (
+        <NTag type="error" size="small">
+          禁用
+        </NTag>
+      )
   },
   {
     key: 'operate',

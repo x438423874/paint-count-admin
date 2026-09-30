@@ -4,14 +4,15 @@ import {
   deletePaintVehicle,
 } from '@/api/paint'
 import type { PaintVehicle, PageResult } from '@/api/types/paint'
-import { canEdit } from '@/utils/permission'
+import { canManageVehicle, canVehicleDelete } from '@/utils/permission'
 import { showNotify } from 'vant'
 import { confirmDeleteVehicle } from '@/composables/useConfirm'
 
 const route = useRoute()
 const router = useRouter()
 
-const allowEdit = canEdit()
+const allowCreate = canManageVehicle()
+const allowDelete = canVehicleDelete()
 
 // 搜索表单
 const searchForm = reactive({
@@ -396,7 +397,7 @@ onActivated(() => {
 
           <template #right>
             <van-button
-              v-if="allowEdit"
+              v-if="allowDelete"
               square
               type="danger"
               text="删除"
@@ -417,7 +418,7 @@ onActivated(() => {
     </van-pull-refresh>
 
     <!-- 悬浮新增按钮 -->
-    <div v-if="allowEdit" class="fab-create" @click="goToAdd">
+    <div v-if="allowCreate" class="fab-create" @click="goToAdd">
       <van-icon name="plus" size="24" color="#fff" />
     </div>
 

@@ -32,6 +32,24 @@ const AUTO_LOG_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const SENSITIVE_KEY_PATTERN = /password|secret|token|authorization/i;
 const SANITIZE_MAX_DEPTH = 6;
 
+/** 单个字段序列化后的最大字节数，超过则存截断文本，防止异常大报文撑爆日志表 */
+const MAX_LOG_JSON_BYTES = 8 * 1024;
+
+/** 脱敏后限制体积：超限存截断后的 JSON 文本（仍可读，只是不再是结构化对象） */
+function toLogValue(value: unknown): unknown {
+  if (value === null || value === undefined) return null;
+  let json: string;
+  try {
+    json = JSON.stringify(value);
+  } catch {
+    return '[Unserializable]';
+  }
+  if (Buffer.byteLength(json, 'utf8') <= MAX_LOG_JSON_BYTES) {
+    return value;
+  }
+  return json.slice(0, MAX_LOG_JSON_BYTES) + '…[truncated]';
+}
+
 /** 深拷贝并脱敏：遮盖敏感字段、截断过深结构、非普通对象（Buffer/Date 等）转字符串 */
 function sanitize(value: unknown, depth = 0): unknown {
   if (value === null || typeof value !== 'object') return value;
@@ -107,15 +125,20 @@ export class LogInterceptor implements NestInterceptor {
             description,
             requestId: request.id ?? '',
             method: request.method,
-            url: request.routeOptions?.url ?? request.url,
+            // 存实际请求 URL（含真实 ID），description 保留路由模板便于归类
+            url: request.url,
             ip: request.ip,
-            userAgent: (request.headers[USER_AGENT] as string) ?? null,
-            params: logParams ? (sanitize(request.query) ?? null) : null,
+            // 微信等 UA 超长，截断防落库失败（列已加宽至 1000，此处再兜底）
+            userAgent: String(request.headers[USER_AGENT] ?? '').slice(0, 500) || null,
+            // query + 路径参数（如 DELETE /xxx/:id 的 id）合并记录，路径参数覆盖同名 query
+            params: logParams
+              ? toLogValue(sanitize({ ...request.query, ...request.params }))
+              : null,
             body:
               logBody && !this.isMultipart(request)
-                ? (sanitize(request.body) ?? null)
+                ? toLogValue(sanitize(request.body))
                 : null,
-            response: logResponse ? (sanitize(data) ?? null) : null,
+            response: logResponse ? toLogValue(sanitize(data)) : null,
             startTime,
             endTime,
             duration,

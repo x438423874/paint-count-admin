@@ -1,14 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, shallowRef, watch } from 'vue';
 import type { TreeOption } from 'naive-ui';
-import {
-  fetchAssignPermission,
-  fetchAssignRoutes,
-  fetchGetApiEndpointTree,
-  fetchGetMenuTree,
-  fetchGetRoleApiEndpoints,
-  fetchGetRoleMenuIds
-} from '@/service/api';
+import { fetchAssignRoutes, fetchGetMenuTree, fetchGetRoleMenuIds } from '@/service/api';
 import { $t } from '@/locales';
 
 defineOptions({
@@ -30,147 +23,83 @@ const visible = defineModel<boolean>('visible', {
 
 const title = computed(() => `${$t('common.edit')}权限配置`);
 
-const activeTab = ref<'menu' | 'api'>('menu');
+// ==================== 权限树（芋道式：菜单 + 按钮权限叶子同一棵树、同一份存储） ====================
+const permTree = shallowRef<TreeOption[]>([]);
+const checkedKeys = shallowRef<Array<number | string>>([]);
+const expandedKeys = shallowRef<Array<number | string>>([]);
 
-// ==================== 菜单权限 ====================
-const menuTree = shallowRef<TreeOption[]>([]);
-const menuChecks = shallowRef<number[]>([]);
-const menuLoaded = ref(false);
+async function initTree() {
+  const [menuRes, roleMenuRes] = await Promise.all([
+    fetchGetMenuTree(),
+    fetchGetRoleMenuIds(props.roleId)
+  ]);
 
-async function initMenu() {
-  const { error, data } = await fetchGetRoleMenuIds(props.roleId);
-  if (!error) {
-    menuChecks.value = data;
-  }
-  const res = await fetchGetMenuTree();
-  if (!res.error) {
-    menuTree.value = res.data.map(recursiveMenu);
-    menuLoaded.value = true;
-  }
-}
-
-function recursiveMenu(item: Api.SystemManage.Menu): TreeOption {
-  const result: TreeOption = {
-    key: item.id,
-    label: $t(item.i18nKey as App.I18n.I18nKey)
-  };
-  if (item.children && item.children.length > 0) {
-    result.children = item.children.map(recursiveMenu);
-  }
-  return result;
-}
-
-// ==================== API 权限 ====================
-/** 资源中文名（未映射时回退英文原名） */
-const RESOURCE_LABELS: Record<string, string> = {
-  'paint:work-order': '喷漆工单',
-  'paint:statistics': '喷漆统计',
-  authorization: '授权管理',
-  'api-endpoint': '接口管理',
-  'login-log': '登录日志',
-  'operation-log': '操作日志'
-};
-
-/** 操作中文名（未映射时回退英文原名） */
-const ACTION_LABELS: Record<string, string> = {
-  create: '创建',
-  'quick-create': '快速建单',
-  'batch-create': '批量创建',
-  'batch-ocr': '批量OCR',
-  update: '更新',
-  delete: '删除',
-  import: 'Excel导入',
-  audit: '审核',
-  unaudit: '反审核',
-  settle: '结算',
-  unsettle: '取消结算',
-  'batch-settle': '批量结算',
-  'batch-unsettle': '批量取消结算',
-  merge: '合并',
-  reconcile: '对账',
-  abnormal: '异常标注',
-  void: '作废',
-  unvoid: '恢复作废',
-  items: '项目明细',
-  export: '导出',
-  read: '查看',
-  'assign-users': '分配用户',
-  'assign-routes': '分配菜单',
-  'assign-permission': '分配API权限'
-};
-
-/** 端点按 resource → action 两级分组；勾选粒度与 Casbin 策略一致（resource:action） */
-const apiTree = shallowRef<TreeOption[]>([]);
-const apiChecks = shallowRef<string[]>([]);
-/** resource:action → 端点 id 列表（提交时展开为端点 id） */
-const endpointIdsByKey = shallowRef<Record<string, string[]>>({});
-
-async function initApi() {
-  const keys = await fetchGetRoleApiEndpoints(props.roleCode);
-  apiChecks.value = keys || [];
-  const { error, data } = await fetchGetApiEndpointTree();
-  if (!error) {
-    buildApiTree(data);
-  }
-}
-
-/** 拍平端点树叶子，按 resource/action 聚合成两级树 */
-function buildApiTree(nodes: Api.SystemManage.ApiEndpoint[]) {
-  const idsByKey: Record<string, string[]> = {};
-  const byResource = new Map<string, Set<string>>();
-
-  const walk = (items: Api.SystemManage.ApiEndpoint[]) => {
-    for (const item of items) {
+  const buildNodes = (items: Api.SystemManage.Menu[]): TreeOption[] =>
+    items.map(item => {
+      const node: TreeOption = {
+        key: item.id,
+        label: nodeLabel(item)
+      };
       if (item.children && item.children.length > 0) {
-        walk(item.children);
-        continue;
+        node.children = buildNodes(item.children);
       }
-      if (!item.resource?.trim() || !item.action?.trim()) continue;
-      const key = `${item.resource}:${item.action}`;
-      (idsByKey[key] ||= []).push(item.id);
-      if (!byResource.has(item.resource)) {
-        byResource.set(item.resource, new Set());
+      return node;
+    });
+
+  // 按钮叶子提示其权限标识
+  function nodeLabel(item: Api.SystemManage.Menu) {
+    if (item.menuType === 'button') {
+      return item.permission ? `${item.menuName}（${item.permission}）` : item.menuName;
+    }
+    return item.i18nKey ? $t(item.i18nKey as App.I18n.I18nKey) : item.menuName;
+  }
+
+  permTree.value = menuRes.error ? [] : buildNodes(menuRes.data);
+  expandedKeys.value = collectExpandableKeys(permTree.value);
+
+  // 初始勾选 = 该角色已绑定的全部菜单/按钮行（auth-route 接口返回含按钮 id）
+  checkedKeys.value = roleMenuRes.error ? [] : roleMenuRes.data;
+}
+
+function collectExpandableKeys(nodes: TreeOption[]): Array<number | string> {
+  const keys: Array<number | string> = [];
+  const walk = (list: TreeOption[]) => {
+    for (const node of list) {
+      if (node.children && node.children.length > 0) {
+        keys.push(node.key as number);
+        walk(node.children);
       }
-      byResource.get(item.resource)!.add(item.action);
     }
   };
   walk(nodes);
-
-  const tree: TreeOption[] = [...byResource.keys()]
-    .sort()
-    .map(resource => ({
-      key: resource,
-      label: `${RESOURCE_LABELS[resource] || resource}（${resource}）`,
-      children: [...byResource.get(resource)!]
-        .sort()
-        .map(action => ({
-          key: `${resource}:${action}`,
-          label: `${ACTION_LABELS[action] || action}（${idsByKey[`${resource}:${action}`].length} 个接口）`
-        }))
-    }));
-
-  apiTree.value = tree;
-  endpointIdsByKey.value = idsByKey;
+  return keys;
 }
 
-// ==================== 保存（一次提交菜单 + API 权限） ====================
+// ==================== 保存（一次调用：菜单 + 按钮同一份 sys_role_menu） ====================
 const submitting = ref(false);
 
-async function handleSubmit() {
+function handleSubmit() {
+  // 全量覆盖式保存：二次确认防止误操作覆盖整棵权限树
+  window.$dialog?.warning({
+    title: '确认保存权限',
+    content: '保存将全量覆盖该角色的菜单与按钮权限（未勾选的将被移除），是否继续？',
+    positiveText: '确认保存',
+    negativeText: '取消',
+    onPositiveClick: () => {
+      void doSave();
+    }
+  });
+}
+
+async function doSave() {
   submitting.value = true;
   try {
-    const routeRes = await fetchAssignRoutes({
+    const routeIds = checkedKeys.value.filter((k): k is number => typeof k === 'number');
+    const res = await fetchAssignRoutes({
       roleId: props.roleId,
-      routeIds: menuChecks.value
+      routeIds
     });
-    if (routeRes.error) return;
-
-    const permissions = apiChecks.value.flatMap(key => endpointIdsByKey.value[key] || []);
-    const permRes = await fetchAssignPermission({
-      roleId: props.roleId,
-      permissions
-    });
-    if (permRes.error) return;
+    if (res.error) return;
 
     window.$message?.success?.($t('common.modifySuccess'));
     visible.value = false;
@@ -185,44 +114,26 @@ function closeModal() {
 
 watch(visible, val => {
   if (val) {
-    activeTab.value = 'menu';
-    initMenu();
-    initApi();
+    initTree();
   }
 });
 </script>
 
 <template>
-  <NModal v-model:show="visible" :title="title" preset="card" class="w-600px">
-    <NTabs v-model:value="activeTab" type="line">
-      <NTabPane name="menu" tab="菜单权限">
-        <NTree
-          v-model:checked-keys="menuChecks"
-          :data="menuTree"
-          block-line
-          expand-on-click
-          checkable
-          cascade
-          virtual-scroll
-          class="h-460px"
-        />
-      </NTabPane>
-      <NTabPane name="api" tab="API 权限">
-        <div class="mb-8px text-12px text-gray-400">
-          勾选接口组即授权对应 API；保存后该角色的 API 权限将与此勾选完全一致
-        </div>
-        <NTree
-          v-model:checked-keys="apiChecks"
-          :data="apiTree"
-          block-line
-          expand-on-click
-          checkable
-          cascade
-          virtual-scroll
-          class="h-440px"
-        />
-      </NTabPane>
-    </NTabs>
+  <NModal v-model:show="visible" :title="title" preset="card" class="w-560px">
+    <div class="mb-8px text-12px text-gray-400">
+      与芋道一致：菜单与按钮权限同一棵树、同一份存储；勾选父节点自动包含子按钮。按钮叶子括号内为其权限标识
+    </div>
+    <NTree
+      v-model:checked-keys="checkedKeys"
+      v-model:expanded-keys="expandedKeys"
+      :data="permTree"
+      block-line
+      checkable
+      cascade
+      virtual-scroll
+      class="h-480px"
+    />
     <template #footer>
       <NSpace justify="end">
         <NButton quaternary @click="closeModal">

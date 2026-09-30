@@ -3,7 +3,6 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { TerminusModule } from '@nestjs/terminus';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
-import * as casbin from 'casbin';
 
 import { BootstrapModule } from '@lib/bootstrap/bootstrap.module';
 import config, {
@@ -11,10 +10,10 @@ import config, {
   IThrottlerConfig,
   throttlerConfigToken,
 } from '@lib/config';
-import { ISecurityConfig, securityRegToken } from '@lib/config/security.config';
 import { GlobalCqrsModule } from '@lib/global/global.module';
 import { SharedModule } from '@lib/global/shared.module';
-import { AuthZModule, AUTHZ_ENFORCER, PrismaAdapter } from '@lib/infra/casbin';
+import { AuthZModule } from '@lib/infra/casbin';
+import { PrismaModule } from '@lib/shared/prisma/prisma.module';
 import { AllExceptionsFilter } from '@lib/infra/filters/all-exceptions.filter';
 import { ApiKeyModule } from '@lib/infra/guard/api-key/api-key.module';
 import { JwtAuthGuard } from '@lib/infra/guard/jwt.auth.guard';
@@ -22,7 +21,6 @@ import { LogInterceptor } from '@lib/infra/interceptors/log.interceptor';
 import { JwtStrategy } from '@lib/infra/strategies/jwt.passport-strategy';
 import { LoggerModule } from '@lib/logger';
 import { IAuthentication } from '@lib/typings/global';
-import { getConfigPath } from '@lib/utils/env';
 
 import { ApiModule } from './api/api.module';
 import { AppController } from './app.controller';
@@ -55,24 +53,8 @@ const strategies = [JwtStrategy];
       load: [...Object.values(config)],
     }),
     AuthZModule.register({
-      imports: [ConfigModule],
-      // Redis 角色缓存故障/缺失时的兜底：直接查数据库角色，保证鉴权不因 Redis 单点失效
-      resolveUserRolesFallback: createRolesFallback(),
-      enforcerProvider: {
-        provide: AUTHZ_ENFORCER,
-        useFactory: async (configService: ConfigService) => {
-          const adapter = await PrismaAdapter.newAdapter();
-          const { casbinModel } = configService.get<ISecurityConfig>(
-            securityRegToken,
-            {
-              infer: true,
-            },
-          );
-          const casbinModelPath = getConfigPath(casbinModel);
-          return casbin.newEnforcer(casbinModelPath, adapter);
-        },
-        inject: [ConfigService],
-      },
+      // 守卫直查 sys_menu.permission（芋道式菜单权限串），需注入 Prisma
+      imports: [ConfigModule, PrismaModule],
       userFromContext: (ctx: ExecutionContext) => {
         const request = ctx.switchToHttp().getRequest();
         const user: IAuthentication = request.user;
@@ -122,22 +104,3 @@ const strategies = [JwtStrategy];
 })
 export class AppModule {}
 
-
-/**
- * Redis 角色缓存兜底解析器：直接查数据库（仅 Redis 故障或缓存缺失时触发）。
- * 使用独立的 PrismaClient 惰性单例，避免与 Nest DI 模块边界耦合。
- */
-let rolesFallbackPrisma: import('@prisma/client').PrismaClient | null = null;
-function createRolesFallback() {
-  return async (uid: string): Promise<string[]> => {
-    rolesFallbackPrisma ??= new (require('@prisma/client').PrismaClient)();
-    const prisma = rolesFallbackPrisma as NonNullable<typeof rolesFallbackPrisma>;
-    const userRoles = await prisma.sysUserRole.findMany({ where: { userId: uid } });
-    if (userRoles.length === 0) return [];
-    const roles = await prisma.sysRole.findMany({
-      where: { id: { in: userRoles.map((u) => u.roleId) } },
-      select: { code: true },
-    });
-    return roles.map((r) => r.code);
-  };
-}

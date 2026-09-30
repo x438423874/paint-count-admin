@@ -20,7 +20,7 @@ export interface IUser {
 export class User extends AggregateRoot implements IUser {
   readonly id: string;
   readonly username: string;
-  readonly nickName: string;
+  readonly realName: string | null;
   readonly password: Password;
   readonly status: Status;
   readonly domain: string;
@@ -54,16 +54,19 @@ export class User extends AggregateRoot implements IUser {
     if (this.status !== Status.ENABLED) {
       return {
         success: false,
-        message: `User is ${this.status.toLowerCase()}.`,
+        message:
+          this.status === Status.BANNED
+            ? '账号已被封禁，请联系管理员'
+            : '账号已被禁用，请联系管理员',
       };
     }
 
     const isPasswordValid = await this.verifyPassword(password);
     if (!isPasswordValid) {
-      return { success: false, message: 'Invalid credentials.' };
+      return { success: false, message: '账号或密码错误' };
     }
 
-    return { success: true, message: 'Login successful' };
+    return { success: true, message: '登录成功' };
   }
 
   async created() {

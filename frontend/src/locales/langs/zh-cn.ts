@@ -290,7 +290,9 @@ const local: App.I18n.Schema = {
         title: '用户列表',
         userName: '用户名',
         userGender: '性别',
-        nickName: '昵称',
+        realName: '姓名',
+        shopBinding: '绑定门店',
+        onDuty: '在职',
         userPhone: '手机号',
         userEmail: '邮箱',
         userStatus: '用户状态',
@@ -302,7 +304,7 @@ const local: App.I18n.Schema = {
           password: '请输入密码',
           domain: '请输入域',
           userGender: '请选择性别',
-          nickName: '请输入昵称',
+          realName: '请输入姓名',
           userPhone: '请输入手机号',
           userEmail: '请输入邮箱',
           userStatus: '请选择用户状态',
@@ -323,6 +325,7 @@ const local: App.I18n.Schema = {
         menuType: '菜单类型',
         menuName: '菜单名称',
         routeName: '路由名称',
+        permission: '权限标识',
         routePath: '路由路径',
         pathParam: '路径参数',
         layout: '布局',
@@ -376,7 +379,8 @@ const local: App.I18n.Schema = {
         addChildMenu: '新增子菜单',
         type: {
           directory: '目录',
-          menu: '菜单'
+          menu: '菜单',
+          button: '按钮'
         },
         iconType: {
           iconify: 'iconify图标',

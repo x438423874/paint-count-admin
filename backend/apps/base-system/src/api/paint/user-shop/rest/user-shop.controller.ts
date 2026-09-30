@@ -7,6 +7,7 @@ import {
   Request,
   BadRequestException,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { IsArray, IsOptional, IsString } from 'class-validator';
@@ -54,6 +55,7 @@ export class UserShopController {
    * 获取当前用户的数据可见范围（含各门店在岗期），用于 H5 展示"可查看范围"提示
    */
   @Get('my-scope')
+  @Throttle({ default: { limit: 120, ttl: 60000 } })
   @ApiOperation({ summary: '获取当前用户数据可见范围（含各门店在岗期）' })
   async getMyScope(@Request() req: AuthenticatedRequest) {
     const data = await this.userShopService.getMyScope(req.user.uid);
@@ -64,6 +66,7 @@ export class UserShopController {
    * 获取当前用户拥有的权限点集合（后端 PermGuard 与前端按钮显隐共用同一注册表）
    */
   @Get('my-perms')
+  @Throttle({ default: { limit: 120, ttl: 60000 } }) // 登录/刷新必调，单独放宽避免被全局限额挤死
   @ApiOperation({ summary: '获取当前用户权限点集合' })
   async getMyPerms(@Request() req: AuthenticatedRequest) {
     const data = await this.userShopService.getMyPerms(req.user.uid);

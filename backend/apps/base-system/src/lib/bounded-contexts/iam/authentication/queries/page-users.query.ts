@@ -5,7 +5,7 @@ import { PaginationParams } from '@lib/shared/prisma/pagination';
 
 export class PageUsersQuery extends PaginationParams implements IQuery {
   readonly username?: string;
-  readonly nickName?: string;
+  readonly realName?: string;
   readonly status?: Status;
   constructor(options: PageUsersQuery) {
     super(options.current, options.size);

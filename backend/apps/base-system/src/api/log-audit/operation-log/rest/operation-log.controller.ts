@@ -30,11 +30,6 @@ export class OperationLogController {
   constructor(private readonly queryBus: QueryBus) {}
 
   @Get()
-  @Log('OperationLog', 'Retrieve Paginated Operation Logs', {
-    logParams: true,
-    logBody: true,
-    logResponse: false,
-  })
   @UsePermissions({ resource: 'operation-log', action: AuthActionVerb.READ })
   @ApiOperation({
     summary: 'Retrieve Paginated Operation Logs',
