@@ -29,7 +29,7 @@ export interface OrderNoCorrection {
 /** 常见 OCR 字符混淆表（双向） */
 const CONFUSIONS: Record<string, string[]> = {
   '0': ['O', 'D'],
-  'O': ['0', 'D'],
+  'O': ['0', 'D', 'Q'],
   '1': ['I', 'L'],
   'I': ['1'],
   'L': ['1'],
@@ -41,12 +41,13 @@ const CONFUSIONS: Record<string, string[]> = {
   'Z': ['2'],
   '6': ['G'],
   'G': ['6'],
+  'Q': ['O', '0'],
 };
 
 /** 插入候选字符：覆盖「OCR 丢失字符」场景 */
 const INSERT_CHARS = ['0', 'O', '1', 'I', '5', 'S', '8', 'B', '2', 'Z', '6', 'G'];
 
-const MAX_CANDIDATES = 5000;
+const MAX_CANDIDATES = 50000;
 
 function buildMatcher(rules: OrderNoRule[]): ((candidate: string) => boolean) | null {
   const matchers = rules
