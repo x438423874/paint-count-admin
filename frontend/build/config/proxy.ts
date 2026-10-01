@@ -24,6 +24,15 @@ export function createViteProxy(env: Env.ImportMeta, enable: boolean) {
     Object.assign(proxy, createProxyItem(item, isEnableProxyLog));
   });
 
+  // 工单图片受控访问走同源 /uploads（与生产 nginx 行为一致），本地代理到后端服务
+  if (baseURL) {
+    try {
+      proxy['/uploads'] = { target: new URL(baseURL).origin, changeOrigin: true };
+    } catch {
+      // baseURL 非法时跳过
+    }
+  }
+
   return proxy;
 }
 
