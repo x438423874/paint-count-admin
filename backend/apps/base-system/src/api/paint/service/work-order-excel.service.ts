@@ -758,8 +758,10 @@ export class WorkOrderExcelService {
           remark,
         ];
 
-        // 副数公式值 = 各部位幅数 + 备注列中的未匹配部位幅数（公式范围含备注列）
-        const rowFormulaValue = orderTotal + unmatchedTotal;
+        // 副数公式缓存值 = 工单总幅数。orderTotal 已包含未匹配部位幅数（AG 备注列写入的正是这部分），
+        // 公式 SUM(部位列..备注列) 重算结果与之一致；此前再叠加 unmatchedTotal 导致备注幅数被重复计算
+        // （微信等不重算公式的查看器显示的缓存合计比实际多出备注幅数）。
+        const rowFormulaValue = orderTotal;
         grandFormulaTotal += rowFormulaValue;
         for (let i = 0; i < config.items.length; i++) {
           itemTotals[i] += Number(itemValues[i]) || 0;
