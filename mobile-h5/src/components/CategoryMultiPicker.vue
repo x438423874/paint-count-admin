@@ -6,6 +6,11 @@ export interface CategoryMultiOption {
   label: string
 }
 
+export interface CategoryMultiSelection {
+  id: string
+  quantity: number
+}
+
 withDefaults(defineProps<{
   options: CategoryMultiOption[]
   title?: string
@@ -14,36 +19,52 @@ withDefaults(defineProps<{
 })
 
 const emit = defineEmits<{
-  (e: 'confirm', ids: string[]): void
+  (e: 'confirm', selections: CategoryMultiSelection[]): void
 }>()
 
 /**
  * 部位多选弹层（添加部位）
  *
- * 原先内联在工单详情页，抽出供工单类页面复用。
- * 每次打开重置勾选，确认时返回勾选的 id 列表。
+ * 勾选行内直接显示数量步进器，选部位的同时定数量，省去逐行二次调整。
+ * 每次打开重置勾选，确认时返回勾选的 id 与数量列表。
  */
 const show = defineModel<boolean>('show', { default: false })
 
 const checked = ref<string[]>([])
+const quantities = ref<Record<string, number>>({})
 
 // 每次打开重置勾选
 watch(show, (v) => {
-  if (v)
+  if (v) {
     checked.value = []
+    quantities.value = {}
+  }
 })
+
+function isChecked(id: string) {
+  return checked.value.includes(id)
+}
 
 function toggle(id: string) {
   const idx = checked.value.indexOf(id)
-  if (idx >= 0)
+  if (idx >= 0) {
     checked.value.splice(idx, 1)
-  else checked.value.push(id)
+    delete quantities.value[id]
+  }
+  else {
+    checked.value.push(id)
+    quantities.value[id] = 1
+  }
+}
+
+function setQuantity(id: string, value: string | number) {
+  quantities.value[id] = Math.max(1, Number(value) || 1)
 }
 
 function onConfirm() {
   if (checked.value.length === 0)
     return
-  emit('confirm', [...checked.value])
+  emit('confirm', checked.value.map(id => ({ id, quantity: quantities.value[id] || 1 })))
   show.value = false
 }
 </script>
@@ -68,6 +89,17 @@ function onConfirm() {
                 <van-checkbox :name="opt.id" shape="square" @click.stop>
                   {{ opt.label }}
                 </van-checkbox>
+              </template>
+              <template #value>
+                <div v-if="isChecked(opt.id)" class="qty-box" @click.stop>
+                  <van-stepper
+                    :model-value="quantities[opt.id]"
+                    min="1"
+                    input-width="34px"
+                    button-size="22px"
+                    @change="(v: string | number) => setQuantity(opt.id, v)"
+                  />
+                </div>
               </template>
             </van-cell>
           </van-cell-group>
@@ -107,6 +139,11 @@ function onConfirm() {
   .category-multi-list {
     max-height: 45vh;
     overflow-y: auto;
+
+    .qty-box {
+      display: flex;
+      justify-content: flex-end;
+    }
   }
 
   .category-multi-footer {

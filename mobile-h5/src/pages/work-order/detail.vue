@@ -748,14 +748,14 @@ const categoryMultiOptions = computed(() => {
     }))
 })
 
-function onCategoryMultiConfirm(ids: string[]) {
-  for (const categoryId of ids) {
+function onCategoryMultiConfirm(selections: Array<{ id: string, quantity: number }>) {
+  for (const { id: categoryId, quantity } of selections) {
     // 防御：跳过已被选中的部位
     if (editForm.items.some(i => i.categoryId === categoryId))
       continue
     editForm.items.push({
       categoryId,
-      quantity: 1,
+      quantity,
       newPartQuantity: 0,
     })
   }
