@@ -19,21 +19,6 @@ interface Emits {
 const emit = defineEmits<Emits>();
 
 const loading = ref(false);
-const zoomLevel = ref(1);
-const MIN_ZOOM = 0.5;
-const MAX_ZOOM = 4;
-
-function zoomIn() {
-  zoomLevel.value = Math.min(zoomLevel.value + 0.25, MAX_ZOOM);
-}
-
-function zoomOut() {
-  zoomLevel.value = Math.max(zoomLevel.value - 0.25, MIN_ZOOM);
-}
-
-function resetZoom() {
-  zoomLevel.value = 1;
-}
 
 const form = reactive({
   orderNo: '',
@@ -69,7 +54,6 @@ watch(
   () => props.visible,
   visible => {
     if (!visible) {
-      zoomLevel.value = 1;
       return;
     }
     if (props.order) {
@@ -138,19 +122,12 @@ async function handleSave() {
     <NAlert type="info" :show-icon="false" class="mb-16px">修正后的结果会同步更新到工单。</NAlert>
 
     <div class="ocr-layout">
-      <!-- 左侧：图片 -->
+      <!-- 左侧：图片（点击打开全屏预览，缩放在预览层完成，不撑占弹窗布局） -->
       <div class="ocr-image-section">
         <div class="section-title">工单图片</div>
         <div v-if="imageSrc" class="image-section">
-          <div class="image-toolbar">
-            <NButton size="small" @click="zoomOut">- 缩小</NButton>
-            <span class="zoom-text">{{ Math.round(zoomLevel * 100) }}%</span>
-            <NButton size="small" @click="zoomIn">+ 放大</NButton>
-            <NButton size="small" @click="resetZoom">还原</NButton>
-          </div>
-          <div class="image-wrap">
-            <img :src="imageSrc" alt="工单图片" class="zoomable-image" :style="{ transform: `scale(${zoomLevel})` }" />
-          </div>
+          <NImage :src="imageSrc" :preview-src="imageSrc" object-fit="contain" class="ocr-image-thumb" />
+          <div class="image-hint">点击图片可放大查看（预览层支持缩放/旋转）</div>
         </div>
         <NAlert v-else type="warning" :show-icon="false">该工单没有图片，无法保存标注。</NAlert>
       </div>
@@ -221,38 +198,23 @@ async function handleSave() {
   border-radius: 8px;
   background: var(--neutral-50);
   overflow: hidden;
-}
-.image-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--neutral-200);
-  background: #fff;
-}
-.zoom-text {
-  font-size: 13px;
-  color: #666;
-  min-width: 48px;
-  text-align: center;
-}
-.image-wrap {
   padding: 12px;
   display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  min-height: 360px;
-  max-height: 520px;
-  overflow: auto;
+  gap: 8px;
 }
-.zoomable-image {
+.ocr-image-thumb {
   max-width: 100%;
-  max-height: 460px;
+  max-height: 420px;
   object-fit: contain;
-  transform-origin: center center;
-  transition: transform 0.2s ease;
-  cursor: grab;
+  cursor: zoom-in;
+  border-radius: 4px;
+}
+.image-hint {
+  font-size: 12px;
+  color: #999;
+  text-align: center;
 }
 .ocr-form-section {
   flex: 1;
