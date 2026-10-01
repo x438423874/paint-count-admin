@@ -150,7 +150,7 @@ const rules: Record<RuleKey, App.Global.FormRule> = {
       if (!value || !value.trim()) return new Error('请输入车牌号');
       const v = value.trim().toUpperCase();
       if (!plateNumberRegex.test(v)) {
-        return new Error('车牌号格式不正确（普通7位/新能源8位/旧6位）');
+        return new Error('车牌号格式不正确（普通7位/新能源8位/旧6位，临牌以"临"结尾）');
       }
       return true;
     }

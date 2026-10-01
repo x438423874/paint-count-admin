@@ -262,7 +262,7 @@ async function handleSubmit(opts?: { skipStrict?: boolean }) {
       return
     }
     if (!plateNumberRegex.test(form.plateNumber.trim().toUpperCase())) {
-      plateNumberError.value = '车牌号格式不正确（普通车牌7位，新能源车牌8位）'
+      plateNumberError.value = '车牌号格式不正确（普通7位/新能源8位，临牌以"临"结尾）'
       return
     }
   }

@@ -596,7 +596,7 @@ async function saveEdit() {
   // 校验车牌号
   if (editForm.plateNumber && editForm.plateNumber.trim()) {
     if (!plateNumberRegex.test(editForm.plateNumber.trim().toUpperCase())) {
-      editPlateNumberError.value = '车牌号格式不正确（普通车牌7位，新能源车牌8位）'
+      editPlateNumberError.value = '车牌号格式不正确（普通7位/新能源8位，临牌以"临"结尾）'
       showNotify({ type: 'warning', message: editPlateNumberError.value })
       return
     }

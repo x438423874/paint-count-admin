@@ -77,7 +77,7 @@ function validatePlateNumber(): boolean {
     return false
   }
   if (!plateNumberRegex.test(plate)) {
-    plateError.value = '车牌号格式不正确（普通7位/新能源8位/旧6位）'
+    plateError.value = '车牌号格式不正确（普通7位/新能源8位/旧6位，临牌以"临"结尾）'
     return false
   }
   return true
