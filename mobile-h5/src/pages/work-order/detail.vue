@@ -20,7 +20,7 @@ import type { CreateWorkOrderItemDto, PaintSpecialPaint, PaintStandard, PaintVeh
 import type { OrderNoRule } from '@/api/paint'
 import { compressImage } from '@/utils/image-compress'
 import { resolveImageUrl } from '@/utils/image-url'
-import { phoneRegex, plateNumberRegex, vinRegex } from '@/utils/validators'
+import { phoneRegex, plateNumberRegex } from '@/utils/validators'
 import { computeItemPaintCount, computeTotalPaintCount, formatAutoPaintCount, getPaintDecimalLength, normalizeOverridePaintCount } from '@/utils/paint-count'
 import { applyOcrFields } from '@/utils/ocr-fields'
 import { fetchImageAsFile, uploadCompressed } from '@/composables/useImageUpload'
@@ -130,12 +130,7 @@ const editForm = reactive({
 // 编辑表单校验
 const editOrderNoError = ref('')
 const editPlateNumberError = ref('')
-const editVinError = ref('')
-// 车架号即时校验：非必填，填了就实时校验格式；错误保持显示直到修正或清空
-watch(() => editForm.vin, (v) => {
-  const val = (v || '').trim()
-  editVinError.value = val && !vinRegex.test(val.toUpperCase()) ? '车架号应为17位字母数字（不含I、O、Q）' : ''
-})
+// 车架号不做格式校验（OCR 易误读、临牌车/特殊车辆 VIN 常不合规），字段为非必填
 
 const editPhoneError = ref('')
 const editOrderNoRules = ref<OrderNoRule[]>([])
@@ -422,7 +417,6 @@ async function loadEditOrderNoRules() {
 function clearEditErrors() {
   editOrderNoError.value = ''
   editPlateNumberError.value = ''
-  editVinError.value = ''
   editPhoneError.value = ''
   ocrVinCorrectionMsg.value = ''
 }
@@ -602,12 +596,7 @@ async function saveEdit() {
     }
   }
 
-  // 校验车架号（非必填，填了则校验格式；错误信息在字段下方保持显示）
-  if (editForm.vin && editForm.vin.trim() && !vinRegex.test(editForm.vin.trim().toUpperCase())) {
-    editVinError.value = '车架号应为17位字母数字（不含I、O、Q）'
-    showNotify({ type: 'warning', message: editVinError.value })
-    return
-  }
+  // 车架号不做格式校验（OCR 易误读，特殊车辆 VIN 常不合规），字段为非必填
 
   // 校验手机号（非必填，填了则校验格式）
   if (editForm.phone && editForm.phone.trim() && !phoneRegex.test(editForm.phone.trim())) {
@@ -1209,7 +1198,7 @@ onMounted(async () => {
               v-model="editForm.vin"
               label="车架号"
               placeholder="请输入车架号(VIN)"
-              :error-message="editVinError || ocrVinCorrectionMsg"
+              :error-message="ocrVinCorrectionMsg"
               @update:model-value="ocrVinCorrectionMsg = ''"
             />
           <van-notice-bar v-if="ocrVinCorrectionMsg" left-icon="warning-o" :text="ocrVinCorrectionMsg" background="var(--color-warning-bg)" color="var(--color-warning)" style="margin: 0 16px 8px;" />
