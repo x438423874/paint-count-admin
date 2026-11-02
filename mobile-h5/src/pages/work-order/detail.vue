@@ -4,6 +4,8 @@ import {
   deleteWorkOrder,
   deleteWorkOrderImage,
   fetchOrderNoRules,
+  fetchWorkOrderLogs,
+  type WorkOrderLogRow,
   fetchVehicleByPlate,
   getShopCategoriesWithStandard,
   getSpecialPaintList,
@@ -220,6 +222,8 @@ async function loadDetail() {
     const res = await getWorkOrderDetail(orderId.value)
     order.value = res as any as PaintWorkOrder
     reworkRemarkInput.value = order.value?.reworkRemark || ''
+    // 操作记录（查看模式展示）
+    void loadOrderLogs(orderId.value)
     // 查看模式下：若有车牌号则预查车辆主数据（显示累计工单数等）
     if (order.value?.plateNumber && order.value.plateNumber.trim()) {
       fetchVehicleByPlate(order.value.plateNumber.trim().toUpperCase())
@@ -242,6 +246,54 @@ async function loadDetail() {
       window.scrollTo(0, 0)
     })
   }
+}
+
+// ==================== 操作记录 ====================
+const orderLogs = ref<WorkOrderLogRow[]>([])
+const logsExpanded = ref(false)
+
+async function loadOrderLogs(orderId: string) {
+  try {
+    orderLogs.value = (await fetchWorkOrderLogs(orderId)) as any as WorkOrderLogRow[]
+  }
+  catch {
+    orderLogs.value = []
+  }
+}
+
+const LOG_ACTION_LABEL: Record<string, string> = {
+  CREATE: '创建',
+  IMPORT: 'Excel 导入',
+  UPDATE: '编辑',
+  DELETE: '删除',
+  AUDIT: '审核',
+  UNAUDIT: '取消审核',
+  SETTLE: '结算',
+  UNSETTLE: '取消结算',
+  VOID: '作废',
+  UNVOID: '恢复作废',
+  ABNORMAL: '标记异常',
+  UNABNORMAL: '取消异常',
+  REWORK: '返工标记',
+  MERGE: '合并',
+  ITEM_ADD: '添加部位',
+  ITEM_DEL: '删除部位',
+  IMAGE_ADD: '上传图片',
+  IMAGE_DEL: '删除图片',
+  MATCH: '图片归类',
+  OCR_CORRECT: 'OCR 修正',
+}
+
+function logActionLabel(action: string) {
+  return LOG_ACTION_LABEL[action] || action
+}
+
+function formatLogTime(createdAt: string) {
+  const d = new Date(createdAt)
+  if (Number.isNaN(d.getTime()))
+    return createdAt
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
 function enterEdit() {
@@ -1392,6 +1444,33 @@ onMounted(async () => {
         </div>
       </div>
 
+      <!-- 操作记录（查看模式：最近几条 + 展开全部） -->
+      <div v-if="!isEditing" class="info-section">
+        <div class="section-title-row">
+          <span class="section-title">操作记录</span>
+          <span
+            v-if="orderLogs.length > 3"
+            class="section-action"
+            @click="logsExpanded = !logsExpanded"
+          >
+            {{ logsExpanded ? '收起' : `查看全部(${orderLogs.length})` }}
+          </span>
+        </div>
+        <div v-if="orderLogs.length" class="order-log-list">
+          <div v-for="log in (logsExpanded ? orderLogs : orderLogs.slice(0, 3))" :key="log.id" class="order-log-row">
+            <span class="log-action" :class="{ danger: log.action === 'DELETE' || log.action === 'VOID' }">
+              {{ logActionLabel(log.action) }}
+            </span>
+            <span class="log-text">
+              <template v-if="log.detail && log.detail !== logActionLabel(log.action)">{{ log.detail }} ·</template>
+              <template v-if="log.username">{{ log.username }}</template>
+            </span>
+            <span class="log-time">{{ formatLogTime(log.createdAt) }}</span>
+          </div>
+        </div>
+        <AppEmpty v-else description="暂无操作记录" image="search" />
+      </div>
+
       <!-- 操作按钮 -->
       <div class="action-bar">
         <template v-if="isEditing">
@@ -1914,6 +1993,47 @@ onMounted(async () => {
   flex-wrap: wrap;
   gap: 8px;
 }
+.order-log-list {
+  .order-log-row {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 7px 0;
+    border-bottom: 1px dashed var(--color-border-light, #f0f0f0);
+    font-size: 12px;
+
+    &:last-child {
+      border-bottom: none;
+    }
+
+    .log-action {
+      font-weight: 600;
+      color: var(--color-primary, #1989fa);
+      flex-shrink: 0;
+
+      &.danger {
+        color: var(--color-danger, #ee4d4d);
+      }
+    }
+
+    .log-text {
+      flex: 1;
+      color: var(--text-regular, #666);
+      word-break: break-all;
+    }
+
+    .log-time {
+      color: var(--text-secondary, #999);
+      flex-shrink: 0;
+    }
+  }
+}
+
+.section-action {
+  font-size: 12px;
+  color: var(--color-primary, #1989fa);
+}
+
 
 .image-item {
   position: relative;

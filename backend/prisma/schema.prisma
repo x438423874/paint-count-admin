@@ -628,3 +628,21 @@ enum OcrStatus {
   DONE // OCR 完成
   FAILED // OCR 失败
 }
+
+/// 工单操作日志（业务级审计）：与工单解绑，工单删除后记录保留；冗余工单号/门店快照
+model PaintWorkOrderLog {
+  id        String   @id @default(cuid())
+  orderId   String   @map("order_id") @db.VarChar(30)
+  orderNo   String   @map("order_no") @db.VarChar(30)
+  shopId    String   @map("shop_id") @db.VarChar(30)
+  userId    String   @map("user_id") @db.VarChar(30)
+  username  String   @map("username") @db.VarChar(50)
+  action    String   @db.VarChar(30)
+  detail    String?  @db.VarChar(500)
+  ip        String?  @db.VarChar(50)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([orderId, createdAt])
+  @@index([shopId, createdAt])
+  @@map("paint_work_order_log")
+}

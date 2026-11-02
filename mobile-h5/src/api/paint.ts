@@ -414,3 +414,28 @@ export function retryOcrPendingImage(id: string) {
 export function deletePendingImage(id: string) {
   return request.delete(`/paint/pending-image/${id}`)
 }
+
+// ==================== 工单操作日志 ====================
+
+export interface WorkOrderLogRow {
+  id: string
+  orderId: string
+  orderNo: string
+  shopId: string
+  userId: string
+  username: string
+  action: string
+  detail: string | null
+  ip: string | null
+  createdAt: string
+}
+
+/** 全局操作日志分页（按账号门店权限过滤） */
+export function fetchWorkOrderLogPage(params: { shopId?: string, action?: string, current?: number, size?: number }) {
+  return request.get<{ records: WorkOrderLogRow[], total: number, current: number, size: number }>('/paint/work-order-log/page', { params })
+}
+
+/** 某工单的操作流水 */
+export function fetchWorkOrderLogs(orderId: string) {
+  return request.get<WorkOrderLogRow[]>(`/paint/work-order-log/by-order/${orderId}`)
+}

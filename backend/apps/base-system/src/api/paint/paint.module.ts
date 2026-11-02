@@ -15,6 +15,7 @@ import { PaintSpecialPaintService } from './service/paint-special-paint.service'
 import { OcrService } from './service/ocr.service';
 import { LlmOcrService } from './service/llm-ocr.service';
 import { WorkOrderExcelService } from './service/work-order-excel.service';
+import { WorkOrderLogService } from './service/work-order-log.service';
 import { WorkOrderNoRuleService } from './service/work-order-no-rule.service';
 import { WorkOrderReconcileService } from './service/work-order-reconcile.service';
 import { PaintPdfExportService } from './service/paint-pdf-export.service';
@@ -34,6 +35,7 @@ import { SealController } from './seal/rest/seal.controller';
 import { UserShopController } from './user-shop/rest/user-shop.controller';
 import { PendingImageController } from './pending-image/rest/pending-image.controller';
 import { UploadsController } from './upload-access/rest/uploads.controller';
+import { WorkOrderLogController } from './work-order-log/rest/work-order-log.controller';
 
 @Module({
   imports: [PrismaModule],
@@ -49,6 +51,7 @@ import { UploadsController } from './upload-access/rest/uploads.controller';
     UserShopController,
     PendingImageController,
     UploadsController,
+    WorkOrderLogController,
   ],
   providers: [
     PaintImageService,
@@ -60,6 +63,7 @@ import { UploadsController } from './upload-access/rest/uploads.controller';
     WorkOrderAuditService,
     WorkOrderMergeService,
     WorkOrderSettlementService,
+    WorkOrderLogService,
     PaintStatisticsService,
     PaintStandardService,
     PaintStandardTemplateService,

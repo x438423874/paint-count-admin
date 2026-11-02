@@ -14,6 +14,7 @@ import { UserShopService } from '../../service/user-shop.service';
 import { maskCustomerName, maskPhone } from '../../service/customer-masking.util';
 import { WorkOrderAuditService } from '../../service/work-order-audit.service';
 import { WorkOrderExcelService } from '../../service/work-order-excel.service';
+import { WorkOrderLogService, WorkOrderLogAction } from '../../service/work-order-log.service';
 import { WorkOrderMergeService } from '../../service/work-order-merge.service';
 import { WorkOrderNoRuleService, OrderNoRule } from '../../service/work-order-no-rule.service';
 import { WorkOrderReconcileService } from '../../service/work-order-reconcile.service';
@@ -37,7 +38,28 @@ export class WorkOrderController {
     private readonly noRuleService: WorkOrderNoRuleService,
     private readonly reconcileService: WorkOrderReconcileService,
     private readonly userShopService: UserShopService,
+    private readonly workOrderLogService: WorkOrderLogService,
   ) {}
+
+  /**
+   * 记录工单操作日志（异步、失败静默）。order 传操作目标快照（id/orderNo/shopId），
+   * 需要工单号的动作在业务执行前先 findById 取快照，避免删除后拿不到。
+   */
+  private logOrderAction(
+    req: AuthenticatedRequest,
+    order: { id: string; orderNo: string | null; shopId: string } | null | undefined,
+    action: WorkOrderLogAction,
+    detail?: string,
+  ) {
+    if (!order) return;
+    void this.workOrderLogService.log(
+      { orderId: order.id, orderNo: order.orderNo || order.id, shopId: order.shopId },
+      { uid: req.user?.uid || '', username: req.user?.username || '' },
+      action,
+      detail,
+      req.ip,
+    );
+  }
 
   /**
    * 读取 multipart 请求：遍历全部片段，收集字段与文件（与字段/文件的先后顺序无关）。
@@ -358,6 +380,12 @@ export class WorkOrderController {
       await this.userShopService.assertShopOnDuty(req.user.uid, dto.shopId);
     }
     const data = await this.workOrderService.create(dto);
+    this.logOrderAction(
+      req,
+      { id: data?.id, orderNo: data?.orderNo ?? null, shopId: data?.shopId || dto.shopId || '' },
+      'CREATE',
+      dto.items?.length ? `共 ${dto.items.length} 个部位` : undefined,
+    );
     return ApiRes.success(data);
   }
 
@@ -369,7 +397,26 @@ export class WorkOrderController {
     if (dto.id) {
       await this.userShopService.assertWorkOrderAccess(req.user.uid, dto.id);
     }
+    const before = dto.id ? await this.workOrderService.findById(dto.id, false) : null;
     const data = await this.workOrderService.update(dto);
+    // 字段级变更摘要（关键字段 old→new）
+    if (before) {
+      const changes: string[] = [];
+      const diffField = (label: string, oldV: unknown, newV: unknown) => {
+        const o = oldV === null || oldV === undefined ? '' : String(oldV);
+        const n = newV === null || newV === undefined ? '' : String(newV);
+        if (o !== n) changes.push(n ? `${label}：${o || '空'}→${n}` : `${label}：${o}→清空`);
+      };
+      const updated = data as any;
+      diffField('车牌', before.plateNumber, updated?.plateNumber ?? dto.plateNumber);
+      diffField('工单号', before.orderNo, updated?.orderNo ?? dto.orderNo);
+      diffField('车型', before.carModel, updated?.carModel ?? dto.carModel);
+      diffField('客户', before.customerName, updated?.customerName ?? dto.customerName);
+      if (dto.isRework !== undefined && dto.isRework !== (before as any).isRework) {
+        changes.push(dto.isRework ? '标记返工' : '取消返工');
+      }
+      this.logOrderAction(req, { id: before.id, orderNo: before.orderNo, shopId: before.shopId }, 'UPDATE', changes.join('；') || '修改工单');
+    }
     return ApiRes.success(data);
   }
 
@@ -379,7 +426,10 @@ export class WorkOrderController {
   async delete(@Param('id') id: string, @Request() req: AuthenticatedRequest) {
     // 角色权限：删除仅超管/门店管理员
     await this.userShopService.assertWorkOrderAccess(req.user.uid, id);
+    // 先取快照：工单物理删除后日志仍完整可读（快照含工单号/门店）
+    const snapshot = await this.workOrderService.findById(id, false);
     await this.workOrderService.delete(id);
+    this.logOrderAction(req, snapshot ? { id: snapshot.id, orderNo: snapshot.orderNo, shopId: snapshot.shopId } : { id, orderNo: id, shopId: '' }, 'DELETE');
     return ApiRes.ok();
   }
 
@@ -392,6 +442,8 @@ export class WorkOrderController {
       await this.userShopService.assertWorkOrderAccess(req.user.uid, dto.id);
     }
     const data = await this.auditService.audit(dto);
+    const audited = dto.id ? await this.workOrderService.findById(dto.id, false) : null;
+    this.logOrderAction(req, audited ? { id: audited.id, orderNo: audited.orderNo, shopId: audited.shopId } : null, 'AUDIT');
     return ApiRes.success(data);
   }
 
@@ -406,6 +458,10 @@ export class WorkOrderController {
       await this.userShopService.assertWorkOrderAccess(req.user.uid, id);
     }
     const data = await this.auditService.batchAudit(body.ids, req.user?.username);
+    for (const id of body.ids) {
+      const o = await this.workOrderService.findById(id, false);
+      this.logOrderAction(req, o ? { id: o.id, orderNo: o.orderNo, shopId: o.shopId } : null, 'AUDIT', '批量审核');
+    }
     return ApiRes.success(data);
   }
 
@@ -416,6 +472,8 @@ export class WorkOrderController {
     // 角色权限：反审核仅超管/门店管理员
     await this.userShopService.assertWorkOrderAccess(req.user.uid, id);
     const data = await this.auditService.unaudit(id);
+    const o = await this.workOrderService.findById(id, false);
+    this.logOrderAction(req, o ? { id: o.id, orderNo: o.orderNo, shopId: o.shopId } : null, 'UNAUDIT');
     return ApiRes.success(data);
   }
 
@@ -487,6 +545,8 @@ export class WorkOrderController {
     // 数据权限：批量校验目标工单和所有源工单的权限（避免 N+1 查询）
     await this.userShopService.assertWorkOrdersAccess(req.user.uid, [body.targetId, ...body.sourceIds]);
     const data = await this.mergeService.mergeOrders(body.targetId, body.sourceIds);
+    const target = await this.workOrderService.findById(body.targetId, false);
+    this.logOrderAction(req, target ? { id: target.id, orderNo: target.orderNo, shopId: target.shopId } : null, 'MERGE', `并入工单：${body.sourceIds.join('、')}`);
     return ApiRes.success(data);
   }
 
@@ -503,6 +563,10 @@ export class WorkOrderController {
       await this.userShopService.assertWorkOrderAccess(req.user.uid, id);
     }
     const data = await this.settlementService.batchSettle(body.ids, req.user?.uid);
+    for (const id of body.ids) {
+      const o = await this.workOrderService.findById(id, false);
+      this.logOrderAction(req, o ? { id: o.id, orderNo: o.orderNo, shopId: o.shopId } : null, 'SETTLE', '批量结算');
+    }
     return ApiRes.success(data);
   }
 
@@ -518,6 +582,10 @@ export class WorkOrderController {
       await this.userShopService.assertWorkOrderAccess(req.user.uid, id);
     }
     const data = await this.settlementService.batchUnsettle(body.ids);
+    for (const id of body.ids) {
+      const o = await this.workOrderService.findById(id, false);
+      this.logOrderAction(req, o ? { id: o.id, orderNo: o.orderNo, shopId: o.shopId } : null, 'UNSETTLE', '批量取消结算');
+    }
     return ApiRes.success(data);
   }
 
@@ -528,6 +596,8 @@ export class WorkOrderController {
     // 角色权限：结算仅超管/门店管理员
     await this.userShopService.assertWorkOrderAccess(req.user.uid, id);
     const data = await this.settlementService.settle(id, body.settlementMonth, req.user?.uid);
+    const o = await this.workOrderService.findById(id, false);
+    this.logOrderAction(req, o ? { id: o.id, orderNo: o.orderNo, shopId: o.shopId } : null, 'SETTLE');
     return ApiRes.success(data);
   }
 
@@ -538,6 +608,8 @@ export class WorkOrderController {
     // 角色权限：取消结算仅超管/门店管理员
     await this.userShopService.assertWorkOrderAccess(req.user.uid, id);
     const data = await this.settlementService.unsettle(id);
+    const o = await this.workOrderService.findById(id, false);
+    this.logOrderAction(req, o ? { id: o.id, orderNo: o.orderNo, shopId: o.shopId } : null, 'UNSETTLE');
     return ApiRes.success(data);
   }
 
@@ -548,6 +620,8 @@ export class WorkOrderController {
     // 角色权限：异常标注仅超管/门店管理员
     await this.userShopService.assertWorkOrderAccess(req.user.uid, id);
     const data = await this.workOrderService.setAbnormal(id, body.isAbnormal, body.abnormalRemark);
+    const o = await this.workOrderService.findById(id, false);
+    this.logOrderAction(req, o ? { id: o.id, orderNo: o.orderNo, shopId: o.shopId } : null, body.isAbnormal ? 'ABNORMAL' : 'UNABNORMAL', body.abnormalRemark || undefined);
     return ApiRes.success(data);
   }
 
@@ -562,6 +636,8 @@ export class WorkOrderController {
     // 角色权限：作废仅超管/门店管理员
     await this.userShopService.assertWorkOrderAccess(req.user.uid, id);
     const data = await this.workOrderService.setVoid(id, body?.voidReason, req.user?.uid);
+    const o = await this.workOrderService.findById(id, false);
+    this.logOrderAction(req, o ? { id: o.id, orderNo: o.orderNo, shopId: o.shopId } : null, 'VOID', body?.voidReason || undefined);
     return ApiRes.success(data);
   }
 
@@ -572,6 +648,8 @@ export class WorkOrderController {
     // 角色权限：恢复作废仅超管/门店管理员
     await this.userShopService.assertWorkOrderAccess(req.user.uid, id);
     const data = await this.workOrderService.unvoid(id);
+    const o = await this.workOrderService.findById(id, false);
+    this.logOrderAction(req, o ? { id: o.id, orderNo: o.orderNo, shopId: o.shopId } : null, 'UNVOID');
     return ApiRes.success(data);
   }
 
@@ -633,6 +711,8 @@ export class WorkOrderController {
     // 角色权限：只读/财务不可编辑
     await this.userShopService.assertWorkOrderAccess(req.user.uid, id);
     const data = await this.workOrderService.addItems(id, items);
+    const o = await this.workOrderService.findById(id, false);
+    this.logOrderAction(req, o ? { id: o.id, orderNo: o.orderNo, shopId: o.shopId } : null, 'ITEM_ADD', items.length ? `新增 ${items.length} 个部位` : undefined);
     return ApiRes.success(data);
   }
 
@@ -643,6 +723,8 @@ export class WorkOrderController {
     // 角色权限：只读/财务不可编辑
     await this.userShopService.assertWorkOrderAccess(req.user.uid, orderId);
     const data = await this.workOrderService.removeItem(orderId, itemId);
+    const o = await this.workOrderService.findById(orderId, false);
+    this.logOrderAction(req, o ? { id: o.id, orderNo: o.orderNo, shopId: o.shopId } : null, 'ITEM_DEL');
     return ApiRes.success(data);
   }
 
@@ -673,6 +755,8 @@ export class WorkOrderController {
     const description = fields.description || undefined;
     const thumbnailBuffer = fileBuffers.thumbnail || null;
     const saved = await this.workOrderService.saveAndUploadImage(id, buffer, file.filename, file.mimetype, imageType, description, thumbnailBuffer);
+    const o = await this.workOrderService.findById(id, false);
+    this.logOrderAction(request as unknown as AuthenticatedRequest, o ? { id: o.id, orderNo: o.orderNo, shopId: o.shopId } : null, 'IMAGE_ADD');
     return ApiRes.success(saved);
   }
 
@@ -685,6 +769,8 @@ export class WorkOrderController {
       await this.userShopService.assertWorkOrderAccess(req.user.uid, image.orderId);
     }
     await this.workOrderService.removeImage(imageId);
+    const o = image?.orderId ? await this.workOrderService.findById(image.orderId, false) : null;
+    this.logOrderAction(req, o ? { id: o.id, orderNo: o.orderNo, shopId: o.shopId } : null, 'IMAGE_DEL');
     return ApiRes.ok();
   }
 

@@ -421,6 +421,12 @@ export class PendingImageService implements OnApplicationBootstrap {
       await this.sealService.assertNotSealed(pending.shopId, settlementMonth);
     }
     const ocrOrderNo = (pending.ocrOrderNo || '').trim();
+    // 同号处理按上传来源区分（业务规则）：
+    //  POOL（图片池上传）→ 同号工单已存在时自动把图片归档到该工单
+    //  CREATE（建单页上传，直接创建/OCR 两种模式）→ 不自动归类，照常创建新工单进列表，
+    //    由用户在工单列表自行合并（duplicate 标记随返回体带给前端提示）
+    const fromPool = pending.source === 'POOL';
+    let duplicateOf: { id: string, orderNo: string } | null = null;
     if (ocrOrderNo) {
       const duplicated = await this.prisma.paintWorkOrder.findFirst({
         where: {
@@ -432,16 +438,18 @@ export class PendingImageService implements OnApplicationBootstrap {
         select: { id: true, orderNo: true, status: true, settlementMonth: true },
       });
       if (duplicated) {
-        // 同号工单已存在（多为 Excel 台账先导入）：自动把图片归档到该工单，不再报错。
-        // applyMatch 内部处理锁定状态：已审核/已结算走「仅归档图片」，作废不会出现在这里。
-        await this.applyMatch(pending, duplicated, '同号工单已存在，图片自动归档');
-        return {
-          id: pendingId,
-          orderId: duplicated.id,
-          orderNo: duplicated.orderNo,
-          attached: true,
-          status: PendingImageStatus.MANUAL,
-        };
+        if (fromPool) {
+          // 图片池上传：自动归档。applyMatch 处理锁定状态（已审核/已结算仅归档图片，作废不会出现在这里）。
+          await this.applyMatch(pending, duplicated, '同号工单已存在，图片自动归档');
+          return {
+            id: pendingId,
+            orderId: duplicated.id,
+            orderNo: duplicated.orderNo,
+            attached: true,
+            status: PendingImageStatus.MANUAL,
+          };
+        }
+        duplicateOf = { id: duplicated.id, orderNo: ocrOrderNo };
       }
     }
     const orderDate = pending.ocrDate ? new Date(pending.ocrDate) : null;
@@ -514,7 +522,15 @@ export class PendingImageService implements OnApplicationBootstrap {
     if (order.vehicleId) {
       await this.vehicleService.refreshStats(order.vehicleId).catch(() => void 0);
     }
-    return { id: pendingId, orderId: order.id, orderNo: order.orderNo, attached: false, status: PendingImageStatus.MANUAL };
+    return {
+      id: pendingId,
+      orderId: order.id,
+      orderNo: order.orderNo,
+      attached: false,
+      duplicate: !!duplicateOf,
+      duplicateOfOrderId: duplicateOf?.id,
+      status: PendingImageStatus.MANUAL,
+    };
   }
 
   // ==================== 识别结果修正 ====================

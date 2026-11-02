@@ -115,6 +115,13 @@ declare module 'vue-router/auto-routes' {
       Record<never, never>,
       | never
     >,
+    'WorkOrderLog': RouteRecordInfo<
+      'WorkOrderLog',
+      '/work-order-log',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
   }
 
   /**
@@ -219,6 +226,14 @@ declare module 'vue-router/auto-routes' {
     'src/pages/work-order/vehicle-history.vue': {
       routes:
         | '/work-order/vehicle-history'
+      views:
+        | never
+      pathParamNames:
+        | never
+    }
+    'src/pages/work-order-log/index.vue': {
+      routes:
+        | 'WorkOrderLog'
       views:
         | never
       pathParamNames:

@@ -14,6 +14,7 @@ const title = computed(() => {
     Profile: '我的',
     Login: '登录',
     Vehicle: '车辆管理',
+    WorkOrderLog: '操作日志',
   }
   return nameMap[route.name as string] || '喷漆幅数管理'
 })

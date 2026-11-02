@@ -10,6 +10,7 @@ import { ApiRes } from '@lib/infra/rest/res.response';
 
 import { PendingImageService } from '../../service/pending-image.service';
 import { UserShopService } from '../../service/user-shop.service';
+import { WorkOrderLogService } from '../../service/work-order-log.service';
 import { PagePendingImageDto, ManualMatchDto, CreateOrderFromPendingDto, CorrectPendingImageOcrDto } from '../dto/pending-image.dto';
 
 
@@ -25,6 +26,7 @@ export class PendingImageController {
   constructor(
     private readonly pendingImageService: PendingImageService,
     private readonly userShopService: UserShopService,
+    private readonly workOrderLogService: WorkOrderLogService,
   ) {}
 
   /** 上传单张图片到图片池（上传即返回，OCR 后台异步识别） */
@@ -261,6 +263,10 @@ export class PendingImageController {
     await this.userShopService.assertShopAccess(request.user.uid, pending.shopId);
     await this.userShopService.assertWorkOrderAccess(request.user.uid, dto.orderId);
     const data = await this.pendingImageService.manualMatch(id, dto.orderId);
+    this.workOrderLogService.log(
+      { orderId: dto.orderId, orderNo: pending.ocrOrderNo || dto.orderId, shopId: pending.shopId },
+      request.user, 'MATCH', '人工指派图片到工单', request.ip,
+    );
     return ApiRes.success(data);
   }
 
@@ -274,6 +280,11 @@ export class PendingImageController {
     if (!pending) throw new BadRequestException('图片池记录不存在');
     await this.userShopService.assertShopAccess(request.user.uid, pending.shopId);
     const data = await this.pendingImageService.createOrderFromPending(id, dto.settlementMonth);
+    // attached=true 表示同号工单已存在、图片自动归档；否则为补建新工单
+    this.workOrderLogService.log(
+      { orderId: data.orderId, orderNo: data.orderNo || pending.ocrOrderNo || data.orderId, shopId: pending.shopId },
+      request.user, data.attached ? 'MATCH' : 'CREATE', data.attached ? '同号工单已存在，图片自动归档' : '图片池补建工单', request.ip,
+    );
     return ApiRes.success(data);
   }
 
@@ -287,6 +298,15 @@ export class PendingImageController {
     if (!pending) throw new BadRequestException('图片池记录不存在');
     await this.userShopService.assertShopAccess(request.user.uid, pending.shopId);
     const data = await this.pendingImageService.correctOcr(id, dto);
+    // 修正后若已绑定到工单则记录 OCR 修正；未绑定工单的池记录不产生工单日志
+    const boundOrderId = (data as any)?.record?.order?.id || null;
+    const boundOrderNo = (data as any)?.record?.order?.orderNo || pending.ocrOrderNo || '';
+    if (boundOrderId) {
+      this.workOrderLogService.log(
+        { orderId: boundOrderId, orderNo: boundOrderNo, shopId: pending.shopId },
+        request.user, 'OCR_CORRECT', '人工修正 OCR 识别结果', request.ip,
+      );
+    }
     return ApiRes.success(data);
   }
 

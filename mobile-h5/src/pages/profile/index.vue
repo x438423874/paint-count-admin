@@ -172,6 +172,12 @@ function clearCache() {
         </div>
         <span class="quick-text">车辆管理</span>
       </div>
+      <div class="quick-item" @click="router.push({ name: 'WorkOrderLog' })">
+        <div class="quick-icon gray">
+          <van-icon name="records" size="22" color="#fff" />
+        </div>
+        <span class="quick-text">操作日志</span>
+      </div>
     </div>
 
     <!-- 设置列表 -->
@@ -339,6 +345,10 @@ function clearCache() {
 
 .quick-icon.purple {
   background: #722ed1;
+}
+
+.quick-icon.gray {
+  background: #6b778c;
 }
 
 .quick-text {
