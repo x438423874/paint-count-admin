@@ -79,9 +79,10 @@ const totalOrderCount = computed(() => monthlyData.value.reduce((sum, d) => sum 
 const totalVehicleCount = computed(() => monthlyData.value.reduce((sum, d) => sum + (d.totalVehicles || 0), 0))
 const avgPaintPerVehicle = computed(() => totalVehicleCount.value > 0 ? +(totalPaintCount.value / totalVehicleCount.value).toFixed(1) : 0)
 
-function onMonthConfirm({ selectedValues }: any) {
-  selectedMonth.value = selectedValues[0]
-  showMonthPicker.value = false
+// TenureMonthPicker（PopupPicker）的 confirm 回传纯字符串月份，
+// 此前误按 van-picker 原始事件形状解构 { selectedValues }，导致确认无效
+function onMonthConfirm(month: string) {
+  selectedMonth.value = month
   loadStatistics()
 }
 
