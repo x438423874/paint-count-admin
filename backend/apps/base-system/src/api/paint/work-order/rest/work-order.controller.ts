@@ -399,22 +399,46 @@ export class WorkOrderController {
     }
     const before = dto.id ? await this.workOrderService.findById(dto.id, false) : null;
     const data = await this.workOrderService.update(dto);
-    // 字段级变更摘要（关键字段 old→new）
+    // 字段级变更摘要（基础字段 old→new + 部位增删/数量变化，部位名取自各自快照）
     if (before) {
+      const after = await this.workOrderService.findById(dto.id, false);
       const changes: string[] = [];
+      const norm = (v: unknown) => (v === null || v === undefined ? '' : String(v));
       const diffField = (label: string, oldV: unknown, newV: unknown) => {
-        const o = oldV === null || oldV === undefined ? '' : String(oldV);
-        const n = newV === null || newV === undefined ? '' : String(newV);
-        if (o !== n) changes.push(n ? `${label}：${o || '空'}→${n}` : `${label}：${o}→清空`);
+        if (norm(oldV) !== norm(newV)) changes.push(norm(newV) ? `${label}：${norm(oldV) || '空'}→${norm(newV)}` : `${label}：${norm(oldV)}→清空`);
       };
-      const updated = data as any;
-      diffField('车牌', before.plateNumber, updated?.plateNumber ?? dto.plateNumber);
-      diffField('工单号', before.orderNo, updated?.orderNo ?? dto.orderNo);
-      diffField('车型', before.carModel, updated?.carModel ?? dto.carModel);
-      diffField('客户', before.customerName, updated?.customerName ?? dto.customerName);
-      if (dto.isRework !== undefined && dto.isRework !== (before as any).isRework) {
-        changes.push(dto.isRework ? '标记返工' : '取消返工');
+      diffField('工单号', before.orderNo, after?.orderNo);
+      diffField('车牌', before.plateNumber, after?.plateNumber);
+      diffField('车型', before.carModel, after?.carModel);
+      diffField('车架号', before.vin, after?.vin);
+      diffField('品牌', before.brand, after?.brand);
+      diffField('客户', before.customerName, after?.customerName);
+      diffField('电话', before.phone, after?.phone);
+      diffField('备注', before.remark, after?.remark);
+      diffField('日期', before.orderDate ? new Date(before.orderDate).toISOString().slice(0, 10) : '', after?.orderDate ? new Date(after.orderDate).toISOString().slice(0, 10) : '');
+
+      // 部位对比（按 categoryId 对齐；数量/新件/幅数任一变化即记）
+      const beforeItems = new Map<string, any>((before.items || []).map((i: any) => [i.categoryId, i]));
+      const afterItems = new Map<string, any>((after?.items || []).map((i: any) => [i.categoryId, i]));
+      const nameOf = (i: any) => i?.category?.name || i?.categoryId || '未知部位';
+      const num = (v: unknown) => (v === null || v === undefined ? 0 : Number(v));
+      for (const [catId, afterItem] of afterItems) {
+        const beforeItem = beforeItems.get(catId);
+        const name = nameOf(afterItem);
+        if (!beforeItem) {
+          changes.push(`新增「${name}」×${num(afterItem.quantity)}`);
+          continue;
+        }
+        const parts: string[] = [];
+        if (num(beforeItem.quantity) !== num(afterItem.quantity)) parts.push(`数量${num(beforeItem.quantity)}→${num(afterItem.quantity)}`);
+        if (num(beforeItem.newPartQuantity) !== num(afterItem.newPartQuantity)) parts.push(`新件${num(beforeItem.newPartQuantity)}→${num(afterItem.newPartQuantity)}`);
+        if (norm(beforeItem.overridePaintCount) !== norm(afterItem.overridePaintCount)) parts.push(`幅数${norm(beforeItem.overridePaintCount) || '自动'}→${norm(afterItem.overridePaintCount) || '自动'}`);
+        if (parts.length) changes.push(`「${name}」${parts.join('、')}`);
       }
+      for (const [catId, beforeItem] of beforeItems) {
+        if (!afterItems.has(catId)) changes.push(`删除「${nameOf(beforeItem)}」`);
+      }
+
       this.logOrderAction(req, { id: before.id, orderNo: before.orderNo, shopId: before.shopId }, 'UPDATE', changes.join('；') || '修改工单');
     }
     return ApiRes.success(data);
