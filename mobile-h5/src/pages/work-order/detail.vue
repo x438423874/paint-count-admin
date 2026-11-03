@@ -67,10 +67,11 @@ const readOnlyNotice = computed(() =>
 )
 
 const moreActions = computed(() => {
-  if (readOnly.value) return []
   const o = order.value
   const s = o?.status
   const list: { name: string, color?: string }[] = []
+  // 查看操作记录对所有有查看权限的用户开放（含只读/离岗查看）
+  list.push({ name: '操作记录' })
   if (s && !isUnauditedStatus(s) && s !== 'SETTLED' && allowEdit && o.images && o.images.length) {
     list.push({ name: '修正OCR', color: 'var(--color-warning)' })
   }
@@ -86,6 +87,9 @@ const moreActions = computed(() => {
 function onMoreSelect(action: { name: string }) {
   showMoreActions.value = false
   switch (action.name) {
+    case '操作记录':
+      openLogSheet()
+      break
     case '修正OCR':
       enterOcrCorrection()
       break
@@ -250,15 +254,28 @@ async function loadDetail() {
 
 // ==================== 操作记录 ====================
 const orderLogs = ref<WorkOrderLogRow[]>([])
-const logsExpanded = ref(false)
+const showLogSheet = ref(false)
+const logsLoading = ref(false)
 
 async function loadOrderLogs(orderId: string) {
+  logsLoading.value = true
   try {
     orderLogs.value = (await fetchWorkOrderLogs(orderId)) as any as WorkOrderLogRow[]
   }
   catch {
     orderLogs.value = []
   }
+  finally {
+    logsLoading.value = false
+  }
+}
+
+function openLogSheet() {
+  if (!order.value)
+    return
+  showLogSheet.value = true
+  if (!orderLogs.value.length)
+    void loadOrderLogs(order.value.id)
 }
 
 const LOG_ACTION_LABEL: Record<string, string> = {
@@ -1444,32 +1461,6 @@ onMounted(async () => {
         </div>
       </div>
 
-      <!-- 操作记录（查看模式：最近几条 + 展开全部） -->
-      <div v-if="!isEditing" class="info-section">
-        <div class="section-title-row">
-          <span class="section-title">操作记录</span>
-          <span
-            v-if="orderLogs.length > 3"
-            class="section-action"
-            @click="logsExpanded = !logsExpanded"
-          >
-            {{ logsExpanded ? '收起' : `查看全部(${orderLogs.length})` }}
-          </span>
-        </div>
-        <div v-if="orderLogs.length" class="order-log-list">
-          <div v-for="log in (logsExpanded ? orderLogs : orderLogs.slice(0, 3))" :key="log.id" class="order-log-row">
-            <span class="log-action" :class="{ danger: log.action === 'DELETE' || log.action === 'VOID' }">
-              {{ logActionLabel(log.action) }}
-            </span>
-            <span class="log-text">
-              <template v-if="log.detail && log.detail !== logActionLabel(log.action)">{{ log.detail }} ·</template>
-              <template v-if="log.username">{{ log.username }}</template>
-            </span>
-            <span class="log-time">{{ formatLogTime(log.createdAt) }}</span>
-          </div>
-        </div>
-        <AppEmpty v-else description="暂无操作记录" image="search" />
-      </div>
 
       <!-- 操作按钮 -->
       <div class="action-bar">
@@ -1522,6 +1513,32 @@ onMounted(async () => {
         description="更多操作"
         @select="onMoreSelect"
       />
+
+      <!-- 操作记录弹层（从更多操作进入） -->
+      <van-popup v-model:show="showLogSheet" position="bottom" round :style="{ maxHeight: '70vh' }">
+        <div class="log-sheet">
+          <div class="log-sheet-title">操作记录</div>
+          <div v-if="logsLoading" class="log-sheet-loading">
+            <van-loading size="20">加载中...</van-loading>
+          </div>
+          <div v-else-if="orderLogs.length" class="order-log-list log-sheet-list">
+            <div v-for="log in orderLogs" :key="log.id" class="order-log-row">
+              <span class="log-action" :class="{ danger: log.action === 'DELETE' || log.action === 'VOID' }">
+                {{ logActionLabel(log.action) }}
+              </span>
+              <span class="log-text">
+                <template v-if="log.detail && log.detail !== logActionLabel(log.action)">{{ log.detail }} ·</template>
+                <template v-if="log.username">{{ log.username }}</template>
+              </span>
+              <span class="log-time">{{ formatLogTime(log.createdAt) }}</span>
+            </div>
+          </div>
+          <AppEmpty v-else description="暂无操作记录" image="search" />
+          <div class="log-sheet-cancel" @click="showLogSheet = false">
+            关闭
+          </div>
+        </div>
+      </van-popup>
     </div>
 
     <!-- 分类选择器（单选：修改已有部位类别） -->
@@ -2028,6 +2045,37 @@ onMounted(async () => {
     }
   }
 }
+.log-sheet {
+  padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
+
+  .log-sheet-title {
+    font-size: 16px;
+    font-weight: 600;
+    text-align: center;
+    margin-bottom: 12px;
+  }
+
+  .log-sheet-list {
+    max-height: 50vh;
+    overflow-y: auto;
+  }
+
+  .log-sheet-loading {
+    display: flex;
+    justify-content: center;
+    padding: 24px 0;
+  }
+
+  .log-sheet-cancel {
+    margin-top: 12px;
+    text-align: center;
+    padding: 10px 0;
+    font-size: 14px;
+    color: var(--text-secondary, #999);
+    cursor: pointer;
+  }
+}
+
 
 .section-action {
   font-size: 12px;
