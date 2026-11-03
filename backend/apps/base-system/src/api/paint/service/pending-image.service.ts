@@ -8,6 +8,7 @@ import { PaintImageService } from './paint-image.service';
 import { OcrService } from './ocr.service';
 import { PaintVehicleService } from './paint-vehicle.service';
 import { SealService } from '../seal/seal.service';
+import { WorkOrderLogService, WorkOrderLogAction } from './work-order-log.service';
 import { correctOrderNo, OrderNoRule } from './order-no-corrector';
 import { CorrectPendingImageOcrDto, PagePendingImageDto } from '../pending-image/dto/pending-image.dto';
 import { BACKEND_ROOT } from './upload-root';
@@ -24,8 +25,11 @@ import fs from 'fs/promises';
 export class PendingImageService implements OnApplicationBootstrap {
   private readonly logger = new Logger(PendingImageService.name);
 
+  private readonly userNameCache = new Map<string, string>();
+
   constructor(
     private readonly prisma: PrismaService,
+    private readonly workOrderLogService: WorkOrderLogService,
     private readonly imageService: PaintImageService,
     private readonly ocrService: OcrService,
     private readonly vehicleService: PaintVehicleService,
@@ -167,6 +171,30 @@ export class PendingImageService implements OnApplicationBootstrap {
    * 将图片直接关联到指定工单（创建工单页“直接创建工单”模式使用）
    * 图片作为该工单的 BEFORE 图，不经图片池、不触发 OCR 自动建单/匹配。
    */
+  /** 按上传者 id 解析用户名（缓存） */
+  private async resolveUsername(userId?: string | null): Promise<string> {
+    const uid = userId || ''
+    if (!uid) return ''
+    const hit = this.userNameCache.get(uid)
+    if (hit !== undefined) return hit
+    const u = await this.prisma.sysUser.findUnique({ where: { id: uid }, select: { username: true } })
+    const name = u?.username || ''
+    this.userNameCache.set(uid, name)
+    return name
+  }
+
+  /** 汇聚点日志：自动匹配/人工指派/重复归档/补建的操作人 = 图片上传者 */
+  private async logPendingAction(pending: any, target: { orderId: string; orderNo: string; shopId: string }, action: WorkOrderLogAction, detail?: string) {
+    try {
+      const actorName = await this.resolveUsername(pending?.uploadedBy)
+      await this.workOrderLogService.log(
+        target,
+        { uid: pending?.uploadedBy || '', username: actorName },
+        action, detail,
+      )
+    } catch { /* 日志失败不影响业务 */ }
+  }
+
   async attachToOrder(params: { imageBuffer: Buffer; fileName: string; mimeType: string; shopId: string; orderId: string; operatorId?: string; operatorName?: string; thumbnailBuffer?: Buffer | null }) {
     const { imageBuffer, fileName, mimeType, shopId, orderId, operatorId, operatorName, thumbnailBuffer } = params
 
@@ -196,6 +224,7 @@ export class PendingImageService implements OnApplicationBootstrap {
     })
 
     this.logger.log(`图片已直接关联到工单 ${order.orderNo}(${order.id})，imageId=${created.id}`)
+    await this.logPendingAction({ uploadedBy: operatorId }, { orderId: order.id, orderNo: order.orderNo || order.id, shopId: order.shopId }, 'IMAGE_ADD', '拍照建单图片关联')
     return created
   }
 
@@ -382,6 +411,9 @@ export class PendingImageService implements OnApplicationBootstrap {
     }
 
     this.winston.info?.(`图片池归类成功 pendingId=${pending.id} → orderId=${fullOrder.id} (${remark})`);
+
+    // 操作日志：自动匹配/人工指派/同号归档汇聚到此，操作人 = 图片上传者
+    await this.logPendingAction(pending, { orderId: fullOrder.id, orderNo: fullOrder.orderNo || fullOrder.id, shopId: fullOrder.shopId }, 'MATCH', remark)
   }
 
   // ==================== 人工指派 ====================
@@ -522,6 +554,9 @@ export class PendingImageService implements OnApplicationBootstrap {
     if (order.vehicleId) {
       await this.vehicleService.refreshStats(order.vehicleId).catch(() => void 0);
     }
+    // 操作日志：图片池 OCR 补建的新工单
+    await this.logPendingAction(pending, { orderId: order.id, orderNo: order.orderNo || order.id, shopId: order.shopId }, 'CREATE', '图片池 OCR 补建工单')
+
     return {
       id: pendingId,
       orderId: order.id,
